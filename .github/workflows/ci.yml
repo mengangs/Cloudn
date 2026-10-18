@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core-linux:
+    name: CloudnKit (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install python3
+        run: apt-get update -qq && apt-get install -y -qq python3 > /dev/null
+      - name: Test
+        working-directory: CloudnKit
+        run: |
+          python3 Tests/Server/test_server.py 8765 &
+          sleep 1
+          CLOUDN_TEST_SERVER=http://127.0.0.1:8765 swift test
+
+  ios:
+    name: iOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: CloudnKit tests (macOS)
+        working-directory: CloudnKit
+        run: |
+          python3 Tests/Server/test_server.py 8765 &
+          sleep 1
+          CLOUDN_TEST_SERVER=http://127.0.0.1:8765 swift test
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild -project Cloudn.xcodeproj -scheme Cloudn -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build-sim.log | grep -E '(error|warning):|BUILD (SUCCEEDED|FAILED)' | head -300
+          exit ${PIPESTATUS[0]}
+      - name: Build unsigned IPA
+        run: |
+          set -o pipefail
+          xcodebuild -project Cloudn.xcodeproj -scheme Cloudn -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -5
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Cloudn.app Payload/
+          zip -qry Cloudn-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cloudn-unsigned-ipa
+          path: Cloudn-unsigned.ipa
+          if-no-files-found: error

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1254 1254">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FCFCFB"/><stop offset="1" stop-color="#E3E1DC"/></linearGradient>
+    <linearGradient id="cloud" gradientUnits="userSpaceOnUse" x1="0" y1="278" x2="0" y2="960">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECEBE6"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#3A3833" flood-opacity="0.10"/>
+      <feDropShadow dx="0" dy="44" stdDeviation="40" flood-color="#3A3833" flood-opacity="0.18"/>
+    </filter>
+    <g id="mark" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 580 522 L 640 461 C 652 452 666 448 686 448 H 755 A 70 70 0 0 1 755 588" fill="none" stroke-width="62"/>
+      <path d="M 510 549 A 61 61 0 1 0 492 671 L 548 669 C 572 669 588 660 600 648 L 684 563" fill="none" stroke-width="62"/>
+      <rect x="595" y="672" width="65" height="122" stroke-width="30"/>
+      <path d="M 520 798 H 735 L 627 912 Z" stroke-width="30"/>
+    </g>
+  </defs><rect width="1254" height="1254" fill="url(#bg)"/><g transform="translate(627 627) scale(0.88) translate(-626 -619)">
+  <path d="M 335 960 A 215 215 0 0 1 272 548 A 175 175 0 0 1 447 423 A 244 244 0 0 1 916 517 A 222 222 0 0 1 915 960 Z" fill="url(#cloud)" filter="url(#shadow)"/>
+  <path d="M 335 960 A 215 215 0 0 1 272 548 A 175 175 0 0 1 447 423 A 244 244 0 0 1 916 517 A 222 222 0 0 1 915 960 Z" fill="none" stroke="#000000" stroke-opacity="0.06" stroke-width="3"/>
+  <use xlink:href="#mark" href="#mark" fill="#FFFFFF" stroke="#FFFFFF" transform="translate(0 4)"/>
+  <use xlink:href="#mark" href="#mark" fill="#23262C" stroke="#23262C"/>
+</g>
+</svg>

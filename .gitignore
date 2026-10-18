@@ -1,0 +1,13 @@
+.DS_Store
+build/
+DerivedData/
+Payload/
+*.ipa
+*.xcuserstate
+xcuserdata/
+.build/
+.swiftpm/
+CloudnKit/.build/
+CloudnKit/.swiftpm/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+__pycache__/
