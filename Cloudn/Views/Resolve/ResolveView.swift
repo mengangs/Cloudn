@@ -238,8 +238,12 @@ struct ResolveView: View {
     private func checkClipboard() async {
         // 只探测「有没有链接」，不读取内容，不会触发系统的粘贴提示
         guard app.settings.clipboardHint, UIPasteboard.general.hasStrings else { clipboardHasURL = false; return }
-        let found = try? await UIPasteboard.general.detectPatterns(for: [.probableWebURL])
-        clipboardHasURL = found?.contains(.probableWebURL) ?? false
+        let pattern = UIPasteboard.DetectionPattern.probableWebURL
+        clipboardHasURL = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            UIPasteboard.general.detectPatterns(for: [pattern]) { result in
+                cont.resume(returning: (try? result.get())?.contains(pattern) ?? false)
+            }
+        }
     }
 
     private func resolve() {

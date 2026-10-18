@@ -9,7 +9,7 @@ public typealias TrackMerger = @Sendable (_ video: URL, _ audio: URL, _ output: 
 /// - 工作目录 `workDirectory/<id>/` 存放未完成数据；完成后移动到 `downloadsDirectory/<folder>/<文件名>`。
 /// - 设置项通过闭包读取，修改后对下一个开始的任务即时生效。
 public actor DownloadEngine {
-    public let downloadsDirectory: URL
+    public nonisolated let downloadsDirectory: URL
     private let workDirectory: URL
     private let stateFile: URL
     private let settings: @Sendable () -> DownloadSettings

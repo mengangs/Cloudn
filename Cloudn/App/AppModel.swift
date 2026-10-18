@@ -47,15 +47,14 @@ final class AppModel {
         downloads = DownloadStore(engine: engine, resolvers: resolvers)
 
         let resolvers = self.resolvers
-        Task { [weak self] in
-            await engine.configure(merger: MediaTools.merger) { item in
-                // 夸克兜底转存产生的临时目录：下载完成后删除
-                if let cleanup = item.request.cleanup, let platform = SharePlatform(rawValue: cleanup.platform) {
-                    await resolvers.resolver(for: platform)?.cleanup(token: cleanup.token)
-                }
-                await self?.didFinish(item)
+        let onFinished: @Sendable (DownloadItem) async -> Void = { [weak self] item in
+            // 夸克兜底转存产生的临时目录：下载完成后删除
+            if let cleanup = item.request.cleanup, let platform = SharePlatform(rawValue: cleanup.platform) {
+                await resolvers.resolver(for: platform)?.cleanup(token: cleanup.token)
             }
+            await self?.didFinish(item)
         }
+        Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished) }
     }
 
     private func didFinish(_ item: DownloadItem) async {
