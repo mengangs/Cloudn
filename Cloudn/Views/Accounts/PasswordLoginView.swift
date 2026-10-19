@@ -77,6 +77,7 @@ struct PasswordLoginView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .paperList()
             .navigationTitle("登录\(kind.displayName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

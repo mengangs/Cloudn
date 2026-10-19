@@ -32,6 +32,7 @@ struct PlatformConnectionsView: View {
                 Text("部分网盘对并发连接数敏感（如百度、115），遇到 403 或频繁失败时可单独调低。")
             }
         }
+        .paperList()
         .navigationTitle("按平台设置连接数")
         .navigationBarTitleDisplayMode(.inline)
     }

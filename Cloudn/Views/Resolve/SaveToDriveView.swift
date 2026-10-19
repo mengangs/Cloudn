@@ -62,6 +62,7 @@ struct SaveToDriveView: View {
                     }
                 }
             }
+            .paperList()
             .listStyle(.insetGrouped)
             .overlay { if loading && folders.isEmpty { ProgressView() } }
             .navigationTitle("转存到\(platformName)")

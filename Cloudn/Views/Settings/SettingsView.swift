@@ -12,8 +12,7 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var settings = app.settings
-        NavigationStack {
-            Form {
+        Form {
                 Section {
                     Stepper(value: $settings.maxConcurrentTasks, in: 1...5) {
                         LabeledContent("同时下载任务", value: "\(settings.maxConcurrentTasks)")
@@ -126,10 +125,10 @@ struct SettingsView: View {
                     NavigationLink("开源许可") { LicenseView() }
                 }
             }
-            .navigationTitle("设置")
-            .sheet(isPresented: $pickingFolder) {
-                FolderPicker { app.settings.setExportFolder($0) }
-            }
+        .paperList()
+        .navigationTitle("设置")
+        .sheet(isPresented: $pickingFolder) {
+            FolderPicker { app.settings.setExportFolder($0) }
         }
     }
 }
@@ -185,6 +184,7 @@ struct UpdateSheet: View {
                     }
                 }
             }
+            .paperList()
             .navigationTitle(release.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -232,6 +232,7 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .paperList()
         .navigationTitle("关于")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -246,6 +247,12 @@ struct LicenseView: View {
                 Text("""
                 部分网盘与视频平台的协议实现参考了开源项目 YunX（https://github.com/CYQawa/YunX，AGPL-3.0）。\
                 依照该许可，Cloudn 的完整源代码同样以 AGPL-3.0 开放。
+
+                平台图标改绘自 Arcticons（https://github.com/Arcticons-Team/Arcticons，CC BY-SA 4.0），\
+                115、光鸭云盘、蓝奏云、蓝奏云优享版、AcFun 图标为本项目按同一规格绘制，同样以 CC BY-SA 4.0 提供；\
+                各平台名称与标识归其所有者，仅用于标明来源。
+
+                标题字体为思源宋体（Noto Serif SC，SIL Open Font License 1.1）的子集，许可文本随应用一同分发。
 
                 本程序不提供任何担保。详见源代码仓库中的 LICENSE 文件或 https://www.gnu.org/licenses/agpl-3.0.html。
                 """)

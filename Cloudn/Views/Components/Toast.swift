@@ -6,19 +6,21 @@ extension View {
     func toastOverlay(_ toast: Binding<Toast?>) -> some View {
         overlay(alignment: .bottom) {
             if let t = toast.wrappedValue {
-                HStack(spacing: 8) {
-                    Image(systemName: t.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(t.isError ? .red : .green)
+                HStack(spacing: 10) {
+                    IconView(t.isError ? .warning : .check, size: 18)
+                        .foregroundStyle(t.isError ? Color(red: 0.94, green: 0.55, blue: 0.45) : Color(red: 0.88, green: 0.54, blue: 0.40))
                     Text(t.message)
                         .font(.subheadline)
+                        .foregroundStyle(Color.paper)
                         .multilineTextAlignment(.leading)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(.regularMaterial, in: Capsule())
-                .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 13)
+                .background(Color.ink, in: Capsule())
+                .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
                 .padding(.horizontal, 24)
                 .padding(.bottom, 64)
+                .sensoryFeedback(t.isError ? .error : .success, trigger: t.id)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .id(t.id)
                 .task(id: t.id) {

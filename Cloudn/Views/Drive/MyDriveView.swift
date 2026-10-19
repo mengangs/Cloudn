@@ -79,6 +79,7 @@ struct DriveFolderView: View {
                 row(item)
             }
         }
+        .paperList()
         .overlay { if loading && items.isEmpty { ProgressView() } }
         .refreshable { await load() }
         .searchable(text: $query, prompt: "在当前文件夹中搜索")
@@ -274,6 +275,7 @@ struct DriveFolderPicker: View {
                     }
                 }
             }
+            .paperList()
             .overlay { if loading { ProgressView() } }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)

@@ -44,7 +44,14 @@ struct AccountsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("账号")
+            .paperList()
+            .navigationTitle("我的")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { SettingsView() } label: { IconView(.gear, size: 22) }
+                        .accessibilityLabel("设置")
+                }
+            }
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
@@ -177,6 +184,7 @@ struct ManualCookieView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .paperList()
             .navigationTitle("\(kind.displayName) 凭据")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

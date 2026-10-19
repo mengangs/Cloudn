@@ -106,6 +106,7 @@ struct DownloadsView: View {
                     }
                 }
             }
+            .paperList()
             .navigationTitle("下载")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

@@ -37,6 +37,7 @@ struct AuthExportView: View {
                     }
                 }
             }
+            .paperList()
             .navigationTitle("导出登录凭据")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
@@ -77,6 +78,7 @@ struct AuthImportView: View {
                         .disabled(passphrase.isEmpty || working)
                 }
             }
+            .paperList()
             .navigationTitle("导入登录凭据")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }

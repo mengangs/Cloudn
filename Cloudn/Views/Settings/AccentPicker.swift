@@ -13,7 +13,7 @@ struct AccentPicker: View {
                     ForEach(AppSettings.accentPresets, id: \.hex) { preset in
                         Button { app.settings.accentHex = preset.hex } label: {
                             Circle()
-                                .fill(Color(hex: preset.hex) ?? .blue)
+                                .fill(Color(hex: preset.hex) ?? Color.accentColor)
                                 .frame(width: 30, height: 30)
                                 .overlay {
                                     if app.settings.accentHex == preset.hex {
@@ -25,7 +25,7 @@ struct AccentPicker: View {
                         .accessibilityLabel(preset.name)
                     }
                     ColorPicker("自定义", selection: Binding(
-                        get: { app.settings.accentColor ?? .blue },
+                        get: { app.settings.accentColor ?? Color.accentColor },
                         set: { app.settings.accentHex = $0.hexString }
                     ), supportsOpacity: false)
                     .labelsHidden()

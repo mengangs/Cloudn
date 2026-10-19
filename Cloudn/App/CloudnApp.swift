@@ -7,6 +7,10 @@ struct CloudnApp: App {
     @State private var model = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        Typeface.applyNavigationBarFonts()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -28,19 +32,17 @@ struct RootView: View {
         @Bindable var model = model
         TabView(selection: $model.selectedTab) {
             ResolveView()
-                .tabItem { Label("解析", systemImage: "link") }
+                .tabItem { Label { Text("解析") } icon: { Image(icon: .link) } }
                 .tag(AppTab.resolve)
-            AccountsView()
-                .tabItem { Label("账号", systemImage: "person.crop.circle") }
-                .tag(AppTab.accounts)
             DownloadsView()
-                .tabItem { Label("下载", systemImage: "arrow.down.circle") }
+                .tabItem { Label { Text("下载") } icon: { Image(icon: .download) } }
                 .badge(model.downloads.activeCount)
                 .tag(AppTab.downloads)
-            SettingsView()
-                .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(AppTab.settings)
+            AccountsView()
+                .tabItem { Label { Text("我的") } icon: { Image(icon: .user) } }
+                .tag(AppTab.me)
         }
+        .background(Color.paper)
         .toastOverlay($model.toast)
         .sheet(isPresented: Binding(get: { !model.settings.acceptedNotice }, set: { _ in })) {
             NoticeSheet { model.settings.acceptedNotice = true }

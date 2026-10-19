@@ -48,6 +48,7 @@ struct GitHubAccountView: View {
                 }
             }
         }
+        .paperList()
         .overlay { if loading { ProgressView() } }
         .searchable(text: $query, prompt: "搜索仓库")
         .navigationTitle(owner)
@@ -151,6 +152,7 @@ struct GitHubDirectoryView: View {
                 Label(path.isEmpty ? ref : "\(ref) · \(path)", systemImage: "arrow.triangle.branch").textCase(nil)
             }
         }
+        .paperList()
         .overlay { if loading { ProgressView() } }
         .refreshable { await load() }
         .task { await load() }
@@ -239,6 +241,7 @@ struct GitHubReleasesView: View {
                 }
             }
         }
+        .paperList()
         .overlay { if loading { ProgressView() } }
         .task {
             defer { loading = false }
@@ -287,6 +290,7 @@ struct GitHubSettingsView: View {
                 Text("默认直连 GitHub。如有自己信任的镜像，可填写其前缀，GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。应用不内置任何第三方镜像。")
             }
         }
+        .paperList()
         .navigationTitle("GitHub")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { token = app.settings.githubToken }

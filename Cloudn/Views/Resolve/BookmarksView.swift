@@ -36,6 +36,7 @@ struct BookmarksView: View {
                     }
                 }
             }
+            .paperList()
             .navigationTitle("收藏")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

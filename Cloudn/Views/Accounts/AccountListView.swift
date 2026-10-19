@@ -48,6 +48,7 @@ struct AccountListView: View {
                     Button { onAdd(kind) } label: { Label("添加账号", systemImage: "person.badge.plus") }
                 }
             }
+            .paperList()
             .navigationTitle("\(kind.displayName)账号")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }

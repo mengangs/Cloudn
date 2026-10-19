@@ -4,7 +4,7 @@ import Foundation
 import Observation
 import UIKit
 
-enum AppTab: Hashable { case resolve, accounts, downloads, settings }
+enum AppTab: Hashable { case resolve, downloads, me }
 
 struct Toast: Identifiable, Equatable {
     let id = UUID()

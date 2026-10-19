@@ -27,7 +27,7 @@ struct ShareBrowserView: View {
                         HStack {
                             Text(notice).font(.footnote)
                             Spacer()
-                            Button("去登录") { app.selectedTab = .accounts }.font(.footnote.weight(.semibold))
+                            Button("去登录") { app.selectedTab = .me }.font(.footnote.weight(.semibold))
                         }
                     } icon: {
                         Image(systemName: "person.crop.circle.badge.questionmark")
@@ -68,6 +68,7 @@ struct ShareBrowserView: View {
                 }
             }
         }
+        .paperList()
         .listStyle(.insetGrouped)
         .overlay {
             if model.loading && model.files.isEmpty {
@@ -100,7 +101,7 @@ struct ShareBrowserView: View {
         guard !files.isEmpty else { return }
         if model.saveNeedsLogin {
             app.show("转存需要先登录\(model.share.platform.displayName)", error: true)
-            app.selectedTab = .accounts
+            app.selectedTab = .me
             return
         }
         saveItems = SaveItems(files: files)
