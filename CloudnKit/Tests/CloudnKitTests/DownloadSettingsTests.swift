@@ -7,7 +7,9 @@ final class DownloadSettingsTests: XCTestCase {
         let now = Date()
         XCTAssertEqual(limiter.reserve(1_000_000, now: now), 0)   // 不限速
         limiter.setLimit(1000)
-        // 1000 B/s：先预约 500 字节需等 0.5 秒，再预约 500 字节累计到 1 秒
+        // 1000 B/s：起步有 1 秒额度（1000 字节免等），之后每 500 字节多等 0.5 秒
+        XCTAssertEqual(limiter.reserve(500, now: now), 0, accuracy: 0.01)
+        XCTAssertEqual(limiter.reserve(500, now: now), 0, accuracy: 0.01)
         XCTAssertEqual(limiter.reserve(500, now: now), 0.5, accuracy: 0.01)
         XCTAssertEqual(limiter.reserve(500, now: now), 1.0, accuracy: 0.01)
         // 空闲很久之后不攒额度：最多只抵扣 1 秒
