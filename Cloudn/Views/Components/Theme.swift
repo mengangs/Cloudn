@@ -151,6 +151,15 @@ struct PlatformGlyph: View {
     }
 }
 
+typealias Glyph = Icon
+
+extension Label where Title == Text, Icon == Image {
+    /// 用线性图标集的 Label（菜单、按钮）
+    init(_ title: String, glyph: Glyph) {
+        self.init { Text(title) } icon: { Image(icon: glyph) }
+    }
+}
+
 // MARK: - 卡片与列表
 
 extension View {

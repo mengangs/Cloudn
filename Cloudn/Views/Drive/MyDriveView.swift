@@ -60,23 +60,21 @@ struct DriveFolderView: View {
         List {
             if let quota, quota.total > 0 {
                 Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProgressView(value: min(1, Double(quota.used) / Double(quota.total)))
-                        Text("已用 \(ByteFormat.string(quota.used)) / 共 \(ByteFormat.string(quota.total))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    QuotaBar(quota: quota)
+                        .paperRow()
                 }
             }
             if let errorMessage {
                 Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label(errorMessage, glyph: .warning).foregroundStyle(Color.clayInk)
                     Button("重试") { Task { await load() } }
                 }
+                .paperRow()
             } else if items.isEmpty && !loading {
                 ContentUnavailableView("空文件夹", systemImage: "folder").listRowBackground(Color.clear)
             }
             ForEach(visibleItems) { item in
-                row(item)
+                row(item).paperRow()
             }
         }
         .paperList()
@@ -88,7 +86,8 @@ struct DriveFolderView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if busy { ProgressView() } else if caps.contains(.createFolder) {
-                    Button { nameText = ""; naming = .newFolder } label: { Image(systemName: "folder.badge.plus") }
+                    Button { nameText = ""; naming = .newFolder } label: { Image(icon: .folderPlus) }
+                        .accessibilityLabel("新建文件夹")
                 }
             }
         }
@@ -130,24 +129,24 @@ struct DriveFolderView: View {
         }
         .swipeActions(edge: .trailing) {
             if caps.contains(.delete) {
-                Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+                Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
             }
         }
         .contextMenu {
             if !item.isDirectory {
-                Button { download(item) } label: { Label("下载", systemImage: "arrow.down.circle") }
+                Button { download(item) } label: { Label("下载", glyph: .download) }
             }
             if caps.contains(.share) {
-                Button { share(item) } label: { Label("创建分享并复制", systemImage: "link") }
+                Button { share(item) } label: { Label("创建分享并复制", glyph: .link) }
             }
             if caps.contains(.rename) {
-                Button { nameText = item.name; naming = .rename(item) } label: { Label("重命名", systemImage: "pencil") }
+                Button { nameText = item.name; naming = .rename(item) } label: { Label("重命名", glyph: .pencil) }
             }
             if caps.contains(.move) {
-                Button { moving = item } label: { Label("移动到…", systemImage: "folder") }
+                Button { moving = item } label: { Label("移动到…", glyph: .folder) }
             }
             if caps.contains(.delete) {
-                Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+                Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
             }
         }
     }
@@ -156,16 +155,16 @@ struct DriveFolderView: View {
         HStack(spacing: 12) {
             FileIcon(name: item.name, isDirectory: item.isDirectory)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.name).lineLimit(2)
+                Text(item.name).lineLimit(2).foregroundStyle(Color.ink)
                 HStack(spacing: 6) {
                     if !item.isDirectory && item.size > 0 { Text(ByteFormat.string(item.size)) }
-                    if !item.modified.isEmpty { Text(item.modified) }
+                    if !item.modified.isEmpty { Text(FileRow.dateText(item.modified)) }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Color.ink3)
             }
             Spacer(minLength: 0)
             if !item.isDirectory {
-                Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
+                IconView(.download, size: 17).foregroundStyle(Color.ink2)
             }
         }
         .contentShape(Rectangle())
@@ -262,7 +261,7 @@ struct DriveFolderPicker: View {
         var body: some View {
             List {
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label(errorMessage, glyph: .warning).foregroundStyle(Color.clayInk).paperRow()
                 }
                 ForEach(folders.filter { $0.fid != excluding }) { folder in
                     NavigationLink {
@@ -270,9 +269,10 @@ struct DriveFolderPicker: View {
                     } label: {
                         HStack(spacing: 12) {
                             FileIcon(name: folder.name, isDirectory: true)
-                            Text(folder.name).lineLimit(2)
+                            Text(folder.name).lineLimit(2).foregroundStyle(Color.ink)
                         }
                     }
+                    .paperRow()
                 }
             }
             .paperList()
@@ -280,11 +280,13 @@ struct DriveFolderPicker: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
-                Button { onPick(folderId) } label: { Text("移动到「\(title)」").frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .padding()
-                    .background(.bar)
+                Button { onPick(folderId) } label: {
+                    Label("移动到「\(title)」", glyph: .move).lineLimit(1).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillButtonStyle(kind: .primary))
+                .floatingShadow()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
             .task {
                 defer { loading = false }
@@ -295,5 +297,25 @@ struct DriveFolderPicker: View {
                 }
             }
         }
+    }
+}
+
+/// 容量条：已用 / 总量，超过 90% 变成陶土深色提醒
+struct QuotaBar: View {
+    let quota: DriveQuota
+
+    private var ratio: Double { quota.total > 0 ? min(1, Double(quota.used) / Double(quota.total)) : 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(ByteFormat.string(quota.used)).font(.serif(20, relativeTo: .title3)).foregroundStyle(Color.ink)
+                Text("/ \(ByteFormat.string(quota.total))").font(.mono).foregroundStyle(Color.ink3)
+                Spacer()
+                Text("剩余 \(ByteFormat.string(max(0, quota.total - quota.used)))").font(.caption).foregroundStyle(Color.ink2)
+            }
+            ProgressLine(value: ratio, tint: ratio > 0.9 ? Color.clayInk : nil)
+        }
+        .padding(.vertical, 4)
     }
 }

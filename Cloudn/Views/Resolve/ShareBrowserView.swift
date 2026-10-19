@@ -240,38 +240,15 @@ struct ShareBrowserView: View {
         }
     }
 
-    /// 行尾：取链中转圈；在下载显示进度环（点按暂停 / 继续）；下完打勾；失败给提示；其余是一个下载键
+    /// 行尾：文件夹是箭头，文件是下载状态
     @ViewBuilder
     private func trailing(_ file: ShareFile, state: DownloadItem?) -> some View {
-        if model.busyFileIds.contains(file.fid) {
-            ProgressRing(value: nil, size: 26, glyph: false)
-        } else if file.isDirectory {
+        if file.isDirectory && !model.busyFileIds.contains(file.fid) {
             IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)
-        } else if let item = state {
-            switch item.status {
-            case .completed:
-                IconView(.checkCircle, size: 22).foregroundStyle(Color.success)
-                    .accessibilityLabel("已下载")
-            case .failed:
-                Button { app.downloads.resume(item) } label: { IconView(.refresh, size: 18) }
-                    .buttonStyle(CircleIconButtonStyle(size: 32))
-                    .foregroundStyle(Color.clayInk)
-                    .accessibilityLabel("下载失败，重试")
-            default:
-                Button {
-                    item.status == .paused ? app.downloads.resume(item) : app.downloads.pause(item)
-                } label: {
-                    ProgressRing(value: item.fraction, size: 28, paused: item.status == .paused)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(item.status == .paused ? "继续下载" : "暂停下载")
-            }
         } else {
-            Button { run { try await model.download(file); app.show("已添加到下载") } } label: {
-                IconView(.download, size: 17)
+            DownloadStateControl(item: state, busy: model.busyFileIds.contains(file.fid)) {
+                run { try await model.download(file); app.show("已添加到下载") }
             }
-            .buttonStyle(CircleIconButtonStyle(size: 32))
-            .accessibilityLabel("下载")
         }
     }
 
@@ -601,23 +578,6 @@ struct ShareBrowserView: View {
         Task {
             do { try await work() } catch { app.show(error.localizedDescription, error: true) }
         }
-    }
-}
-
-/// 多选圆点
-private struct SelectMark: View {
-    let on: Bool
-
-    var body: some View {
-        ZStack {
-            Circle().strokeBorder(on ? Color.clear : Color.hairline, lineWidth: 1.5)
-            if on {
-                Circle().fill(.tint)
-                Image(icon: .check).resizable().scaledToFit().frame(width: 11, height: 11).foregroundStyle(.white)
-            }
-        }
-        .frame(width: 22, height: 22)
-        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: on)
     }
 }
 

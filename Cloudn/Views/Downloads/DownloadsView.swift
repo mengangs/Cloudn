@@ -53,13 +53,13 @@ struct DownloadsView: View {
             .contentShape(Rectangle())
             .onTapGesture { primaryAction(item) }
             .swipeActions(edge: .trailing) {
-                Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+                Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
             }
             .swipeActions(edge: .leading) {
                 if item.status.isActive {
-                    Button { app.downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }.tint(.orange)
+                    Button { app.downloads.pause(item) } label: { Label("暂停", glyph: .pause) }.tint(.orange)
                 } else if item.status == .paused || item.status == .failed {
-                    Button { app.downloads.resume(item) } label: { Label("继续", systemImage: "play") }.tint(.green)
+                    Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }.tint(.green)
                 }
             }
             .contextMenu { menu(item) }
@@ -68,11 +68,11 @@ struct DownloadsView: View {
     @ViewBuilder
     private func groupMenu(_ members: [DownloadItem]) -> some View {
         Button { members.filter { $0.status == .paused || $0.status == .failed }.forEach(app.downloads.resume) } label: {
-            Label("全部继续", systemImage: "play")
+            Label("全部继续", glyph: .play)
         }
-        Button { members.filter(\.status.isActive).forEach(app.downloads.pause) } label: { Label("全部暂停", systemImage: "pause") }
+        Button { members.filter(\.status.isActive).forEach(app.downloads.pause) } label: { Label("全部暂停", glyph: .pause) }
         Button(role: .destructive) { members.forEach { app.downloads.remove($0, deleteFile: false) } } label: {
-            Label("删除这一组记录（保留已下载文件）", systemImage: "trash")
+            Label("删除这一组记录（保留已下载文件）", glyph: .trash)
         }
     }
 
@@ -111,8 +111,8 @@ struct DownloadsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button { app.downloads.resumeAll() } label: { Label("全部继续", systemImage: "play") }
-                        Button { app.downloads.pauseAll() } label: { Label("全部暂停", systemImage: "pause") }
+                        Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
+                        Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
                         Button(role: .destructive) { app.downloads.clearFinished() } label: {
                             Label("清除已完成记录", systemImage: "checkmark.circle.badge.xmark")
                         }
@@ -146,29 +146,29 @@ struct DownloadsView: View {
     @ViewBuilder
     private func menu(_ item: DownloadItem) -> some View {
         if item.status == .completed, let url = app.downloads.fileURL(item) {
-            Button { previewURL = url } label: { Label("打开", systemImage: "eye") }
-            ShareLink(item: url) { Label("分享 / 存储到文件", systemImage: "square.and.arrow.up") }
+            Button { previewURL = url } label: { Label("打开", glyph: .eye) }
+            ShareLink(item: url) { Label("分享 / 存储到文件", glyph: .share) }
             if MediaTools.canSaveToPhotos(url) {
                 Button {
                     Task {
                         do { try await MediaTools.saveToPhotos(url); app.show("已保存到相册") } catch { app.show(error.localizedDescription, error: true) }
                     }
-                } label: { Label("保存到相册", systemImage: "photo.on.rectangle") }
+                } label: { Label("保存到相册", glyph: .image) }
             }
         } else {
             if item.status.isActive {
-                Button { app.downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }
+                Button { app.downloads.pause(item) } label: { Label("暂停", glyph: .pause) }
             } else {
-                Button { app.downloads.resume(item) } label: { Label("继续", systemImage: "play") }
+                Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }
             }
             if item.request.origin != nil {
-                Button { refresh(item) } label: { Label("重新获取直链并继续", systemImage: "arrow.clockwise") }
+                Button { refresh(item) } label: { Label("重新获取直链并继续", glyph: .refresh) }
             }
         }
         Button { UIPasteboard.general.string = item.request.url; app.show("已复制下载地址") } label: {
-            Label("复制下载地址", systemImage: "link")
+            Label("复制下载地址", glyph: .link)
         }
-        Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+        Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
     }
 
     private func refresh(_ item: DownloadItem) {
@@ -262,7 +262,7 @@ struct DownloadRow: View {
                     Text(message).font(.caption2).foregroundStyle(.red).lineLimit(3)
                 }
                 if let exported = item.exportedTo {
-                    Label("已移到：\(exported)", systemImage: "folder").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    Label("已移到：\(exported)", glyph: .folder).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
             statusIcon

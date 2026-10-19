@@ -25,14 +25,14 @@ struct BookmarksView: View {
                         }
                     }
                     .swipeActions {
-                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", systemImage: "trash") }
-                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", systemImage: "pencil") }
+                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
+                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
                             .tint(.orange)
                     }
                     .contextMenu {
-                        Button { UIPasteboard.general.string = b.text; app.show("已复制") } label: { Label("复制链接", systemImage: "doc.on.doc") }
-                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", systemImage: "pencil") }
-                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", systemImage: "trash") }
+                        Button { UIPasteboard.general.string = b.text; app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
+                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
+                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
                     }
                 }
             }

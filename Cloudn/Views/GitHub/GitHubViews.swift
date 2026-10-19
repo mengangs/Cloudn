@@ -17,6 +17,11 @@ extension AppModel {
                                           expectedSize: size, source: "GitHub", group: group))
         show("已添加到下载")
     }
+
+    /// GitHub 文件最近一次的下载任务（按文件名与目录对上）
+    func gitHubDownload(name: String, folder: String) -> DownloadItem? {
+        downloads.items.last { $0.request.source == "GitHub" && $0.request.fileName == name && $0.request.folder == folder }
+    }
 }
 
 /// 用户 / 组织的仓库列表
@@ -32,20 +37,26 @@ struct GitHubAccountView: View {
         let shown = query.isEmpty ? repos : repos.filter { $0.name.localizedCaseInsensitiveContains(query) }
         List {
             if let error {
-                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
             }
             ForEach(shown) { repo in
                 NavigationLink {
                     GitHubRepoView(owner: repo.owner.isEmpty ? owner : repo.owner, repo: repo.name, subPath: nil)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(repo.name).font(.body.weight(.medium))
+                        Text(repo.name).font(.body.weight(.medium)).foregroundStyle(Color.ink)
                         if !repo.description.isEmpty {
-                            Text(repo.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Text(repo.description).font(.caption).foregroundStyle(Color.ink2).lineLimit(2)
                         }
-                        Label("\(repo.stars)", systemImage: "star").font(.caption2).foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            IconView(.star, size: 12)
+                            Text("\(repo.stars)").font(.monoSmall)
+                        }
+                        .foregroundStyle(Color.ink3)
                     }
+                    .padding(.vertical, 2)
                 }
+                .paperRow()
             }
         }
         .paperList()
@@ -132,24 +143,33 @@ struct GitHubDirectoryView: View {
     var body: some View {
         List {
             if path.isEmpty && !description.isEmpty {
-                Section { Text(description).font(.callout).foregroundStyle(.secondary) }
+                Section { Text(description).font(.callout).foregroundStyle(Color.ink2) }
+                    .listRowBackground(Color.clear)
             }
             if let error {
-                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
             }
             Section {
                 ForEach(entries) { entry in
-                    if entry.isDirectory {
-                        NavigationLink {
-                            GitHubDirectoryView(owner: owner, repo: repo, ref: ref, path: entry.path)
-                                .navigationTitle(entry.name)
-                        } label: { row(entry) }
-                    } else {
-                        Button { download(entry) } label: { row(entry) }.buttonStyle(.plain)
+                    Group {
+                        if entry.isDirectory {
+                            NavigationLink {
+                                GitHubDirectoryView(owner: owner, repo: repo, ref: ref, path: entry.path)
+                                    .navigationTitle(entry.name)
+                            } label: { row(entry) }
+                        } else {
+                            row(entry)
+                        }
                     }
+                    .paperRow()
                 }
             } header: {
-                Label(path.isEmpty ? ref : "\(ref) · \(path)", systemImage: "arrow.triangle.branch").textCase(nil)
+                HStack(spacing: 6) {
+                    IconView(.branch, size: 13)
+                    Text(path.isEmpty ? ref : "\(ref) · \(path)").font(.monoSmall).lineLimit(1).truncationMode(.middle)
+                }
+                .foregroundStyle(Color.ink2)
+                .textCase(nil)
             }
         }
         .paperList()
@@ -162,11 +182,13 @@ struct GitHubDirectoryView: View {
         HStack(spacing: 12) {
             FileIcon(name: entry.name, isDirectory: entry.isDirectory)
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.name).lineLimit(2)
-                if !entry.isDirectory { Text(ByteFormat.string(entry.size)).font(.caption).foregroundStyle(.secondary) }
+                Text(entry.name).lineLimit(2).foregroundStyle(Color.ink)
+                if !entry.isDirectory { Text(ByteFormat.string(entry.size)).font(.caption).foregroundStyle(Color.ink3) }
             }
             Spacer(minLength: 0)
-            if !entry.isDirectory { Image(systemName: "arrow.down.circle").foregroundStyle(.tint) }
+            if !entry.isDirectory {
+                DownloadStateControl(item: app.gitHubDownload(name: entry.name, folder: repo)) { download(entry) }
+            }
         }
         .contentShape(Rectangle())
     }
@@ -200,43 +222,45 @@ struct GitHubReleasesView: View {
     var body: some View {
         List {
             if let error {
-                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
             } else if releases.isEmpty && !loading {
                 ContentUnavailableView("没有发布版本", systemImage: "shippingbox")
             }
             ForEach(releases) { release in
                 Section {
                     if release.assets.isEmpty {
-                        Text("没有附件").foregroundStyle(.secondary)
+                        Text("没有附件").foregroundStyle(Color.ink3).paperRow()
                     }
                     ForEach(release.assets) { asset in
-                        Button {
-                            app.downloadGitHubFile(url: asset.url, name: asset.name, size: asset.size, folder: repo)
-                        } label: {
-                            HStack(spacing: 12) {
-                                FileIcon(name: asset.name)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(asset.name).lineLimit(2)
-                                    Text("\(ByteFormat.string(asset.size)) · 下载 \(asset.downloads) 次").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
+                        HStack(spacing: 12) {
+                            FileIcon(name: asset.name)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(asset.name).lineLimit(2).foregroundStyle(Color.ink)
+                                Text("\(ByteFormat.string(asset.size)) · 下载 \(asset.downloads) 次").font(.caption).foregroundStyle(Color.ink3)
                             }
-                            .contentShape(Rectangle())
+                            Spacer(minLength: 0)
+                            DownloadStateControl(item: app.gitHubDownload(name: asset.name, folder: repo)) {
+                                app.downloadGitHubFile(url: asset.url, name: asset.name, size: asset.size, folder: repo)
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .paperRow()
                     }
                     if !release.notes.isEmpty {
                         DisclosureGroup("更新说明") {
-                            Text(release.notes).font(.callout).textSelection(.enabled)
+                            Text(release.notes).font(.callout).foregroundStyle(Color.ink2).textSelection(.enabled)
                         }
+                        .paperRow()
                     }
                 } header: {
-                    HStack {
-                        Text(release.name).textCase(nil)
-                        if release.isPrerelease { Text("预发布").font(.caption2).foregroundStyle(.orange) }
+                    HStack(spacing: 8) {
+                        Text(release.name).font(.serif(16, relativeTo: .headline)).foregroundStyle(Color.ink).textCase(nil)
+                        if release.isPrerelease {
+                            Text("预发布").font(.caption2.weight(.medium)).foregroundStyle(Color.clayInk)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.claySoft, in: Capsule())
+                        }
                         Spacer()
-                        Text(String(release.publishedAt.prefix(10))).textCase(nil)
+                        Text(String(release.publishedAt.prefix(10))).font(.monoSmall).foregroundStyle(Color.ink3).textCase(nil)
                     }
                 }
             }

@@ -30,13 +30,13 @@ struct AccountListView: View {
                         .swipeActions {
                             Button(role: .destructive) { removing = index } label: { Label("退出", systemImage: "rectangle.portrait.and.arrow.right") }
                             if index > 0 {
-                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", systemImage: "star") }
+                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
                                     .tint(.orange)
                             }
                         }
                         .contextMenu {
                             if index > 0 {
-                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", systemImage: "star") }
+                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
                             }
                             Button(role: .destructive) { removing = index } label: { Label("退出该账号", systemImage: "rectangle.portrait.and.arrow.right") }
                         }
@@ -45,7 +45,7 @@ struct AccountListView: View {
                     Text("解析、转存与网盘管理使用主账号。在设置中开启「多账号下载」后，批量下载会按文件轮换使用这里的全部账号。")
                 }
                 Section {
-                    Button { onAdd(kind) } label: { Label("添加账号", systemImage: "person.badge.plus") }
+                    Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }
                 }
             }
             .paperList()

@@ -24,7 +24,7 @@ struct AuthExportView: View {
                 if let error { Section { Text(error).foregroundStyle(.red) } }
                 if let file {
                     Section {
-                        ShareLink(item: file) { Label("分享 / 存储到文件", systemImage: "square.and.arrow.up") }
+                        ShareLink(item: file) { Label("分享 / 存储到文件", glyph: .share) }
                     } footer: {
                         Text(file.lastPathComponent)
                     }

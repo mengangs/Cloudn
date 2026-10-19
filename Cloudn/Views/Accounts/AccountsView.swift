@@ -32,14 +32,14 @@ struct AccountsView: View {
                     Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录；Pixiv 未登录只能解析公开作品。")
                 }
                 Section {
-                    Button { exporting = true } label: { Label("导出登录凭据（加密备份）", systemImage: "square.and.arrow.up") }
+                    Button { exporting = true } label: { Label("导出登录凭据（加密备份）", glyph: .share) }
                         .disabled(app.accounts.accounts.isEmpty)
-                    Button { importing = true } label: { Label("从备份导入", systemImage: "square.and.arrow.down") }
+                    Button { importing = true } label: { Label("从备份导入", glyph: .save) }
                 } header: {
                     Text("备份与恢复")
                 }
                 Section {
-                    Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
+                    Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", glyph: .lock)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -127,10 +127,10 @@ struct AccountsView: View {
             } else {
                 Menu {
                     if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
-                        Button { drivePlatform = platform } label: { Label("我的网盘", systemImage: "externaldrive") }
+                        Button { drivePlatform = platform } label: { Label("我的网盘", glyph: .cloud) }
                     }
-                    Button { listKind = kind } label: { Label("账号管理 / 添加账号", systemImage: "person.2") }
-                    Menu { loginOptions(kind) } label: { Label("重新登录", systemImage: "arrow.clockwise") }
+                    Button { listKind = kind } label: { Label("账号管理 / 添加账号", glyph: .user) }
+                    Menu { loginOptions(kind) } label: { Label("重新登录", glyph: .refresh) }
                     Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.title3)
@@ -144,13 +144,13 @@ struct AccountsView: View {
     private func loginOptions(_ kind: AccountKind) -> some View {
         if let provider = kind.passwordLogin {
             Button { app.accounts.pendingAdd = nil; passwordKind = kind } label: {
-                Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", systemImage: "person.badge.key")
+                Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", glyph: .user)
             }
         }
         if kind.supportsWebLogin {
-            Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+            Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", glyph: .link) }
         }
-        Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+        Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", glyph: .paste) }
     }
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴

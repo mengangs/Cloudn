@@ -98,7 +98,7 @@ struct SettingsView: View {
 
                 Section("诊断") {
                     if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
-                        ShareLink(item: log) { Label("导出诊断日志", systemImage: "square.and.arrow.up") }
+                        ShareLink(item: log) { Label("导出诊断日志", glyph: .share) }
                     }
                     Button(logCleared ? "已清空日志" : "清空日志") {
                         Log.clear()
@@ -173,10 +173,10 @@ struct UpdateSheet: View {
                 }
                 Section {
                     if let url = URL(string: release.pageURL) {
-                        Button { openURL(url) } label: { Label("前往发布页", systemImage: "safari") }
+                        Button { openURL(url) } label: { Label("前往发布页", glyph: .share) }
                     }
                     if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
-                        Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", systemImage: "arrow.down.app") }
+                        Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
                     }
                     Button("忽略此版本", role: .destructive) {
                         app.settings.skippedVersion = release.version
