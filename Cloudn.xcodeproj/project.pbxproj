@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		C10000000000000000000001 /* CloudnKit in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* CloudnKit */; };
 		C10000000000000000000013 /* CloudnShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C10000000000000000000014 /* CloudnShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C10000000000000000000020 /* CloudnWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C10000000000000000000021 /* CloudnWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -18,6 +19,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = C10000000000000000000018;
 			remoteInfo = CloudnShare;
+		};
+		C10000000000000000000022 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C1000000000000000000000C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C10000000000000000000023;
+			remoteInfo = CloudnWidget;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -29,6 +37,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				C10000000000000000000013 /* CloudnShare.appex in Embed Foundation Extensions */,
+				C10000000000000000000020 /* CloudnWidget.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -38,6 +47,7 @@
 /* Begin PBXFileReference section */
 		C10000000000000000000003 /* Cloudn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cloudn.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10000000000000000000014 /* CloudnShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CloudnShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000021 /* CloudnWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CloudnWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +59,11 @@
 		C10000000000000000000015 /* CloudnShare */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = CloudnShare;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000024 /* CloudnWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CloudnWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +84,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000025 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,6 +99,7 @@
 			children = (
 				C10000000000000000000004 /* Cloudn */,
 				C10000000000000000000015 /* CloudnShare */,
+				C10000000000000000000024 /* CloudnWidget */,
 				C10000000000000000000007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -86,6 +109,7 @@
 			children = (
 				C10000000000000000000003 /* Cloudn.app */,
 				C10000000000000000000014 /* CloudnShare.appex */,
+				C10000000000000000000021 /* CloudnWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -106,6 +130,7 @@
 			);
 			dependencies = (
 				C10000000000000000000019 /* PBXTargetDependency */,
+				C10000000000000000000026 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C10000000000000000000004 /* Cloudn */,
@@ -138,6 +163,26 @@
 			productReference = C10000000000000000000014 /* CloudnShare.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		C10000000000000000000023 /* CloudnWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C10000000000000000000027 /* Build configuration list for PBXNativeTarget "CloudnWidget" */;
+			buildPhases = (
+				C10000000000000000000028 /* Sources */,
+				C10000000000000000000025 /* Frameworks */,
+				C10000000000000000000029 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C10000000000000000000024 /* CloudnWidget */,
+			);
+			name = CloudnWidget;
+			productName = CloudnWidget;
+			productReference = C10000000000000000000021 /* CloudnWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -152,6 +197,9 @@
 						CreatedOnToolsVersion = 16.0;
 					};
 					C10000000000000000000018 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					C10000000000000000000023 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -176,6 +224,7 @@
 			targets = (
 				C10000000000000000000008 /* Cloudn */,
 				C10000000000000000000018 /* CloudnShare */,
+				C10000000000000000000023 /* CloudnWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -189,6 +238,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C1000000000000000000001D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000029 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -212,6 +268,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000028 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -219,6 +282,11 @@
 			isa = PBXTargetDependency;
 			target = C10000000000000000000018 /* CloudnShare */;
 			targetProxy = C10000000000000000000017 /* PBXContainerItemProxy */;
+		};
+		C10000000000000000000026 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C10000000000000000000023 /* CloudnWidget */;
+			targetProxy = C10000000000000000000022 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -292,6 +360,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "用于把下载的图片和视频保存到相册";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIFileSharingEnabled = YES;
@@ -329,6 +398,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "用于把下载的图片和视频保存到相册";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIFileSharingEnabled = YES;
@@ -404,6 +474,60 @@
 			};
 			name = Release;
 		};
+		C1000000000000000000002A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/Widget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Cloudn;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mengangs.Cloudn.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C1000000000000000000002B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/Widget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Cloudn;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mengangs.Cloudn.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -430,6 +554,15 @@
 			buildConfigurations = (
 				C1000000000000000000001E /* Debug */,
 				C1000000000000000000001F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C10000000000000000000027 /* Build configuration list for PBXNativeTarget "CloudnWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1000000000000000000002A /* Debug */,
+				C1000000000000000000002B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

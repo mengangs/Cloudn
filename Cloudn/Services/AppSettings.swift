@@ -43,6 +43,10 @@ final class AppSettings {
     var autoSaveToPhotos: Bool {
         didSet { defaults.set(autoSaveToPhotos, forKey: "autoSaveToPhotos") }
     }
+    /// 锁屏与灵动岛显示下载进度（实时活动）
+    var liveActivity: Bool {
+        didSet { defaults.set(liveActivity, forKey: "liveActivity") }
+    }
     /// 应用不在前台时，下载完成 / 失败发本地通知
     var notifyOnFinish: Bool {
         didSet { defaults.set(notifyOnFinish, forKey: "notifyOnFinish") }
@@ -110,7 +114,8 @@ final class AppSettings {
             "retryCount": 3,
             "speedLimitKB": 0,
             "directFirst": true,
-            "autoCheckUpdates": true
+            "autoCheckUpdates": true,
+            "liveActivity": true
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
         connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
@@ -122,6 +127,7 @@ final class AppSettings {
         clipboardHint = defaults.bool(forKey: "clipboardHint")
         autoSaveToPhotos = defaults.bool(forKey: "autoSaveToPhotos")
         notifyOnFinish = defaults.bool(forKey: "notifyOnFinish")
+        liveActivity = defaults.bool(forKey: "liveActivity")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         allowCommandService = defaults.bool(forKey: "allowCommandService")

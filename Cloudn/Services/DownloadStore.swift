@@ -11,6 +11,7 @@ final class DownloadStore {
     @ObservationIgnored let engine: DownloadEngine
     @ObservationIgnored private let resolvers: ShareResolvers
     @ObservationIgnored private let background: BackgroundTransfers
+    @ObservationIgnored private let activity = DownloadActivity()
 
     init(engine: DownloadEngine, resolvers: ShareResolvers, background: BackgroundTransfers) {
         self.engine = engine
@@ -19,6 +20,7 @@ final class DownloadStore {
         Task { [weak self] in
             for await list in await engine.updates() {
                 self?.items = list
+                self?.activity.update(with: list)
             }
         }
     }

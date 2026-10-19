@@ -30,6 +30,7 @@ struct SettingsView: View {
                     NavigationLink("按平台设置连接数") { PlatformConnectionsView() }
                     Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
                     Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
+                    Toggle("锁屏与灵动岛显示进度", isOn: $settings.liveActivity)
                 } header: {
                     Text("下载")
                 } footer: {
