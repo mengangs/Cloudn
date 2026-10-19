@@ -37,7 +37,7 @@ struct GitHubAccountView: View {
         let shown = query.isEmpty ? repos : repos.filter { $0.name.localizedCaseInsensitiveContains(query) }
         List {
             if let error {
-                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
             }
             ForEach(shown) { repo in
                 NavigationLink {
@@ -60,7 +60,7 @@ struct GitHubAccountView: View {
             }
         }
         .paperList()
-        .overlay { if loading { ProgressView() } }
+        .overlay { if loading { Spinner(size: 28) } }
         .searchable(text: $query, prompt: "搜索仓库")
         .navigationTitle(owner)
         .navigationBarTitleDisplayMode(.inline)
@@ -114,17 +114,28 @@ struct GitHubRepoView: View {
                     }
                 }
             } else if let error {
-                ContentUnavailableView("无法打开仓库", systemImage: "exclamationmark.triangle", description: Text(error))
+                ScrollView {
+                    EmptyStateCard(icon: .warning, title: "无法打开仓库", detail: error, actionTitle: "重试") {
+                        self.error = nil
+                        Task { await loadInfo() }
+                    }
+                    .padding(16)
+                }
             } else {
-                ProgressView()
+                Spinner(size: 28).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(Color.paper)
         .navigationTitle("\(owner)/\(repo)")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if subPath?.hasPrefix("releases") == true { tab = .releases }
-            do { info = try await app.github.repository(owner, repo) } catch { self.error = error.localizedDescription }
+            await loadInfo()
         }
+    }
+
+    private func loadInfo() async {
+        do { info = try await app.github.repository(owner, repo) } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -147,7 +158,7 @@ struct GitHubDirectoryView: View {
                     .listRowBackground(Color.clear)
             }
             if let error {
-                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
             }
             Section {
                 ForEach(entries) { entry in
@@ -173,7 +184,7 @@ struct GitHubDirectoryView: View {
             }
         }
         .paperList()
-        .overlay { if loading { ProgressView() } }
+        .overlay { if loading { Spinner(size: 28) } }
         .refreshable { await load() }
         .task { await load() }
     }
@@ -222,9 +233,9 @@ struct GitHubReleasesView: View {
     var body: some View {
         List {
             if let error {
-                Label(error, glyph: .warning).foregroundStyle(Color.clayInk)
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
             } else if releases.isEmpty && !loading {
-                ContentUnavailableView("没有发布版本", systemImage: "shippingbox")
+                EmptyStateCard(icon: .tag, title: "没有发布版本").inList()
             }
             ForEach(releases) { release in
                 Section {
@@ -266,7 +277,7 @@ struct GitHubReleasesView: View {
             }
         }
         .paperList()
-        .overlay { if loading { ProgressView() } }
+        .overlay { if loading { Spinner(size: 28) } }
         .task {
             defer { loading = false }
             do { releases = try await app.github.releases(owner, repo) } catch { self.error = error.localizedDescription }

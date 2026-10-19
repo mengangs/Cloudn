@@ -178,13 +178,44 @@ extension AppSettings {
 }
 
 extension AppSettings {
-    /// 主题色；nil 表示使用默认强调色
-    var accentColor: Color? { Color(hex: accentHex) }
-
-    /// 预设主题色
-    static let accentPresets: [(name: String, hex: String)] = [
-        ("陶土", ""), ("墨蓝", "3D5A80"), ("苔绿", "4F6F52"), ("赭石", "A0682A"), ("葡萄", "6E4E7E"), ("墨黑", "2B2A27")
+    /// 预设主题色：每个都有深色模式下提亮的一份，避免深底上看不见
+    static let accentPresets: [(name: String, hex: String, dark: String)] = [
+        ("陶土", "", ""), ("墨蓝", "3D5A80", "8FB3D9"), ("苔绿", "4F6F52", "8DB596"),
+        ("赭石", "A0682A", "D9A066"), ("葡萄", "6E4E7E", "B596C4"), ("墨黑", "2B2A27", "E6E1D6")
     ]
+
+    /// 当前强调色（浅色 / 深色各一份）；未自定义时是资源里的陶土色
+    var accentUIColor: UIColor {
+        guard let light = UIColor(hexString: accentHex) else {
+            return UIColor(named: "AccentColor") ?? UIColor(red: 0.71, green: 0.33, blue: 0.18, alpha: 1)
+        }
+        let dark = Self.accentPresets.first { $0.hex == accentHex }.flatMap { UIColor(hexString: $0.dark) } ?? light
+        return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+
+    var accentColor: Color { Color(uiColor: accentUIColor) }
+
+    /// 强调色底上的文字 / 图标颜色：按对比度在白色与深墨色之间选（深色模式的陶土上白字只有约 2.6:1）
+    var onAccentColor: Color {
+        let accent = accentUIColor
+        return Color(uiColor: UIColor { trait in
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            accent.resolvedColor(with: trait).getRed(&r, green: &g, blue: &b, alpha: &a)
+            func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            let l = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+            let onWhite = 1.05 / (l + 0.05), onDark = (l + 0.05) / 0.0575
+            return onWhite >= onDark ? .white : UIColor(red: 0x16 / 255, green: 0x15 / 255, blue: 0x13 / 255, alpha: 1)
+        })
+    }
+}
+
+extension UIColor {
+    /// RRGGBB → 颜色；格式不对返回 nil
+    convenience init?(hexString: String) {
+        let h = hexString.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        self.init(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+    }
 }
 
 extension Color {

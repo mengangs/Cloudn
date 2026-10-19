@@ -76,6 +76,7 @@ struct ResolveView: View {
                     showBookmarks = false
                     open(text: bookmark.text)
                 }
+                .presentationDetents([.medium, .large])
             }
         }
         .sensoryFeedback(.selection, trigger: detectionKey) { _, new in !new.isEmpty }

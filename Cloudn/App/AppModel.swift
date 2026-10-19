@@ -138,6 +138,7 @@ final class AppModel {
     func show(_ message: String, error: Bool = false) {
         if error { Log.error(message) }
         toast = Toast(message: message, isError: error)
+        UIAccessibility.post(notification: .announcement, argument: message)
     }
 
     /// 打开外部传入的链接：cloudn://resolve?text=...

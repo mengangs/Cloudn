@@ -17,6 +17,7 @@ struct TextPreviewView: View {
     @State private var text: String?
     @State private var truncated = false
     @State private var error: String?
+    @State private var copied = 0
 
     static let limit = 2 * 1024 * 1024
 
@@ -27,28 +28,42 @@ struct TextPreviewView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             if truncated {
-                                Label("文件较大，只显示前 2MB", systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+                                Label("文件较大，只显示前 2MB", glyph: .warning).font(.footnote).foregroundStyle(Color.ink3)
                             }
                             Text(text)
-                                .font(.system(.footnote, design: .monospaced))
+                                .font(.mono)
+                                .foregroundStyle(Color.ink)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding()
                     }
                 } else if let error {
-                    ContentUnavailableView("无法打开", systemImage: "exclamationmark.triangle", description: Text(error))
+                    ScrollView {
+                        EmptyStateCard(icon: .warning, title: "无法打开", detail: error, actionTitle: "重试") {
+                            self.error = nil
+                            Task { await load() }
+                        }
+                        .padding(16)
+                    }
                 } else {
-                    ProgressView("正在读取…")
+                    VStack(spacing: 12) {
+                        Spinner(size: 26)
+                        Text("正在读取…").font(.footnote).foregroundStyle(Color.ink2)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .background(Color.paper)
             .navigationTitle(item.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
                 if let text {
                     ToolbarItem(placement: .primaryAction) {
-                        Button { UIPasteboard.general.string = text } label: { Image(systemName: "doc.on.doc") }
+                        Button { UIPasteboard.general.string = text; copied += 1 } label: { Image(icon: .paste) }
+                            .accessibilityLabel("复制全文")
+                            .sensoryFeedback(.success, trigger: copied)
                     }
                 }
             }

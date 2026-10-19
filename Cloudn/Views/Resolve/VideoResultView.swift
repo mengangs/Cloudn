@@ -229,7 +229,7 @@ struct VideoResultView: View {
                             .padding(8)
                     } else if state?.status == .completed {
                         IconView(.check, size: 12)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.surface)
                             .frame(width: 22, height: 22)
                             .background(Color.success, in: Circle())
                             .padding(8)

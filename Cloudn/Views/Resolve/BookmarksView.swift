@@ -12,21 +12,21 @@ struct BookmarksView: View {
     var body: some View {
         NavigationStack {
             List {
+                if app.bookmarks.bookmarks.isEmpty {
+                    EmptyStateCard(icon: .star, title: "还没有收藏", detail: "在分享页右上角点星标即可收藏，下次一键打开").inList()
+                }
                 Group {
-                    if app.bookmarks.bookmarks.isEmpty {
-                        ContentUnavailableView("还没有收藏", systemImage: "star",
-                                               description: Text("在分享页右上角点星标即可收藏，下次一键打开"))
-                    }
                     ForEach(app.bookmarks.bookmarks) { b in
                         Button { onOpen(b) } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(b.title).foregroundStyle(.primary)
+                                Text(b.title).foregroundStyle(Color.ink).lineLimit(2)
                                 Text("\(b.source) · \(b.createdAt.formatted(date: .numeric, time: .omitted))")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(Color.ink3)
                             }
                         }
                         .swipeActions {
                             Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
+                                .tint(Color.clayInk)
                             Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
                                 .tint(Color.ink2)
                         }

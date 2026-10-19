@@ -137,7 +137,7 @@ struct PlatformTile: View {
                     Circle()
                         .fill(Color.success)
                         .frame(width: size * 0.34, height: size * 0.34)
-                        .overlay { Image(icon: .check).resizable().scaledToFit().padding(size * 0.08).foregroundStyle(.white) }
+                        .overlay { Image(icon: .check).resizable().scaledToFit().padding(size * 0.08).foregroundStyle(Color.surface) }
                         .overlay { Circle().stroke(Color.surface, lineWidth: 2) }
                         .offset(x: size * 0.08, y: size * 0.08)
                 }
@@ -248,20 +248,12 @@ struct PillButtonStyle: ButtonStyle {
             .font(.body.weight(kind == .secondary ? .medium : .semibold))
             .padding(.horizontal, 20)
             .frame(minHeight: height)
-            .foregroundStyle(foreground)
+            .modifier(OnAccentForeground(fallback: kind == .secondary ? Color.ink : (kind == .dark ? Color.paper : nil)))
             .background(background, in: Capsule())
             .overlay { if kind == .secondary { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
-    }
-
-    private var foreground: AnyShapeStyle {
-        switch kind {
-        case .primary: return AnyShapeStyle(Color.white)
-        case .secondary: return AnyShapeStyle(Color.ink)
-        case .dark: return AnyShapeStyle(Color.paper)
-        }
     }
 
     private var background: AnyShapeStyle {
@@ -273,6 +265,28 @@ struct PillButtonStyle: ButtonStyle {
     }
 }
 
+/// 强调色底上的前景色（按对比度选白色或深墨色，由根视图注入）
+private struct OnAccentKey: EnvironmentKey {
+    static let defaultValue = Color.white
+}
+
+extension EnvironmentValues {
+    var onAccent: Color {
+        get { self[OnAccentKey.self] }
+        set { self[OnAccentKey.self] = newValue }
+    }
+}
+
+/// fallback 为 nil 时用强调色底上的前景色，否则用 fallback
+struct OnAccentForeground: ViewModifier {
+    let fallback: Color?
+    @Environment(\.onAccent) private var onAccent
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(fallback ?? onAccent)
+    }
+}
+
 /// 圆形图标按钮（细线）
 struct CircleIconButtonStyle: ButtonStyle {
     var size: CGFloat = 36
@@ -281,7 +295,7 @@ struct CircleIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(width: size, height: size)
-            .foregroundStyle(filled ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.ink))
+            .modifier(OnAccentForeground(fallback: filled ? nil : Color.ink))
             .background(filled ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.clear), in: Circle())
             .overlay { if !filled { Circle().strokeBorder(Color.hairline, lineWidth: 1) } }
             .contentShape(Circle())
@@ -340,17 +354,18 @@ struct ProgressLine: View {
 
 private struct IndeterminateBar: View {
     var tint: Color?
-    @State private var phase: CGFloat = -0.3
 
     var body: some View {
         GeometryReader { geo in
-            Capsule()
-                .fill(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tint))
-                .frame(width: geo.size.width * 0.3)
-                .offset(x: geo.size.width * phase)
-                .onAppear {
-                    withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: false)) { phase = 1 }
-                }
+            TimelineView(.animation) { context in
+                // 1.1 秒从左滑到右，用缓动曲线算位置
+                let p = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.1) / 1.1
+                let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+                Capsule()
+                    .fill(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tint))
+                    .frame(width: geo.size.width * 0.3)
+                    .offset(x: geo.size.width * (-0.3 + 1.3 * eased))
+            }
         }
         .clipShape(Capsule())
     }
@@ -365,17 +380,25 @@ struct ProgressRing: View {
     /// 中间是否画暂停 / 继续符号（只表示「正在处理」时关掉）
     var glyph = true
 
-    @State private var spin = false
-
     var body: some View {
         ZStack {
             Circle().stroke(Color.hairline, lineWidth: lineWidth)
-            Circle()
-                .trim(from: 0, to: value.map { max(0.04, min(1, $0)) } ?? 0.25)
-                .stroke(.tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .rotationEffect(.degrees(value == nil && spin ? 360 : 0))
-                .animation(.easeOut(duration: 0.4), value: value)
+            if let value {
+                Circle()
+                    .trim(from: 0, to: max(0.04, min(1, value)))
+                    .stroke(.tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.4), value: value)
+            } else {
+                // 进度未知：按时间转，不用 repeatForever（放在列表里会带着整行漂移）
+                TimelineView(.animation) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    Circle()
+                        .trim(from: 0, to: 0.25)
+                        .stroke(.tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                        .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1) * 360))
+                }
+            }
             if glyph {
                 Image(icon: paused ? .play : .pause)
                     .resizable()
@@ -385,9 +408,5 @@ struct ProgressRing: View {
             }
         }
         .frame(width: size, height: size)
-        .onAppear {
-            guard value == nil else { return }
-            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { spin = true }
-        }
     }
 }

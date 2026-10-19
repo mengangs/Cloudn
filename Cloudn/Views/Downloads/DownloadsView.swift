@@ -9,6 +9,8 @@ struct DownloadsView: View {
     @State private var previewURL: URL?
     @State private var selecting = false
     @State private var selection = Set<UUID>()
+    @State private var deleting: DownloadItem?
+    @State private var confirmClear = false
     @State private var refreshing = Set<UUID>()
     @State private var samples: [Double] = []
     /// 展开的分组
@@ -52,8 +54,9 @@ struct DownloadsView: View {
         }
     }
 
-    /// 一个任务一张卡片：点按打开文件 / 暂停 / 继续，长按是全部操作；多选模式下点按勾选
-    private func row(_ item: DownloadItem) -> some View {
+    /// 一个任务一张卡片：点按打开文件 / 暂停 / 继续，左滑删除，右滑暂停 / 继续，长按是全部操作；多选模式下点按勾选。
+    /// 卡片底色画在行内容上（不是列表的行背景），左右滑时整张卡片带着圆角一起移动
+    private func row(_ item: DownloadItem, inset: CGFloat = 0) -> some View {
         let on = selection.contains(item.id)
         return HStack(spacing: 12) {
             if selecting {
@@ -69,45 +72,72 @@ struct DownloadsView: View {
                 .strokeBorder(on ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.hairline), lineWidth: on ? 1.5 : 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture { selecting ? toggle([item.id]) : primaryAction(item) }
         .contextMenu { menu(item) }
+        .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
+            if item.status == .completed {
+                Button("删除任务和文件", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+                Button("仅删除记录") { app.downloads.remove(item, deleteFile: false) }
+            } else {
+                Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+            }
+        }
+        // 不用 destructive 角色：那会让列表立刻播放「删除这一行」的动画，确认框随行一起消失、行又弹回来和别的卡片重叠
+        .modifier(SwipeAction(edge: .trailing, action: selecting ? nil : SwipeAction.Item(title: "删除", glyph: .trash, tint: Color.clayInk) {
+            deleting = item
+        }))
+        .modifier(SwipeAction(edge: .leading, action: selecting ? nil : leadingAction(item)))
+        .listRowInsets(EdgeInsets(top: 4, leading: 16 + inset, bottom: 4, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
-    /// 一组任务：标题卡片点按展开，展开后成员卡片略向内缩进；多选模式下点标题勾选整组
-    private func groupCard(_ group: DownloadGroup, _ members: [DownloadItem]) -> some View {
+    /// 右滑：下载中给「暂停」，暂停 / 失败给「继续」，已完成没有（不注册空的右滑，免得出现错位的按钮）
+    private func leadingAction(_ item: DownloadItem) -> SwipeAction.Item? {
+        if item.status.isActive {
+            return SwipeAction.Item(title: "暂停", glyph: .pause, tint: Color.ink2) { app.downloads.pause(item) }
+        }
+        if item.status == .paused || item.status == .failed {
+            return SwipeAction.Item(title: "继续", glyph: .play, tint: Color.success) { app.downloads.resume(item) }
+        }
+        return nil
+    }
+
+    /// 一组任务的标题卡片：点按展开 / 收起，展开后成员卡片略向内缩进；多选模式下点标题勾选整组
+    private func groupHeader(_ group: DownloadGroup, _ members: [DownloadItem]) -> some View {
         let open = expanded.contains(group.id)
         let ids = Set(members.map(\.id))
         let allOn = ids.isSubset(of: selection)
-        return VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                if selecting { SelectMark(on: allOn) }
-                GroupHeader(title: group.title, items: members)
-                Spacer(minLength: 0)
-                IconView(.chevronRight, size: 14)
-                    .foregroundStyle(Color.ink3)
-                    .rotationEffect(.degrees(open ? 90 : 0))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .onTapGesture {
-                if selecting {
-                    if allOn { selection.subtract(ids) } else { selection.formUnion(ids) }
-                } else {
-                    withAnimation(.snappy(duration: 0.25)) {
-                        if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
-                    }
+        return HStack(spacing: 12) {
+            if selecting { SelectMark(on: allOn) }
+            GroupHeader(title: group.title, items: members)
+            Spacer(minLength: 0)
+            IconView(.chevronRight, size: 14)
+                .foregroundStyle(Color.ink3)
+                .rotationEffect(.degrees(open ? 90 : 0))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture {
+            if selecting {
+                if allOn { selection.subtract(ids) } else { selection.formUnion(ids) }
+            } else {
+                withAnimation(.snappy(duration: 0.25)) {
+                    if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
                 }
             }
-            .contextMenu { groupMenu(members) }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint(open ? "收起" : "展开")
-            if open {
-                ForEach(members) { row($0).padding(.leading, 14) }
-            }
         }
+        .contextMenu { groupMenu(members) }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(open ? "收起" : "展开")
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     @ViewBuilder
@@ -124,26 +154,30 @@ struct DownloadsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if !app.downloads.items.isEmpty {
-                        SummaryCard(items: app.downloads.items, samples: samples)
-                        filterChips.padding(.vertical, 6)
-                    }
-                    if items.isEmpty { emptyState }
-                    ForEach(entries) { entry in
-                        switch entry {
-                        case .single(let item): row(item)
-                        case .group(let group, let members): groupCard(group, members)
+            List {
+                if !app.downloads.items.isEmpty {
+                    SummaryCard(items: app.downloads.items, samples: samples)
+                        .plainListRow(top: 4, bottom: 6)
+                    filterChips
+                        .plainListRow(top: 4, bottom: 8)
+                }
+                if items.isEmpty { emptyState.plainListRow(top: 0, bottom: 0) }
+                ForEach(entries) { entry in
+                    switch entry {
+                    case .single(let item):
+                        row(item)
+                    case .group(let group, let members):
+                        groupHeader(group, members)
+                        if expanded.contains(group.id) {
+                            ForEach(members) { row($0, inset: 14) }
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, selecting ? 110 : 32)
-                .animation(.snappy(duration: 0.25), value: items.map(\.id))
-                .animation(.snappy(duration: 0.25), value: selecting)
+                Color.clear.frame(height: selecting ? 96 : 16).plainListRow(top: 0, bottom: 0)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
             .background(Color.paper)
             .navigationTitle("下载")
             .toolbar {
@@ -152,17 +186,22 @@ struct DownloadsView: View {
                         Button(selection.count == items.count ? "全不选" : "全选") {
                             selection = selection.count == items.count ? [] : Set(items.map(\.id))
                         }
-                        Button("完成") { selecting = false; selection = [] }.fontWeight(.semibold)
+                        Button("完成") { withAnimation(.snappy(duration: 0.25)) { selecting = false; selection = [] } }.fontWeight(.semibold)
                     } else {
                         Menu {
-                            Button { selecting = true } label: { Label("选择", glyph: .checkCircle) }
+                            Button { withAnimation(.snappy(duration: 0.25)) { selecting = true } } label: { Label("选择", glyph: .checkCircle) }
                             Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
                             Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
-                            Button(role: .destructive) { app.downloads.clearFinished() } label: {
+                            Button(role: .destructive) { confirmClear = true } label: {
                                 Label("清除已完成记录", glyph: .trash)
                             }
+                            .disabled(!app.downloads.items.contains { $0.status == .completed })
                         } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
+                        .accessibilityLabel("更多")
                         .disabled(app.downloads.items.isEmpty)
+                        .rowDialog("清除已完成的记录？", isPresented: $confirmClear, message: "只清除列表里的记录，已下载的文件保留") {
+                            Button("清除记录", role: .destructive) { app.downloads.clearFinished() }
+                        }
                     }
                 }
             }
@@ -208,7 +247,7 @@ struct DownloadsView: View {
             } label: {
                 HStack(spacing: 6) { Image(icon: .trash); Text("删除") }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.surface)
                     .padding(.horizontal, 16)
                     .frame(height: 40)
                     .background(Color.clayInk, in: Capsule())
@@ -342,6 +381,40 @@ struct DownloadsView: View {
     }
 }
 
+/// 条件化的左右滑操作：没有操作时不注册该方向的滑动
+private struct SwipeAction: ViewModifier {
+    struct Item {
+        let title: String
+        let glyph: Glyph
+        let tint: Color
+        let run: () -> Void
+    }
+
+    let edge: HorizontalEdge
+    let action: Item?
+
+    func body(content: Content) -> some View {
+        if let action {
+            content.swipeActions(edge: edge, allowsFullSwipe: false) {
+                Button(action: action.run) { Label(action.title, glyph: action.glyph) }
+                    .tint(action.tint)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    /// plain 列表里不带行底色、分隔线的一行，左右与卡片对齐
+    func plainListRow(top: CGFloat, bottom: CGFloat) -> some View {
+        self
+            .listRowInsets(EdgeInsets(top: top, leading: 16, bottom: bottom, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+}
+
 enum DownloadEntry: Identifiable {
     case single(DownloadItem)
     case group(DownloadGroup, [DownloadItem])
@@ -424,7 +497,7 @@ private struct Sparkline: View {
                         p.addLine(to: CGPoint(x: points[points.count - 1].x, y: geo.size.height))
                         p.closeSubpath()
                     }
-                    .fill(LinearGradient(colors: [Color.accentColor.opacity(0.18), Color.accentColor.opacity(0)], startPoint: .top, endPoint: .bottom))
+                    .fill(.tint.opacity(0.10))
                     Path { p in p.addLines(points) }
                         .stroke(.tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
                 } else {

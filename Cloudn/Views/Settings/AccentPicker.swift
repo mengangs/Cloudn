@@ -11,21 +11,26 @@ struct AccentPicker: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(AppSettings.accentPresets, id: \.hex) { preset in
+                        let selected = app.settings.accentHex == preset.hex
                         Button { app.settings.accentHex = preset.hex } label: {
                             Circle()
-                                .fill(Color(hex: preset.hex) ?? Color.accentColor)
+                                .fill(Color(uiColor: UIColor(hexString: preset.hex).map { light in
+                                    let dark = UIColor(hexString: preset.dark) ?? light
+                                    return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+                                } ?? UIColor(named: "AccentColor")!))
                                 .frame(width: 30, height: 30)
                                 .overlay {
-                                    if app.settings.accentHex == preset.hex {
-                                        Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white)
-                                    }
+                                    Circle().strokeBorder(Color.ink, lineWidth: selected ? 2 : 0).padding(-4)
                                 }
+                                .frame(width: 44, height: 44)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(preset.name)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                     ColorPicker("自定义", selection: Binding(
-                        get: { app.settings.accentColor ?? Color.accentColor },
+                        get: { app.settings.accentColor },
                         set: { app.settings.accentHex = $0.hexString }
                     ), supportsOpacity: false)
                     .labelsHidden()
@@ -33,6 +38,7 @@ struct AccentPicker: View {
                 }
                 .padding(.vertical, 2)
             }
+            .sensoryFeedback(.selection, trigger: app.settings.accentHex)
         }
     }
 }

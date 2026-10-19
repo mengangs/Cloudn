@@ -50,14 +50,11 @@ struct RemoteImage: View {
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else {
+                // 加载中只是一块暖灰底，不放转圈（图集里几十个转圈很吵）；失败时给个图片图标
                 Rectangle()
-                    .fill(Color(.secondarySystemFill))
+                    .fill(Color.fillMuted)
                     .overlay {
-                        if failed {
-                            Image(systemName: "photo").foregroundStyle(.tertiary)
-                        } else {
-                            ProgressView()
-                        }
+                        if failed { IconView(.image, size: 20).foregroundStyle(Color.ink3) }
                     }
             }
         }

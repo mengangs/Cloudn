@@ -8,7 +8,7 @@ extension View {
             if let t = toast.wrappedValue {
                 HStack(spacing: 10) {
                     IconView(t.isError ? .warning : .check, size: 18)
-                        .foregroundStyle(t.isError ? Color(red: 0.94, green: 0.55, blue: 0.45) : Color(red: 0.88, green: 0.54, blue: 0.40))
+                        .foregroundStyle(Color.claySoft)
                     Text(t.message)
                         .font(.subheadline)
                         .foregroundStyle(Color.paper)
@@ -16,8 +16,8 @@ extension View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 13)
-                .background(Color.ink, in: Capsule())
-                .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
+                .background(Color.ink, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .floatingShadow()
                 .padding(.horizontal, 24)
                 .padding(.bottom, 64)
                 .sensoryFeedback(t.isError ? .error : .success, trigger: t.id)

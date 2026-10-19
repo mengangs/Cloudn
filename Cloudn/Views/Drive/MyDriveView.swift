@@ -14,7 +14,10 @@ struct MyDriveView: View {
             DriveFolderView(platform: platform, manager: manager, folderId: manager.driveRootId, title: platform.displayName, quota: quota)
                 .task { quota = await manager.quota() }
         } else {
-            ContentUnavailableView("暂不支持", systemImage: "externaldrive.badge.xmark", description: Text("\(platform.displayName)暂不支持文件管理"))
+            ScrollView {
+                EmptyStateCard(icon: .cloud, title: "暂不支持", detail: "\(platform.displayName)暂不支持文件管理").padding(16)
+            }
+            .background(Color.paper)
         }
     }
 }
@@ -65,13 +68,11 @@ struct DriveFolderView: View {
                 }
             }
             if let errorMessage {
-                Section {
-                    Label(errorMessage, glyph: .warning).foregroundStyle(Color.clayInk)
-                    Button("重试") { Task { await load() } }
-                }
-                .paperRow()
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage, actionTitle: "重试") { Task { await load() } }.inList()
             } else if items.isEmpty && !loading {
-                ContentUnavailableView("空文件夹", systemImage: "folder").listRowBackground(Color.clear)
+                EmptyStateCard(icon: .folder, title: "空文件夹").inList()
+            } else if visibleItems.isEmpty && !query.isEmpty {
+                EmptyStateCard(icon: .search, title: "没有匹配的文件", detail: "当前文件夹里没有名字包含「\(query)」的文件").inList()
             }
             ForEach(visibleItems) { item in
                 row(item)
@@ -83,14 +84,14 @@ struct DriveFolderView: View {
             }
         }
         .paperList()
-        .overlay { if loading && items.isEmpty { ProgressView() } }
+        .overlay { if loading && items.isEmpty { Spinner(size: 28) } }
         .refreshable { await load() }
         .searchable(text: $query, prompt: "在当前文件夹中搜索")
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if busy { ProgressView() } else if caps.contains(.createFolder) {
+                if busy { Spinner() } else if caps.contains(.createFolder) {
                     Button { nameText = ""; naming = .newFolder } label: { Image(icon: .folderPlus) }
                         .accessibilityLabel("新建文件夹")
                 }
@@ -129,6 +130,7 @@ struct DriveFolderView: View {
         .swipeActions(edge: .trailing) {
             if caps.contains(.delete) {
                 Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
+                    .tint(Color.clayInk)
             }
         }
         .contextMenu {
@@ -142,7 +144,7 @@ struct DriveFolderView: View {
                 Button { nameText = item.name; naming = .rename(item) } label: { Label("重命名", glyph: .pencil) }
             }
             if caps.contains(.move) {
-                Button { moving = item } label: { Label("移动到…", glyph: .folder) }
+                Button { moving = item } label: { Label("移动到…", glyph: .move) }
             }
             if caps.contains(.delete) {
                 Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
@@ -260,7 +262,9 @@ struct DriveFolderPicker: View {
         var body: some View {
             List {
                 if let errorMessage {
-                    Label(errorMessage, glyph: .warning).foregroundStyle(Color.clayInk).paperRow()
+                    EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage).inList()
+                } else if !loading && folders.filter({ $0.fid != excluding }).isEmpty {
+                    EmptyStateCard(icon: .folder, title: "这里没有子文件夹", detail: "可以直接移动到当前文件夹").inList()
                 }
                 ForEach(folders.filter { $0.fid != excluding }) { folder in
                     NavigationLink {
@@ -275,7 +279,7 @@ struct DriveFolderPicker: View {
                 }
             }
             .paperList()
-            .overlay { if loading { ProgressView() } }
+            .overlay { if loading { Spinner(size: 28) } }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {

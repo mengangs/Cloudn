@@ -17,7 +17,8 @@ struct CloudnApp: App {
                 .environment(model)
                 .onOpenURL { model.handle(url: $0) }
                 .preferredColorScheme(model.settings.appearance.colorScheme)
-                .tint(model.settings.accentColor ?? Color("AccentColor"))
+                .tint(model.settings.accentColor)
+                .environment(\.onAccent, model.settings.onAccentColor)
         }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseChanged(active: phase == .active)
@@ -43,7 +44,7 @@ struct RootView: View {
                 .tag(AppTab.me)
         }
         .background(Color.paper)
-        .toastOverlay($model.toast)
+        .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
         .sheet(isPresented: Binding(get: { !model.settings.acceptedNotice }, set: { _ in })) {
             NoticeSheet { model.settings.acceptedNotice = true }
                 .interactiveDismissDisabled()
