@@ -102,6 +102,8 @@ extension AccountKind {
         case .pan115: return URL(string: Pan115Resolver.loginURL)!
         case .c139: return URL(string: C139Resolver.loginURL)!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
+        // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
+        case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
         }
     }
 
@@ -117,6 +119,8 @@ extension AccountKind {
         // 139 的 PC 版页面在 WebView 里会因环境检测白屏，用移动版
         case .c139: return C139Resolver.loginUA
         case .bilibili: return VideoHTTP.uaChrome
+        // 移动 UA 下没有登录页（/login 返回 404）
+        case .xiaohongshu: return VideoHTTP.uaChrome
         }
     }
 
@@ -130,6 +134,7 @@ extension AccountKind {
         case .pan115: return .cookies(Pan115Resolver.cookieDomains)
         case .c139: return .cookies(C139Resolver.cookieDomains)
         case .bilibili: return .cookies(["bilibili.com"])
+        case .xiaohongshu: return .cookies(["xiaohongshu.com"])
         }
     }
 
@@ -143,6 +148,8 @@ extension AccountKind {
         case .pan115: return Pan115Resolver.isValidCookie(credential) && credential.contains("SEID=")
         case .c139: return C139Resolver.isValidCookie(credential)
         case .bilibili: return credential.contains("SESSDATA=")
+        // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
+        case .xiaohongshu: return credential.contains("web_session=")
         }
     }
 
@@ -156,6 +163,7 @@ extension AccountKind {
         case .pan115: return "登录后可下载大文件（游客仅限小文件）"
         case .c139: return "登录后可下载分享文件"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
+        case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         }
     }
 
@@ -169,6 +177,7 @@ extension AccountKind {
         case .pan115: return "需包含 UID、CID、SEID"
         case .c139: return "需包含 authorization，或 Os_SSo_Sid 与 RMKEY"
         case .bilibili: return "需包含 SESSDATA"
+        case .xiaohongshu: return "需包含 web_session（登录后的值）"
         }
     }
 
@@ -189,6 +198,16 @@ extension AccountKind {
         case .pan115: return "5.circle.fill"
         case .c139: return "m.circle.fill"
         case .bilibili: return "play.tv.fill"
+        case .xiaohongshu: return "book.closed.fill"
+        }
+    }
+
+    /// 登录页加载完成后注入的脚本：桌面布局在手机宽度下会被裁掉表单
+    var loginPageScript: String? {
+        switch self {
+        case .xunlei: return LoginWebView.xunleiRenderFix
+        case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
+        default: return nil
         }
     }
 }

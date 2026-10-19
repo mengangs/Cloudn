@@ -15,6 +15,7 @@ public final class VideoParseService: Sendable {
         self.credentials = credentials
         let list: [VideoParser] = [
             DouyinParser(extractor: webExtractor),
+            XiaohongshuParser(),
             KuaishouParser(),
             WeiboParser(),
             AcFunParser(),
@@ -36,7 +37,7 @@ public final class VideoParseService: Sendable {
         let result = try await parser.parse(resolved, cookie: cookie)
         return VideoParseResult(platform: result.platform, title: result.title, author: result.author, avatar: result.avatar,
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
-                                url: result.url, medias: result.medias.map { $0.withSecureURLs() })
+                                url: result.url, medias: result.medias.map { $0.withSecureURLs() }, notice: result.notice)
     }
 
     /// 展开短链（最多 5 跳），终址能重新识别就用新的识别结果
@@ -75,6 +76,8 @@ public enum AccountValidator {
             return await QuarkFamilyResolver(config: .uc, credentials: NoCredentials()).fetchNickname(cookie: cookie)
         case .bilibili:
             return await BilibiliParser.nickname(cookie: cookie)
+        case .xiaohongshu:
+            return await XiaohongshuParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

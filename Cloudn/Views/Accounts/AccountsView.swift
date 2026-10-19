@@ -19,11 +19,11 @@ struct AccountsView: View {
                     Text("蓝奏云、蓝奏云优享版、光鸭云盘无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
                 }
                 Section {
-                    row(.bilibili)
+                    ForEach(AccountKind.allCases.filter { !$0.isDrive }) { row($0) }
                 } header: {
                     Text("视频平台")
                 } footer: {
-                    Text("抖音、快手、微博、AcFun 无需登录即可解析。")
+                    Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录。")
                 }
                 Section {
                     Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")

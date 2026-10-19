@@ -2,13 +2,14 @@
 import Foundation
 
 public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable {
-    case douyin, kuaishou, weibo, acfun, bilibili
+    case douyin, xiaohongshu, kuaishou, weibo, acfun, bilibili
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
         case .douyin: return "抖音"
+        case .xiaohongshu: return "小红书"
         case .kuaishou: return "快手"
         case .weibo: return "微博"
         case .acfun: return "AcFun"
@@ -17,7 +18,13 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
     }
 
     /// 登录后能力更强的平台对应的账号类型
-    public var accountKind: AccountKind? { self == .bilibili ? .bilibili : nil }
+    public var accountKind: AccountKind? {
+        switch self {
+        case .bilibili: return .bilibili
+        case .xiaohongshu: return .xiaohongshu
+        default: return nil
+        }
+    }
 }
 
 public enum MediaKind: String, Codable, Sendable { case video, image, audio }
@@ -68,9 +75,11 @@ public struct VideoParseResult: Sendable, Identifiable {
     public let timestamp: Int64
     public let url: String
     public let medias: [VideoMedia]
+    /// 给用户的附加提示（如部分图片只能拿到带水印的平台图）；空串表示没有
+    public let notice: String
 
     public init(platform: VideoPlatform, title: String, author: String = "", avatar: String = "", cover: String = "",
-                text: String = "", timestamp: Int64 = 0, url: String = "", medias: [VideoMedia] = []) {
+                text: String = "", timestamp: Int64 = 0, url: String = "", medias: [VideoMedia] = [], notice: String = "") {
         self.platform = platform
         self.title = title
         self.author = author
@@ -80,6 +89,7 @@ public struct VideoParseResult: Sendable, Identifiable {
         self.timestamp = timestamp
         self.url = url
         self.medias = medias
+        self.notice = notice
     }
 
     public var videoCount: Int { medias.filter { $0.kind == .video }.count }

@@ -18,6 +18,11 @@ struct VideoResultView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                if !result.notice.isEmpty {
+                    Label(result.notice, systemImage: "info.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if !videos.isEmpty { videoSection }
                 if !images.isEmpty { imageSection }
             }

@@ -19,6 +19,9 @@ public enum VideoLinkParser {
         Rule(platform: .douyin, kind: "video", rx: Rx(#"jingxuan\.douyin\.com/m/(?:slides|video|note)/(\d{10,})"#, ignoreCase: true)),
         Rule(platform: .douyin, kind: "video", rx: Rx(#"douyin\.com/.*[?&]modal_id=(\d{10,})"#, ignoreCase: true)),
 
+        Rule(platform: .xiaohongshu, kind: "short", rx: Rx(#"xhslink\.(?:com|cn)/[A-Za-z0-9._?%&+=/#@\-]+"#, ignoreCase: true)),
+        Rule(platform: .xiaohongshu, kind: "note", rx: Rx(#"xiaohongshu\.com/(?:explore|discovery/item)/([0-9a-zA-Z]{10,})"#, ignoreCase: true)),
+
         Rule(platform: .kuaishou, kind: "short", rx: Rx(#"v\.kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+"#, ignoreCase: true)),
         Rule(platform: .kuaishou, kind: "photo", rx: Rx(#"(?:www\.)?kuaishou\.com/(?:short-video|fw/photo|fw/long-video)/([A-Za-z\d]+)"#, ignoreCase: true)),
         Rule(platform: .kuaishou, kind: "photo", rx: Rx(#"(?:www\.)?kuaishou\.com/f/([A-Za-z\d]+)"#, ignoreCase: true)),
@@ -44,7 +47,8 @@ public enum VideoLinkParser {
             guard let m = rule.rx.firstMatch(in: url) else { continue }
             let short = rule.kind == "short"
             let id = m.dropFirst().last(where: { !$0.isEmpty }) ?? ""
-            return DetectedVideoLink(platform: rule.platform, kind: rule.kind, id: short ? "" : id, url: url)
+            // 短链直接用规则匹配到的部分：分享文案里链接后常紧跟中文（「…/AbCd，复制本条信息」），整段当 URL 会展开失败
+            return DetectedVideoLink(platform: rule.platform, kind: rule.kind, id: short ? "" : id, url: short ? "https://" + m[0] : url)
         }
         return nil
     }
