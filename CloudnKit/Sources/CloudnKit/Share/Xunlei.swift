@@ -124,7 +124,8 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     private let authBase: String
     private let state = State()
     /// 未登录（及凭据里没有设备号）时用的进程内设备号
-    private let guestDevice = (0..<32).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
+    /// 本机固定的设备号（游客访问与没带设备号的凭据共用）
+    private let guestDevice = DeviceFingerprint.hex("xunlei.device")
 
     private actor State {
         /// shareId → 提取码（根目录列表与转存都要带）

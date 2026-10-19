@@ -228,9 +228,10 @@ struct GuangYaLogin: PasswordLogin {
         return Captcha(token: json["captcha_token"].string.nilIfBlank, needsWeb: !json["url"].string.isEmpty)
     }
 
+    /// 本机固定的光鸭设备（设备号 + 签名都持久化）
     static func newDevice() -> (id: String, sign: String) {
-        let id = PasswordLogins.randomHex(32)
-        return (id, "wdi10." + id + PasswordLogins.randomHex(32))
+        let id = DeviceFingerprint.hex("guangya.device")
+        return (id, "wdi10." + id + DeviceFingerprint.hex("guangya.sign"))
     }
 
     /// 账号接口要求的一整套 X-Device-* 头（X-Device-Id 取签名里 "." 之后的 32 位）
@@ -315,11 +316,14 @@ struct XunleiLogin: PasswordLogin {
         let id: String
         let peer: String
         var sign: String { "div101." + id + Crypto.md5Hex(Crypto.sha1Hex(id + XunleiResolver.appPackage + "40" + XunleiLogin.appKey)) }
+
+        /// 本机固定的设备号与 peerId：重复登录不被当成新设备
+        static var local: Device { Device(id: DeviceFingerprint.hex("xunlei.device"), peer: DeviceFingerprint.hex("xunlei.peer")) }
     }
 
     func login(account: String, password: String) async throws -> String {
         guard !account.trimmed.isEmpty, !password.isEmpty else { throw CloudnError("请输入账号和密码") }
-        let device = Device(id: PasswordLogins.randomHex(32), peer: PasswordLogins.randomHex(32))
+        let device = Device.local
         var body = Self.baseBody(device, clientVersion: "25.0.5.25", sdkVersion: "513006")
         body += [("userName", .string(account.trimmed)), ("passWord", .string(password)), ("verifyKey", .string("")),
                  ("verifyCode", .string("")), ("isMd5Pwd", .string("0"))]
@@ -328,7 +332,7 @@ struct XunleiLogin: PasswordLogin {
     }
 
     func sendSMS(phone: String) async throws -> SMSChallenge {
-        let device = Device(id: PasswordLogins.randomHex(32), peer: PasswordLogins.randomHex(32))
+        let device = Device.local
         var body = Self.baseBody(device, clientVersion: XunleiResolver.appClientVersion, sdkVersion: "231500")
         body += [("mobile", .string(phone.trimmed)), ("register", .string("0"))]
         let json = try await post("/xluser.core.login/v3/sendsms", body, ua: "android-ok-http-client/xl-acc-sdk/version-5.0.12.512000")

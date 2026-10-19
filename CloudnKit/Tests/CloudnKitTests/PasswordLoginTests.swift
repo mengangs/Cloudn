@@ -80,3 +80,15 @@ final class PasswordLoginTests: XCTestCase {
         XCTAssertEqual(jar.header(for: "https://accounts.woozooo.com/x").count, 0)
     }
 }
+
+final class DeviceFingerprintTests: XCTestCase {
+    func testStableAcrossCalls() {
+        let key = "test.\(UUID().uuidString)"
+        let a = DeviceFingerprint.hex(key)
+        XCTAssertEqual(a.count, 32)
+        XCTAssertTrue(a.allSatisfy(\.isHexDigit))
+        XCTAssertEqual(DeviceFingerprint.hex(key), a)
+        XCTAssertEqual(XunleiLogin.Device.local.id, XunleiLogin.Device.local.id)
+        XCTAssertEqual(GuangYaLogin.newDevice().sign, GuangYaLogin.newDevice().sign)
+    }
+}
