@@ -188,6 +188,24 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
         }
     }
 
+    /// 个人网盘某目录下的子文件夹（offset 分页，文件夹排在前面，遇到文件即可停止）
+    private func personalFolders(_ cid: String, cookie: String) async throws -> [ShareFile] {
+        var all: [ShareFile] = []
+        var offset = 0
+        while offset < 20_000 {
+            let url = apiBase + "/files?aid=1&cid=\(cid.formEncoded)&o=file_name&asc=1&offset=\(offset)&show_dir=1&limit=\(Self.pageLimit)" +
+                "&snap=0&natsort=1&count_folders=1&format=json"
+            let json = try await get(url, cookie: cookie)
+            try Self.check(json, fallback: "获取文件夹失败")
+            let items = json["data"].array
+            let folders = items.filter { $0["fid"].string.isEmpty && !$0["cid"].string.isEmpty }
+            all += folders.map { ShareFile(fid: $0["cid"].string, name: $0["n"].string, size: 0, isDirectory: true, parentId: cid) }
+            offset += items.count
+            if items.count < Self.pageLimit || folders.count < items.count { break }
+        }
+        return all
+    }
+
     private func createDir(_ name: String, parent: String, cookie: String) async throws -> String {
         let json = try await post(apiBase + "/files/add", [("pid", parent), ("cname", name)], cookie: cookie)
         try Self.check(json, fallback: "创建临时目录失败")
@@ -407,5 +425,29 @@ enum Pan115Crypto {
             offset += size
         }
         return out
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension Pan115Resolver: ShareSaver {
+    public var rootFolderId: String { "0" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let cookie = await loginCookie() else { throw SharePlatform.pan115.loginRequired }
+        return try await personalFolders(parentId, cookie: cookie)
+    }
+
+    /// share/receive：file_id 多个用逗号拼接（文件夹传其 cid）
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let cookie = await loginCookie() else { throw SharePlatform.pan115.loginRequired }
+        let (code, _) = Self.decodeToken(session.stoken)
+        for start in stride(from: 0, to: files.count, by: 100) {
+            let ids = files[start..<min(start + 100, files.count)].map(\.fid).joined(separator: ",")
+            let json = try await post(apiBase + "/share/receive",
+                                      [("share_code", session.shareId), ("receive_code", code), ("file_id", ids), ("cid", folderId)],
+                                      cookie: cookie)
+            try Self.check(json, fallback: "转存失败")
+        }
     }
 }

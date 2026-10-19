@@ -18,11 +18,14 @@ public final class C139Resolver: ShareResolver, @unchecked Sendable {
     private let credentials: CredentialStore
     private let client: HTTPClient
     private let shareBase: String
+    private let personalBase: String
 
-    public init(credentials: CredentialStore, client: HTTPClient = .shared, shareBase: String = "https://share-kd-njs.yun.139.com") {
+    public init(credentials: CredentialStore, client: HTTPClient = .shared, shareBase: String = "https://share-kd-njs.yun.139.com",
+                personalBase: String = "https://personal-kd-njs.yun.139.com") {
         self.credentials = credentials
         self.client = client
         self.shareBase = shareBase
+        self.personalBase = personalBase
     }
 
     private func url(_ name: String) -> String { "\(shareBase)/yun-share/richlifeApp/devapp/IOutLink/\(name)" }
@@ -204,5 +207,107 @@ public final class C139Resolver: ShareResolver, @unchecked Sendable {
     /// 账号页展示用（优先脱敏手机号）
     public static func displayAccount(in cookie: String) -> String? {
         CookieUtil.value(of: "ORCHES-I-ACCOUNT-SIMPLIFY", in: cookie)?.removingPercentEncoding?.nilIfBlank ?? account(in: cookie)
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension C139Resolver: ShareSaver {
+    public var rootFolderId: String { "/" }
+
+    /// 个人网盘接口（明文 JSON）：需要网页版登录给的 authorization
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let cookie = await credentials.cookie(for: .c139), let authorization = Self.authorization(in: cookie) else {
+            throw CloudnError("请先到「账号」页用网页登录 139 网盘（需要 authorization）")
+        }
+        var all: [ShareFile] = []
+        var cursor: OrderedJSON = .null
+        for _ in 0..<50 {
+            let body = Self.folderListBody(parentId: parentId, cursor: cursor)
+            let headers = Self.personalHeaders(authorization: authorization) + [("mcloud-sign", Self.signHeader(body.text))]
+            let r = try await client.send(HTTPRequest(url: personalBase + "/hcy/file/list", method: "POST", headers: headers,
+                                                      body: Data(body.text.utf8)))
+            guard let json = r.json, json.isObject else { throw CloudnError("139 网盘响应解析失败（HTTP \(r.status)）") }
+            let code = json["code"].string
+            guard (!json.has("success") || json["success"].bool) && (code == "0000" || code == "0") else {
+                throw CloudnError(json["message"].string.nilIfBlank ?? "获取文件夹失败（\(code)）")
+            }
+            all += json["data"]["items"].array.map {
+                ShareFile(fid: $0["fileId"].string, name: $0["name"].string, size: 0, isDirectory: true, parentId: parentId,
+                          modified: $0["updatedAt"].string)
+            }
+            let next = json["data"]["nextPageCursor"].string
+            if next.isEmpty || next == "null" { break }
+            cursor = .string(next)
+        }
+        return all
+    }
+
+    /// 转存：创建批量任务（分享接口的加密包装）→ 轮询任务进度
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let cookie = await credentials.cookie(for: .c139), Self.isValidCookie(cookie), let account = Self.account(in: cookie) else {
+            throw SharePlatform.c139.loginRequired
+        }
+        let authorization = Self.authorization(in: cookie)
+        let task = Self.transferTaskBody(account: account, linkID: session.shareId, files: files, target: folderId)
+        let created = try await post("\(shareBase)/yun-share/richlifeApp/devapp/IBatchOprTask/createOuterLinkBatchOprTask", task,
+                                     authorization: authorization, signed: true)
+        guard Self.ok(created) else { throw CloudnError(Self.message(created, fallback: "创建转存任务失败")) }
+        let taskID = created["data"]["taskID"].string
+        guard !taskID.isEmpty else { throw CloudnError("139 网盘未返回转存任务") }
+        let query = OrderedJSON.object([("queryBatchOprTaskDetailReq", .object([
+            ("taskID", .string(taskID)), ("msisdn", .string(account)),
+            ("commonAccountInfo", .object([("account", .string(account)), ("accountType", .int(1))]))
+        ]))])
+        for _ in 0..<40 {
+            try await Task.sleep(nanoseconds: 800_000_000)
+            guard let json = try? await post("\(shareBase)/yun-share/richlifeApp/devapp/IBatchOprTask/queryBatchOprTaskDetail", query,
+                                             authorization: authorization, signed: true) else { continue }
+            guard Self.ok(json) else { throw CloudnError(Self.message(json, fallback: "查询转存结果失败")) }
+            let progress = json["data"]["batchOprTask"]
+            if progress["progress"].int >= 100 && progress["taskStatus"].int == 2 { return }
+        }
+        throw CloudnError("转存仍在进行，请稍后到 139 网盘里查看")
+    }
+
+    /// 文件放 contentInfoList（"/<coID>"），文件夹放 catalogInfoList；字段顺序参与签名，保持与官方一致
+    static func transferTaskBody(account: String, linkID: String, files: [ShareFile], target: String) -> OrderedJSON {
+        let contents = files.filter { !$0.isDirectory }.map { OrderedJSON.string("/" + $0.fid) }
+        let catalogs = files.filter(\.isDirectory).map { OrderedJSON.string($0.fid) }
+        return .object([
+            ("createOuterLinkBatchOprTaskReq", .object([
+                ("msisdn", .string(account)), ("ownerAccount", .string("")), ("taskType", .int(1)),
+                ("taskInfo", .object([
+                    ("contentInfoList", .array(contents)), ("catalogInfoList", .array(catalogs)), ("newCatalogID", .string(target)),
+                    ("linkID", .string(linkID)), ("newCatalogName", .string("手机图片")), ("needPassword", .bool(true))
+                ])),
+                ("linkID", .string(linkID)), ("needPassword", .bool(true))
+            ])),
+            ("commonAccountInfo", .object([("account", .string(account)), ("accountType", .int(1))]))
+        ])
+    }
+
+    static func folderListBody(parentId: String, cursor: OrderedJSON) -> OrderedJSON {
+        .object([
+            ("pageInfo", .object([("pageSize", .int(100)), ("pageCursor", cursor)])),
+            ("orderBy", .string("updated_at")), ("orderDirection", .string("DESC")), ("parentFileId", .string(parentId)),
+            ("imageThumbnailStyleList", .array([.string("Small"), .string("Large")])), ("type", .string("folder"))
+        ])
+    }
+
+    /// 个人网盘网关必需的渠道 / 上下文头（缺任何一个都会 04000005 认证失败；值取自官方网页抓包）
+    static func personalHeaders(authorization: String) -> [(String, String)] {
+        let clientInfo = "||9|7.17.9|chrome|116.0.0.0|2cdaf7ada9e353c70eba99092e177991||windows 10||zh-CN|||"
+        return [
+            ("Authorization", authorization),
+            ("x-yun-channel-source", "10000034"), ("x-yun-app-channel", "10000034"), ("x-huawei-channelSrc", "10000034"),
+            ("mcloud-version", "7.17.9"), ("mcloud-client", "10701"), ("mcloud-channel", "1000101"), ("mcloud-route", "001"),
+            ("x-yun-module-type", "100"), ("x-yun-api-version", "v1"), ("x-yun-svc-type", "1"), ("x-SvcType", "1"),
+            ("caller", "web"), ("x-inner-ntwk", "2"), ("CMS-DEVICE", "default"), ("x-m4c-src", "10002"), ("x-m4c-caller", "PC"),
+            ("X-Deviceinfo", clientInfo), ("x-yun-client-info", clientInfo + "dW5kZWZpbmVk||"), ("INNER-HCY-ROUTER-HTTPS", "1"),
+            ("Content-Type", "application/json;charset=UTF-8"),
+            ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+            ("Origin", "https://yun.139.com"), ("Referer", "https://yun.139.com/"), ("Accept", "application/json, text/plain, */*")
+        ]
     }
 }

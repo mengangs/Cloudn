@@ -19,6 +19,14 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
     private let client: HTTPClient
     private let apiBase: String
     private let downloadBase: String
+    private let state = State()
+
+    /// 分享 key → mshare 子域的数字 id（S3KeyFlag 的前缀，转存接口要用；文件夹条目没有 S3KeyFlag，所以列目录时记下）
+    private actor State {
+        var mshare: [String: String] = [:]
+        func set(_ key: String, _ id: String) { if mshare[key] == nil { mshare[key] = id } }
+    }
+
     /// 设备标识：不参与签名，进程内固定即可
     private let loginUUID: String = (0..<32).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
 
@@ -102,6 +110,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
         let data = json["data"]
         if data["Expired"].bool { throw CloudnError("分享已失效") }
         let files = data["InfoList"].array.map { Self.parseItem($0) }
+        if let id = files.lazy.compactMap({ Self.mshareId(fromToken: $0.token) }).first { await state.set(key, id) }
         return (files, data["Next"].string != "-1")
     }
 
@@ -112,10 +121,29 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
             size: item["Size"].int64,
             isDirectory: item["Type"].int == 1,
             parentId: item["ParentFileId"].string,
-            // 取链需要 S3KeyFlag + Etag
-            token: "\(item["S3KeyFlag"].string)|\(item["Etag"].string)",
+            // 取链需要 S3KeyFlag + Etag，转存还要 StorageNode
+            token: "\(item["S3KeyFlag"].string)|\(item["Etag"].string)|\(item["StorageNode"].string)",
             modified: item["UpdateAt"].string
         )
+    }
+
+    /// S3KeyFlag 形如 "1816216065-0"，前缀即 mshare 子域
+    static func mshareId(fromToken token: String) -> String? {
+        let flag = token.components(separatedBy: "|").first ?? ""
+        let id = flag.components(separatedBy: "-").first ?? ""
+        return id.isEmpty || !id.allSatisfy(\.isNumber) ? nil : id
+    }
+
+    /// copy/save 的 fileList 条目（大小写两套字段都要带，服务端各版本取的不一样）
+    static func copySaveEntry(_ file: ShareFile, parent: Int64) -> [String: Any] {
+        let parts = file.token.components(separatedBy: "|")
+        let flag = parts.first ?? ""
+        let fileId = Int64(file.fid) ?? 0
+        return [
+            "fileID": fileId, "fileId": fileId, "size": file.size, "etag": parts.count > 1 ? parts[1] : "",
+            "type": file.isDirectory ? 1 : 0, "parentFileID": parent, "parentFileId": parent, "fileName": file.name,
+            "driveID": 0, "driveId": 0, "s3keyFlag": flag, "S3KeyFlag": flag, "StorageNode": parts.count > 2 ? parts[2] : ""
+        ]
     }
 
     // MARK: 直链解码
@@ -186,5 +214,74 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
         if code == 401 { throw CloudnError("123 云盘登录已失效，请到「账号」页重新登录", code: code) }
         let msg = json["message"].string
         throw CloudnError(msg.isEmpty ? "\(fallback)（\(code)）" : msg, code: code)
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension Pan123Resolver: ShareSaver {
+    public var rootFolderId: String { "0" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
+        var all: [ShareFile] = []
+        var next = "0"
+        for page in 1...50 {
+            let path = "/b/api/file/list/new"
+            let url = apiBase + path + "?driveId=0&limit=100&next=\(next.urlQueryEncoded)&orderBy=file_name&orderDirection=asc" +
+                "&parentFileId=\(parentId.urlQueryEncoded)&trashed=false&SearchData=&Page=\(page)&OnlyLookAbnormalFile=0" +
+                "&event=homeListFile&operateType=1&inDirectSpace=false"
+            let json = try await callJSON(.get(url, headers: authHeaders(path: path, token: token)))
+            try Self.check(json, fallback: "获取文件夹失败")
+            let data = json["data"]
+            all += data["InfoList"].array.map { Self.parseItem($0) }.filter(\.isDirectory)
+            let cursor = data["Next"].string
+            if cursor == "-1" || data["InfoList"].array.isEmpty { break }
+            next = cursor.isEmpty ? "0" : cursor
+        }
+        return all
+    }
+
+    /// copy/save 走 mshare 子域：不需要签名，只带 Bearer + LoginUuid；异步任务轮询 copy/save/get
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
+        let cached = await state.mshare[session.shareId]
+        guard let mshare = cached ?? files.lazy.compactMap({ Self.mshareId(fromToken: $0.token) }).first else {
+            throw CloudnError("无法识别 123 分享的转存标识，请重新解析后再试")
+        }
+        let base = "https://\(mshare).mshare.123pan.cn/b/api/restful/goapi/v1/file/copy/save"
+        let headers: [(String, String)] = [("Authorization", "Bearer \(token)"), ("LoginUuid", loginUUID), ("platform", "web"),
+                                           ("User-Agent", Self.dartUA)]
+        let parent = Int64(folderId) ?? 0
+        for start in stride(from: 0, to: files.count, by: 100) {
+            let batch = files[start..<min(start + 100, files.count)]
+            let body: [String: Any] = ["fileList": batch.map { Self.copySaveEntry($0, parent: parent) }, "shareKey": session.shareId,
+                                       "sharePwd": session.stoken, "currentLevel": 1, "superAdmin": NSNull()]
+            let json = try await callJSON(.postJSON(base, body, headers: headers))
+            try Self.check(json, fallback: "转存失败")
+            let taskId = json["data"]["taskID"].string
+            guard !taskId.isEmpty else { throw CloudnError("123 云盘未返回转存任务") }
+            try await waitCopySave(base + "/get?taskID=\(taskId.urlQueryEncoded)", headers: headers)
+        }
+    }
+
+    private func waitCopySave(_ url: String, headers: [(String, String)]) async throws {
+        for _ in 0..<30 {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let json = try? await callJSON(.get(url, headers: headers)) else { continue }
+            if json["code"].int != 0 {
+                let msg = json["message"].string
+                if !msg.isEmpty { throw CloudnError("转存失败：\(msg)") }
+                continue
+            }
+            let data = json["data"]
+            let state = data["state"].string.lowercased()
+            let status = data["status"].int
+            if data["finished"].bool || status == 2 || status == 3 || state == "success" || state == "done" || state == "2" ||
+                data.has("fileId") || data.has("FileId") || data.has("newFileId") {
+                return
+            }
+        }
+        throw CloudnError("转存仍在进行，请稍后到 123 云盘里查看")
     }
 }

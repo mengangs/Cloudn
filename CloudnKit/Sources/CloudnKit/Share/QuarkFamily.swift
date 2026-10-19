@@ -261,13 +261,7 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
         let base = try await ensureTempDir(cookie: cookie)
         let subName = "tr_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0..<1_000_000))"
         let sub = try await createFolder(subName, parent: base, cookie: cookie)
-        let save = try await callData(.postJSON(url("/1/clouddrive/share/sharepage/save"), [
-            "pwd_id": session.shareId, "stoken": session.stoken, "pdir_fid": file.parentId,
-            "to_pdir_fid": sub, "fid_list": [file.fid], "fid_token_list": [file.token], "scene": "link"
-        ], headers: apiHeaders(cookie)), cookie: cookie)
-        let taskId = save["task_id"].string
-        guard !taskId.isEmpty else { throw CloudnError("转存失败") }
-        guard let savedFid = try await pollSaveTask(taskId, cookie: cookie) else { throw CloudnError("转存超时，请稍后重试") }
+        let savedFid = try await saveShare(session, files: [file], parent: file.parentId, to: sub, cookie: cookie, attempts: 10)
         let r = try await client.send(.postJSON(config.downloadURL, ["fids": [savedFid]], headers: apiHeaders(cookie)))
         await absorbCookies(r, cookie: cookie)
         let current = await freshCookieNoRefresh() ?? cookie
@@ -276,11 +270,43 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
     }
 
     private func ensureTempDir(cookie: String) async throws -> String {
-        let data = try await callData(.get(url("/1/clouddrive/file", "&pdir_fid=0&page=1&size=100"), headers: apiHeaders(cookie)), cookie: cookie)
-        if let dir = data["list"].array.first(where: { ($0["dir"].bool || $0["isdir"].int == 1) && $0.string("file_name", "fname") == Self.tempDirName }) {
-            return dir["fid"].string
+        if let dir = try await personalFolders("0", cookie: cookie).first(where: { $0.name == Self.tempDirName }) {
+            return dir.fid
         }
         return try await createFolder(Self.tempDirName, parent: "0", cookie: cookie)
+    }
+
+    /// 个人网盘某目录下的子文件夹（file/sort 分页）
+    private func personalFolders(_ parent: String, cookie: String) async throws -> [ShareFile] {
+        var all: [ShareFile] = []
+        for page in 1...50 {
+            let q = "&uc_param_str=&pdir_fid=\(parent.urlQueryEncoded)&_page=\(page)&_size=100&_fetch_total=1" +
+                "&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc"
+            let data = try await callData(.get(url("/1/clouddrive/file/sort", q),
+                                               headers: apiHeaders(cookie) + [("Origin", config.webOrigin), ("Referer", config.referer)]), cookie: cookie)
+            let items = data["list"].array
+            all += items.filter { $0["dir"].bool || $0["isdir"].int == 1 }.map {
+                ShareFile(fid: $0["fid"].string, name: $0.string("file_name", "fname"), size: 0, isDirectory: true, parentId: parent,
+                          modified: $0["updated_at"].string)
+            }
+            if items.count < 100 { break }
+        }
+        return all
+    }
+
+    /// sharepage/save + 轮询任务；同一批文件必须来自同一个父目录。返回转存后的第一个 fid
+    private func saveShare(_ session: ShareSession, files: [ShareFile], parent: String, to target: String,
+                           cookie: String, attempts: Int) async throws -> String {
+        let save = try await callData(.postJSON(url("/1/clouddrive/share/sharepage/save"), [
+            "pwd_id": session.shareId, "stoken": session.stoken, "pdir_fid": parent,
+            "to_pdir_fid": target, "fid_list": files.map(\.fid), "fid_token_list": files.map(\.token), "scene": "link"
+        ], headers: apiHeaders(cookie)), cookie: cookie)
+        let taskId = save["task_id"].string
+        guard !taskId.isEmpty else { throw CloudnError("转存失败") }
+        guard let savedFid = try await pollSaveTask(taskId, cookie: cookie, attempts: attempts) else {
+            throw CloudnError("转存仍在进行，请稍后到\(config.platform.displayName)里查看")
+        }
+        return savedFid
     }
 
     private func createFolder(_ name: String, parent: String, cookie: String) async throws -> String {
@@ -292,8 +318,8 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
         return fid
     }
 
-    private func pollSaveTask(_ taskId: String, cookie: String) async throws -> String? {
-        for _ in 0..<10 {
+    private func pollSaveTask(_ taskId: String, cookie: String, attempts: Int) async throws -> String? {
+        for _ in 0..<attempts {
             if let r = try? await client.send(.get(url("/1/clouddrive/task", "&task_id=\(taskId.urlQueryEncoded)&retry_index=0"), headers: apiHeaders(cookie))),
                let json = r.json, json["status"].int == 200 {
                 let data = json["data"]
@@ -387,5 +413,27 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
         let name = item.string("file_name", "filename")
         return DownloadLink(fileName: name.isEmpty ? file.name : name, url: link,
                             size: item["size"].int64 > 0 ? item["size"].int64 : file.size, headers: headers)
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension QuarkFamilyResolver: ShareSaver {
+    public var rootFolderId: String { "0" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        return try await personalFolders(parentId, cookie: cookie)
+    }
+
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        // 同一次 save 只能是同一个父目录下的条目
+        for (parent, group) in Dictionary(grouping: files, by: \.parentId) {
+            for start in stride(from: 0, to: group.count, by: 100) {
+                let batch = Array(group[start..<min(start + 100, group.count)])
+                _ = try await saveShare(session, files: batch, parent: parent, to: folderId, cookie: cookie, attempts: 60)
+            }
+        }
     }
 }

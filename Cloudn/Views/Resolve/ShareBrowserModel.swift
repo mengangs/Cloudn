@@ -209,6 +209,21 @@ final class ShareBrowserModel: Hashable, Identifiable {
         }
     }
 
+    // MARK: 转存到我的网盘
+
+    var saver: ShareSaver? { app.resolvers.saver(for: share.platform) }
+
+    /// 支持转存、但还没登录对应账号
+    var saveNeedsLogin: Bool {
+        guard let kind = share.platform.accountKind else { return false }
+        return !app.accounts.isLoggedIn(kind)
+    }
+
+    func save(_ items: [ShareFile], to folderId: String) async throws {
+        guard let session, let saver else { throw CloudnError("分享会话已失效，请重新解析") }
+        try await saver.save(session, files: items, to: folderId)
+    }
+
     // MARK: 收藏
 
     var isBookmarked: Bool { app.bookmarks.isBookmarked(sourceText) }

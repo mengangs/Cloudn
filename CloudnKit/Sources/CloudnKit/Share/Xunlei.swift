@@ -184,11 +184,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     public func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink {
         let id = try await loginIdentity()
         let dir = try await ensureTempDir(id)
-        let body = OrderedJSON.object([
-            ("share_id", .string(session.shareId)), ("pass_code_token", .string(session.stoken)), ("parent_id", .string(dir)),
-            ("ancestor_ids", .array([])), ("file_ids", .array([.string(file.fid)])), ("specify_parent_id", .bool(true))
-        ])
-        let restored = try await pan("POST:/drive/v1/share/restore", url: panBase + "/drive/v1/share/restore", body: body, identity: id)
+        let restored = try await restore(session, ids: [file.fid], to: dir, identity: id)
         // params.trace_file_ids 是 JSON 字符串：{"分享文件 id":"转存后新 id"}
         let trace = JSON(text: restored["params"]["trace_file_ids"].string)
         let savedId = trace?[file.fid].string.nilIfBlank ?? restored["file_id"].string
@@ -276,17 +272,34 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         return (data, data["next_page_token"].string)
     }
 
-    private func ensureTempDir(_ id: Identity) async throws -> String {
-        let filters = #"{"trashed":{"eq":false}}"#
+    /// share/restore：把分享里的条目转存到 parent（同步返回，trace_file_ids 里是新旧 id 映射）
+    private func restore(_ session: ShareSession, ids: [String], to parent: String, identity: Identity) async throws -> JSON {
+        let body = OrderedJSON.object([
+            ("share_id", .string(session.shareId)), ("pass_code_token", .string(session.stoken)), ("parent_id", .string(parent)),
+            ("ancestor_ids", .array([])), ("file_ids", .array(ids.map { .string($0) })), ("specify_parent_id", .bool(true))
+        ])
+        return try await pan("POST:/drive/v1/share/restore", url: panBase + "/drive/v1/share/restore", body: body, identity: identity)
+    }
+
+    /// 个人网盘某目录下的子文件夹
+    private func personalFolders(_ parent: String, identity: Identity) async throws -> [ShareFile] {
+        let filters = #"{"kind":{"eq":"drive#folder"},"trashed":{"eq":false}}"#
+        var all: [ShareFile] = []
         var pageToken = ""
-        for _ in 0..<20 {
-            let url = panBase + "/drive/v1/files?parent_id=&page_token=\(pageToken.formEncoded)&limit=100&with_audit=true&filters=\(filters.formEncoded)"
-            let data = try await pan("GET:/drive/v1/files", url: url, identity: id)
-            if let dir = data["files"].array.first(where: { $0["kind"].string == "drive#folder" && $0["name"].string == Self.tempDirName }) {
-                return dir["id"].string
-            }
+        for _ in 0..<50 {
+            let url = panBase + "/drive/v1/files?parent_id=\(parent.formEncoded)&page_token=\(pageToken.formEncoded)&limit=100" +
+                "&with_audit=true&filters=\(filters.formEncoded)"
+            let data = try await pan("GET:/drive/v1/files", url: url, identity: identity)
+            all += data["files"].array.map(Self.parseFile).filter(\.isDirectory)
             pageToken = data["next_page_token"].string
             if pageToken.isEmpty { break }
+        }
+        return all
+    }
+
+    private func ensureTempDir(_ id: Identity) async throws -> String {
+        if let dir = try await personalFolders("", identity: id).first(where: { $0.name == Self.tempDirName }) {
+            return dir.fid
         }
         let body = OrderedJSON.object([("kind", .string("drive#folder")), ("name", .string(Self.tempDirName)),
                                        ("parent_id", .string("")), ("space", .string(""))])
@@ -362,5 +375,23 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         var h = appClientId + appClientVersion + appPackage + deviceId + timestamp
         for salt in captchaSalts { h = Crypto.md5Hex(h + salt) }
         return "1." + h
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension XunleiResolver: ShareSaver {
+    public var rootFolderId: String { "" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        try await personalFolders(parentId, identity: try await loginIdentity())
+    }
+
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        let id = try await loginIdentity()
+        for start in stride(from: 0, to: files.count, by: 100) {
+            let ids = files[start..<min(start + 100, files.count)].map(\.fid)
+            _ = try await restore(session, ids: Array(ids), to: folderId, identity: id)
+        }
     }
 }

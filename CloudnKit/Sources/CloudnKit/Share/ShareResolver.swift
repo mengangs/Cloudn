@@ -25,6 +25,21 @@ public extension ShareResolver {
     func cleanup(token: String) async {}
 }
 
+/// 把分享里的文件 / 文件夹转存到自己网盘（需要登录对应平台）
+public protocol ShareSaver: Sendable {
+    /// 「我的网盘」根目录 id
+    var rootFolderId: String { get }
+    /// 个人网盘某目录下的子文件夹（只返回文件夹）
+    func listFolders(_ parentId: String) async throws -> [ShareFile]
+    /// 转存到目标文件夹；files 来自同一个分享会话
+    func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws
+}
+
+extension SharePlatform {
+    /// 未登录时给转存 / 取链的统一提示
+    var loginRequired: CloudnError { CloudnError("请先到「账号」页登录\(displayName)") }
+}
+
 /// 平台 → 解析器
 public final class ShareResolvers: Sendable {
     public let credentials: CredentialStore
@@ -47,4 +62,7 @@ public final class ShareResolvers: Sendable {
     }
 
     public func resolver(for platform: SharePlatform) -> ShareResolver? { resolvers[platform] }
+
+    /// 支持转存到自己网盘的平台才返回
+    public func saver(for platform: SharePlatform) -> ShareSaver? { resolvers[platform] as? ShareSaver }
 }

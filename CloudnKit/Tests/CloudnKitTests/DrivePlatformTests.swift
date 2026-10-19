@@ -170,3 +170,54 @@ final class DrivePlatformTests: XCTestCase {
         XCTAssertEqual(XunleiCredential.parse(AccountValidator.normalize(.xunlei, access))?.accessToken, access)
     }
 }
+
+/// 转存请求体的构造（字段名 / 顺序与官方一致）
+final class SaveToDriveTests: XCTestCase {
+    func testSaversRegistered() {
+        let resolvers = ShareResolvers(credentials: NoCredentials())
+        for p in [SharePlatform.quark, .uc, .baidu, .xunlei, .pan115, .pan123, .c139] {
+            XCTAssertNotNil(resolvers.saver(for: p), "\(p) 应支持转存")
+        }
+        for p in [SharePlatform.lanzou, .ilanzou, .guangya] {
+            XCTAssertNil(resolvers.saver(for: p))
+        }
+        XCTAssertEqual(resolvers.saver(for: .baidu)?.rootFolderId, "/")
+        XCTAssertEqual(resolvers.saver(for: .c139)?.rootFolderId, "/")
+        XCTAssertEqual(resolvers.saver(for: .xunlei)?.rootFolderId, "")
+    }
+
+    func testBaiduFsidList() {
+        XCTAssertEqual(BaiduResolver.fsidList(["1", "22"]), #"["1","22"]"#)
+    }
+
+    func testPan123SaveEntry() {
+        let item = JSON(text: #"{"FileId":123,"FileName":"a.mp4","Size":9,"Type":0,"ParentFileId":5,"S3KeyFlag":"1816216065-0","Etag":"e1","StorageNode":"m3"}"#)!
+        let file = Pan123Resolver.parseItem(item)
+        XCTAssertEqual(file.token, "1816216065-0|e1|m3")
+        XCTAssertEqual(Pan123Resolver.mshareId(fromToken: file.token), "1816216065")
+        XCTAssertNil(Pan123Resolver.mshareId(fromToken: "||"))
+        let entry = Pan123Resolver.copySaveEntry(file, parent: 7)
+        XCTAssertEqual(entry["fileID"] as? Int64, 123)
+        XCTAssertEqual(entry["parentFileId"] as? Int64, 7)
+        XCTAssertEqual(entry["etag"] as? String, "e1")
+        XCTAssertEqual(entry["S3KeyFlag"] as? String, "1816216065-0")
+        XCTAssertEqual(entry["StorageNode"] as? String, "m3")
+        XCTAssertEqual(entry["type"] as? Int, 0)
+    }
+
+    func testC139TransferBody() {
+        let files = [ShareFile(fid: "co1", name: "a", size: 1, isDirectory: false), ShareFile(fid: "ca1", name: "d", size: 0, isDirectory: true)]
+        let body = C139Resolver.transferTaskBody(account: "13800000000", linkID: "L1", files: files, target: "/").text
+        XCTAssertEqual(body, #"{"createOuterLinkBatchOprTaskReq":{"msisdn":"13800000000","ownerAccount":"","taskType":1,"#
+            + #""taskInfo":{"contentInfoList":["/co1"],"catalogInfoList":["ca1"],"newCatalogID":"/","linkID":"L1","#
+            + #""newCatalogName":"手机图片","needPassword":true},"linkID":"L1","needPassword":true},"#
+            + #""commonAccountInfo":{"account":"13800000000","accountType":1}}"#)
+        XCTAssertEqual(C139Resolver.folderListBody(parentId: "/", cursor: .null).text,
+                       #"{"pageInfo":{"pageSize":100,"pageCursor":null},"orderBy":"updated_at","orderDirection":"DESC","#
+                       + #""parentFileId":"/","imageThumbnailStyleList":["Small","Large"],"type":"folder"}"#)
+        let headers = Dictionary(C139Resolver.personalHeaders(authorization: "Basic x"), uniquingKeysWith: { a, _ in a })
+        XCTAssertEqual(headers["Authorization"], "Basic x")
+        XCTAssertEqual(headers["mcloud-version"], "7.17.9")
+        XCTAssertNotNil(headers["x-yun-client-info"])
+    }
+}

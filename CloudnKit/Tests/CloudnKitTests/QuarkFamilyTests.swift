@@ -52,4 +52,27 @@ final class QuarkFamilyTests: XCTestCase {
         XCTAssertEqual(saved, "__pus=p1; __puus=renewed")
         XCTAssertEqual(login.headers["Cookie"], "__pus=p1; __puus=renewed")
     }
+
+    func testSaveToDrive() async throws {
+        guard let server = ProcessInfo.processInfo.environment["CLOUDN_TEST_SERVER"] else { throw XCTSkip("未设置 CLOUDN_TEST_SERVER") }
+        let creds = MemoryCredentials()
+        let resolver = QuarkFamilyResolver(config: makeConfig(server), credentials: creds)
+        let share = ShareLinkParser.parse("https://pan.quark.cn/s/abc 提取码：abcd")!
+        let session = try await resolver.openSession(share, pwd: nil)
+        let files = try await resolver.list(session, dirId: "0")
+
+        // 未登录：明确提示先登录
+        do {
+            _ = try await resolver.listFolders("0")
+            XCTFail("未登录应失败")
+        } catch let e as CloudnError {
+            XCTAssertTrue(e.message.contains("登录"))
+        }
+
+        await creds.set(.quark, "__pus=p1; __puus=old")
+        let folders = try await resolver.listFolders(resolver.rootFolderId)
+        XCTAssertEqual(folders.map(\.fid), ["d9"])
+        XCTAssertTrue(folders[0].isDirectory)
+        try await resolver.save(session, files: [files[1]], to: "d9")
+    }
 }

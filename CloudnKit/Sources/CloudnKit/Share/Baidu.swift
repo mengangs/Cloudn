@@ -75,7 +75,9 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         let info = try await shareInfo(session, cookie: cookie)
         let bdstoken = try await self.bdstoken(cookie)
         let dir = await ensureTempDir(cookie: cookie, bdstoken: bdstoken)
-        let saved = try await transfer(info: info, sekey: session.stoken, fsId: file.fid, toDir: dir, cookie: cookie, bdstoken: bdstoken)
+        guard let saved = try await transfer(info: info, sekey: session.stoken, fsIds: [file.fid], toDir: dir, cookie: cookie, bdstoken: bdstoken).first else {
+            throw CloudnError("转存失败：未返回新文件")
+        }
         let link: String
         do {
             link = try await locateDownload(saved, cookie: cookie)
@@ -134,9 +136,9 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         let files = json["list"].array.map { item -> ShareFile in
             let isDir = item["isdir"].string == "1"
             let path = item["path"].string
-            // 目录用 path 导航，文件用 fs_id 转存
+            // 目录用 path 导航、文件用 fs_id 取链；token 统一存 fs_id，文件夹转存要用
             return ShareFile(fid: isDir ? path : item["fs_id"].string, name: item["server_filename"].string, size: item["size"].int64,
-                             isDirectory: isDir, parentId: dir, token: path, modified: item["server_mtime"].string)
+                             isDirectory: isDir, parentId: dir, token: item["fs_id"].string, modified: item["server_mtime"].string)
         }
         return Page(title: json["title"].string, files: files)
     }
@@ -185,19 +187,40 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         return r?.json?["errno"].int == 0 && r?.json?.has("errno") == true ? dir : "/"
     }
 
-    /// 同步转存，返回转存后的完整路径
-    private func transfer(info: (shareId: String, uk: String), sekey: String, fsId: String, toDir: String,
-                          cookie: String, bdstoken: String) async throws -> String {
+    /// 同步转存，返回转存后的完整路径（与 fsIds 同序）
+    private func transfer(info: (shareId: String, uk: String), sekey: String, fsIds: [String], toDir: String,
+                          cookie: String, bdstoken: String) async throws -> [String] {
         let url = "https://pan.baidu.com/share/transfer?shareid=\(info.shareId)&from=\(info.uk)&channel=chunlei&sekey=\(sekey)" +
             "&ondup=newcopy&web=1&app_id=\(Self.appId)&bdstoken=\(bdstoken)&clienttype=0"
-        let r = try await client.send(.postForm(url, [("fsidlist", "[\"\(fsId)\"]"), ("path", toDir)],
+        let r = try await client.send(.postForm(url, [("fsidlist", Self.fsidList(fsIds)), ("path", toDir)],
                                                 headers: [("Cookie", Self.withBDCLND(cookie, sekey)), ("User-Agent", Self.webUA),
                                                           ("Origin", "https://pan.baidu.com"), ("Referer", "https://pan.baidu.com/s/")]))
         guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
         try Self.check(json, fallback: "转存失败")
-        let path = json["extra"]["list"][0]["to"].string
-        guard !path.isEmpty else { throw CloudnError("转存失败：未返回新文件") }
-        return path
+        return json["extra"]["list"].array.map { $0["to"].string }.filter { !$0.isEmpty }
+    }
+
+    /// fsidlist 参数：`["1","2"]`
+    static func fsidList(_ ids: [String]) -> String {
+        "[" + ids.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+    }
+
+    /// 个人网盘某目录下的子文件夹（文件夹 id 即完整路径）
+    private func personalFolders(_ dir: String, cookie: String) async throws -> [ShareFile] {
+        var all: [ShareFile] = []
+        for page in 1...20 {
+            let url = "https://pan.baidu.com/api/list?clienttype=0&app_id=\(Self.appId)&web=1&order=name&desc=0" +
+                "&dir=\(dir.formEncoded)&num=1000&page=\(page)"
+            let r = try await client.send(.get(url, headers: [("Cookie", cookie), ("User-Agent", Self.netdiskUA)]))
+            guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
+            try Self.check(json, fallback: "获取文件夹失败")
+            let items = json["list"].array
+            all += items.filter { $0["isdir"].int == 1 }.map {
+                ShareFile(fid: $0["path"].string, name: $0["server_filename"].string, size: 0, isDirectory: true, parentId: dir)
+            }
+            if items.count < 1000 { break }
+        }
+        return all
     }
 
     /// locatedownload 返回多个候选：优先 encrypt=0 的 https 明文直链（d2-ant 那路是加密通道，排除）
@@ -239,5 +262,28 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         guard errno != 0 else { return }
         let msg = json.string("err_msg", "show_msg")
         throw CloudnError(msg.isEmpty ? "\(fallback)（errno=\(errno)）" : msg, code: errno)
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension BaiduResolver: ShareSaver {
+    public var rootFolderId: String { "/" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let cookie = await loginCookie() else { throw SharePlatform.baidu.loginRequired }
+        return try await personalFolders(parentId, cookie: cookie)
+    }
+
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let cookie = await loginCookie() else { throw SharePlatform.baidu.loginRequired }
+        let info = try await shareInfo(session, cookie: cookie)
+        let bdstoken = try await self.bdstoken(cookie)
+        // 列表项的 token 是 fs_id（文件夹也有）；旧会话里的文件退回用 fid
+        let ids = files.map { $0.token.isEmpty || $0.token.hasPrefix("/") ? $0.fid : $0.token }
+        for start in stride(from: 0, to: ids.count, by: 100) {
+            _ = try await transfer(info: info, sekey: session.stoken, fsIds: Array(ids[start..<min(start + 100, ids.count)]),
+                                   toDir: folderId, cookie: cookie, bdstoken: bdstoken)
+        }
     }
 }
