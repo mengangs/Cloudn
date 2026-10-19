@@ -1,6 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 // 夸克 / UC 网盘分享解析。两者是同一套 clouddrive 接口，只在域名、pr 参数、UA 与少量字段上不同。
 // 协议细节参考 YunX（AGPL-3.0）的 QuarkApi / UCApi 及其仓库层实现。
+// 我的网盘管理参考 YunX（AGPL-3.0）的 QuarkApi / UCApi 云盘接口与 QuarkCloudViewModel / UCCoudViewModel。
 import Foundation
 
 public struct QuarkFamilyConfig: Sendable {
@@ -442,5 +443,214 @@ extension QuarkFamilyResolver: ShareSaver {
                 _ = try await saveShare(session, files: batch, parent: parent, to: folderId, cookie: cookie, attempts: 60)
             }
         }
+    }
+}
+
+// MARK: - 我的网盘管理
+
+extension QuarkFamilyConfig {
+    /// UC 云盘页（列表 / 容量 / 个人盘下载兜底）用 uc-cloud-drive 客户端 UA；夸克沿用 apiUA
+    var driveUA: String {
+        platform == .uc
+            ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/1.6.1 Chrome/100.0.4896.160 Electron/18.3.5.16-b62cf9c50d Safari/537.36 Channel/ucpan_other_ch"
+            : apiUA
+    }
+    /// 夸克文件管理接口带 uc_param_str，UC 不带
+    var manageExtra: String { platform == .quark ? "&uc_param_str=" : "" }
+}
+
+extension QuarkFamilyResolver: DriveManager {
+    public var driveRootId: String { "0" }
+    public var driveCapabilities: DriveCapabilities { .all }
+
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        let parent = folderId.nilIfBlank ?? "0"
+        var all: [ShareFile] = []
+        for page in 1...100 {
+            let req = HTTPRequest.get(url("/1/clouddrive/file/sort", Self.driveListQuery(config, parent: parent, page: page)),
+                                      headers: driveHeaders(cookie))
+            let data = try await callData(req, cookie: cookie)
+            let items = Self.parseDriveItems(data, parent: parent)
+            all += items
+            if items.count < 100 { break }
+        }
+        return all
+    }
+
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹不能直接下载") }
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        if config.platform == .uc, FileNames.kind(of: file.name) == .video,
+           let preview = try? await ucVideoLinkViaShare(file, cookie: cookie) {
+            // UC 非会员下载视频会被换成宣传片：自动建 1 天分享，走分享态 video_preview 拿原画直链
+            return preview
+        }
+        do {
+            return try await personalLink(file, cookie: cookie)
+        } catch {
+            guard config.platform == .uc else { throw error }
+            // UC 回退个人云盘通道
+            return try await ucCloudLink(file, cookie: cookie)
+        }
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        _ = try await createFolder(name, parent: parentId.nilIfBlank ?? "0", cookie: cookie)
+    }
+
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        _ = try await callData(.postJSON(url("/1/clouddrive/file/rename", config.manageExtra),
+                                         ["fid": file.fid, "file_name": name] as [String: Any], headers: apiHeaders(cookie)), cookie: cookie)
+    }
+
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        guard !files.isEmpty else { return }
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        let body: [String: Any] = ["action_type": 1, "to_pdir_fid": folderId, "filelist": files.map(\.fid), "exclude_fids": [String]()]
+        let data = try await callData(.postJSON(url("/1/clouddrive/file/move", config.manageExtra), body, headers: apiHeaders(cookie)), cookie: cookie)
+        _ = try await waitTask(data["task_id"].string, cookie: cookie, attempts: 10)
+    }
+
+    public func delete(_ files: [ShareFile]) async throws {
+        guard !files.isEmpty else { return }
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        let body: [String: Any] = ["action_type": 2, "filelist": files.map(\.fid), "exclude_fids": [String]()]
+        let data = try await callData(.postJSON(url("/1/clouddrive/file/delete", config.manageExtra), body, headers: apiHeaders(cookie)), cookie: cookie)
+        _ = try await waitTask(data["task_id"].string, cookie: cookie, attempts: 10)
+    }
+
+    /// 永久有效、无提取码的分享
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        let shareId = try await createShareId(files, expiredType: 1, cookie: cookie)
+        let info = try await shareInfo(shareId, cookie: cookie)
+        let link = info["share_url"].string
+        guard !link.isEmpty else { throw CloudnError("未返回分享链接") }
+        return DriveShareLink(url: link, pwd: info["passcode"].string)
+    }
+
+    public func quota() async -> DriveQuota? {
+        guard let cookie = await freshCookie() else { return nil }
+        var headers: [(String, String)] = [("Cookie", cookie), ("User-Agent", config.driveUA)]
+        if config.platform == .uc { headers += [("Origin", config.webOrigin), ("Referer", config.referer)] }
+        guard let r = try? await client.send(.get(url("/1/clouddrive/member", "&fetch_subscribe=true&_ch=home"), headers: headers)),
+              let json = r.json else { return nil }
+        await absorbCookies(r, cookie: cookie)
+        return Self.parseQuota(json)
+    }
+
+    // MARK: 管理辅助
+
+    /// file/sort 查询串（夸克另带 uc_param_str / fetch_all_file / fetch_risk_file_name）
+    static func driveListQuery(_ config: QuarkFamilyConfig, parent: String, page: Int) -> String {
+        if config.platform == .quark {
+            return "&uc_param_str=&pdir_fid=\(parent.urlQueryEncoded)&_page=\(page)&_size=100&_fetch_total=1" +
+                "&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc&fetch_all_file=1&fetch_risk_file_name=1"
+        }
+        return "&pdir_fid=\(parent.urlQueryEncoded)&_page=\(page)&_size=100&_fetch_total=1" +
+            "&_fetch_sub_dirs=0&_sort=file_type%3Aasc%2Cupdated_at%3Adesc"
+    }
+
+    static func parseDriveItems(_ data: JSON, parent: String) -> [ShareFile] {
+        data["list"].array.map { item -> ShareFile in
+            let isDir = item["dir"].bool || item["isdir"].int == 1
+            return ShareFile(fid: item["fid"].string, name: item.string("file_name", "fname"), size: isDir ? 0 : item["size"].int64,
+                             isDirectory: isDir, parentId: item["pdir_fid"].string.nilIfBlank ?? parent,
+                             modified: item["updated_at"].string)
+        }
+    }
+
+    /// /1/clouddrive/share 请求体；url_type 1=无提取码，expired_type 1永久/2一天/3七天/4三十天
+    static func shareCreateBody(_ platform: SharePlatform, fids: [String], title: String, expiredType: Int) -> [String: Any] {
+        var body: [String: Any] = ["fid_list": fids, "title": title.nilIfBlank ?? "分享文件", "url_type": 1, "expired_type": expiredType]
+        if platform == .uc {
+            body["public_search"] = 1
+        } else {
+            body["support_error_code"] = ["41060"]
+        }
+        return body
+    }
+
+    static func shareTitle(_ files: [ShareFile]) -> String {
+        files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
+    }
+
+    /// /1/clouddrive/member：data.use_capacity / total_capacity
+    static func parseQuota(_ json: JSON) -> DriveQuota? {
+        let data = json["data"]
+        guard data.isObject, data.has("total_capacity") else { return nil }
+        return DriveQuota(used: data["use_capacity"].int64, total: data["total_capacity"].int64)
+    }
+
+    private func driveHeaders(_ cookie: String) -> [(String, String)] {
+        [("Cookie", cookie), ("User-Agent", config.driveUA), ("Origin", config.webOrigin), ("Referer", config.referer)]
+    }
+
+    /// 个人盘取链：download 接口只带 fids（夸克同转存兜底那一路；UC 为 entry=ft 高速通道）
+    private func personalLink(_ file: ShareFile, cookie: String) async throws -> DownloadLink {
+        let r = try await client.send(.postJSON(config.downloadURL, ["fids": [file.fid]], headers: apiHeaders(cookie)))
+        await absorbCookies(r, cookie: cookie)
+        let current = await freshCookieNoRefresh() ?? cookie
+        return try parseLink(r, file: file, headers: loginDownloadHeaders(current)) { _, m in m }
+    }
+
+    /// UC 个人云盘下载通道（非 entry=ft）
+    private func ucCloudLink(_ file: ShareFile, cookie: String) async throws -> DownloadLink {
+        let r = try await client.send(.postJSON(url("/1/clouddrive/file/download", "&sys=win32&ve=1.6.1"), ["fids": [file.fid]], headers: [
+            ("Cookie", cookie), ("User-Agent", config.driveUA), ("Origin", config.webOrigin), ("Referer", config.referer),
+            ("Content-Type", "application/json;charset=UTF-8")
+        ]))
+        await absorbCookies(r, cookie: cookie)
+        let current = await freshCookieNoRefresh() ?? cookie
+        return try parseLink(r, file: file, headers: loginDownloadHeaders(current)) { _, m in m }
+    }
+
+    /// UC 视频：建 1 天无提取码分享 → share/password 取 pwd_id → 分享解析 → video_preview 原画直链
+    private func ucVideoLinkViaShare(_ file: ShareFile, cookie: String) async throws -> DownloadLink? {
+        let shareId = try await createShareId([file], expiredType: 2, cookie: cookie)
+        // share_id 是内部 id，分享解析要用对外的 pwd_id
+        let info = try? await shareInfo(shareId, cookie: cookie)
+        let pwdId = info?["pwd_id"].string.nilIfBlank ?? shareId
+        let session = try await openSession(ParsedShare(shareId: pwdId, pwd: nil, platform: config.platform, url: ""), pwd: nil)
+        let items = try await list(session, dirId: "0")
+        guard let target = items.first(where: { $0.fid == file.fid }) ?? items.first(where: { !$0.isDirectory }) else { return nil }
+        guard let link = try await ucVideoPreview(session, file: target, cookie: cookie) else { return nil }
+        return DownloadLink(fileName: file.name, url: link.url, size: link.size, headers: link.headers)
+    }
+
+    /// 创建分享是异步任务：拿 task_id 轮询到 share_id
+    private func createShareId(_ files: [ShareFile], expiredType: Int, cookie: String) async throws -> String {
+        let body = Self.shareCreateBody(config.platform, fids: files.map(\.fid), title: Self.shareTitle(files), expiredType: expiredType)
+        let data = try await callData(.postJSON(url("/1/clouddrive/share", config.manageExtra), body, headers: apiHeaders(cookie)), cookie: cookie)
+        let taskId = data["task_id"].string
+        guard !taskId.isEmpty else { throw CloudnError("创建分享失败") }
+        guard let task = try await waitTask(taskId, cookie: cookie, attempts: 15) else { throw CloudnError("创建分享超时，请稍后重试") }
+        let shareId = task["share_id"].string
+        guard !shareId.isEmpty else { throw CloudnError("创建分享失败：未返回分享 id") }
+        return shareId
+    }
+
+    /// share/password：share_id → share_url / passcode / pwd_id
+    private func shareInfo(_ shareId: String, cookie: String) async throws -> JSON {
+        try await callData(.postJSON(url("/1/clouddrive/share/password", config.manageExtra), ["share_id": shareId],
+                                     headers: apiHeaders(cookie)), cookie: cookie)
+    }
+
+    /// 轮询 /1/clouddrive/task 直到完成，返回任务 data；超时返回 nil；task_id 为空直接返回 nil
+    private func waitTask(_ taskId: String, cookie: String, attempts: Int) async throws -> JSON? {
+        guard !taskId.isEmpty else { return nil }
+        for _ in 0..<attempts {
+            if let r = try? await client.send(.get(url("/1/clouddrive/task", "&task_id=\(taskId.urlQueryEncoded)&retry_index=0"), headers: apiHeaders(cookie))),
+               let json = r.json, json["status"].int == 200 {
+                let data = json["data"]
+                if data["finished_at"].int64 > 0 || data["status"].int == 2 { return data }
+            }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return nil
     }
 }
