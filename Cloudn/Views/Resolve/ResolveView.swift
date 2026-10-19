@@ -3,49 +3,55 @@ import CloudnKit
 import SwiftUI
 import UIKit
 
+/// 解析页：输入框在顶部（像浏览器地址栏），下面是剪贴板、收藏与最近记录
 struct ResolveView: View {
     @Environment(AppModel.self) private var app
     @State private var input = ""
     @State private var pwd = ""
-    @State private var parsingVideo = false
+    @State private var editingPwd = false
+    @State private var working = false
+    @State private var workTask: Task<Void, Never>?
     @State private var shareModel: ShareBrowserModel?
     @State private var videoResult: VideoParseResult?
-    @State private var clipboardHasURL = false
+    @State private var githubLink: GitHubLink?
     @State private var showBookmarks = false
+    /// 剪贴板里有链接、且这一条还没处理过
+    @State private var clipboardOffer = false
+    /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次
+    @AppStorage("clipboardHandledChange") private var handledChange = -1
     @FocusState private var focused: Bool
 
+    private var trimmed: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var detected: DetectedInput? { DetectedInput.detect(input) }
-    @State private var githubLink: GitHubLink?
     /// 识别不出链接、但像迅雷中文口令
     private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
+    private var canSubmit: Bool { detected != nil || isKouling }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    inputCard
-                    if !app.bookmarks.bookmarks.isEmpty { shortcutSection }
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(spacing: 10) {
+                        composer
+                        if clipboardOffer && trimmed.isEmpty && app.settings.clipboardHint {
+                            clipboardCard.transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    if !app.bookmarks.bookmarks.isEmpty { bookmarkSection }
                     if !app.bookmarks.history.isEmpty { historySection }
-                    platformFooter
+                    supportFooter
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
                 .padding(.bottom, 32)
+                .animation(.spring(response: 0.35, dampingFraction: 0.86), value: clipboardOffer)
+                .animation(.spring(response: 0.35, dampingFraction: 0.86), value: detectionKey)
             }
             .scrollDismissesKeyboard(.interactively)
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("Cloudn")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showBookmarks = true } label: { Image(systemName: "star") }
-                        .accessibilityLabel("收藏")
-                }
-            }
-            .navigationDestination(item: $shareModel) { model in
-                ShareBrowserView(model: model)
-            }
-            .navigationDestination(item: $videoResult) { result in
-                VideoResultView(result: result)
-            }
+            .background(Color.paper)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(item: $shareModel) { ShareBrowserView(model: $0) }
+            .navigationDestination(item: $videoResult) { VideoResultView(result: $0) }
             .navigationDestination(item: $githubLink) { link in
                 switch link {
                 case .account(let owner): GitHubAccountView(owner: owner)
@@ -56,11 +62,11 @@ struct ResolveView: View {
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
                     showBookmarks = false
-                    input = bookmark.text
-                    resolve()
+                    open(text: bookmark.text)
                 }
             }
         }
+        .sensoryFeedback(.selection, trigger: detectionKey) { _, new in !new.isEmpty }
         .onAppear(perform: consumePending)
         .onChange(of: app.pendingInput) { _, _ in consumePending() }
         .task { await checkClipboard() }
@@ -69,181 +75,325 @@ struct ResolveView: View {
         }
     }
 
-    // MARK: 输入区
-
-    private var inputCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ZStack(alignment: .topLeading) {
-                if input.isEmpty {
-                    Text("粘贴网盘分享链接、短视频链接或下载直链")
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 8)
-                        .padding(.leading, 5)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $input)
-                    .focused($focused)
-                    .frame(minHeight: 88, maxHeight: 160)
-                    .scrollContentBackground(.hidden)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            }
-
-            HStack(spacing: 10) {
-                PasteButton(payloadType: String.self) { strings in
-                    guard let text = strings.first else { return }
-                    Task { @MainActor in
-                        input = text
-                        pwd = ""
-                        clipboardHasURL = false
-                    }
-                }
-                .labelStyle(.titleAndIcon)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                if !input.isEmpty {
-                    Button {
-                        input = ""
-                        pwd = ""
-                    } label: {
-                        Label("清空", systemImage: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                    .tint(.secondary)
-                }
-                Spacer()
-                if let detected {
-                    DetectionChip(detected: detected)
-                } else if isKouling {
-                    Label("迅雷口令", systemImage: SharePlatform.xunlei.symbol)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.tint.opacity(0.12), in: Capsule())
-                        .foregroundStyle(.tint)
-                }
-            }
-
-            if clipboardHasURL && input.isEmpty && app.settings.clipboardHint {
-                Label("剪贴板里有链接，点「粘贴」即可填入", systemImage: "doc.on.clipboard")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if case .share(let share) = detected {
-                HStack {
-                    Image(systemName: "key")
-                        .foregroundStyle(.secondary)
-                    TextField(share.pwd.map { "提取码（已识别：\($0)）" } ?? "提取码（没有可留空）", text: $pwd)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                .padding(12)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-
-            Button(action: resolve) {
-                HStack {
-                    if parsingVideo { ProgressView().tint(.white) }
-                    Text(parsingVideo ? "正在解析…" : buttonTitle)
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled((detected == nil && !isKouling) || parsingVideo)
+    /// 识别结果变化时触发一次轻触感
+    private var detectionKey: String {
+        switch detected {
+        case .share(let s): return "s." + s.platform.rawValue
+        case .video(let v): return "v." + v.platform.rawValue
+        case .github: return "g"
+        case .direct: return "d"
+        case nil: return isKouling ? "k" : ""
         }
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .padding(.top, 8)
     }
 
-    private var buttonTitle: String {
+    // MARK: 输入框
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                IconView(.link, size: 18)
+                    .foregroundStyle(Color.ink3)
+                    .padding(.top, 3)
+                TextField("粘贴链接、口令或 GitHub 地址", text: $input, axis: .vertical)
+                    .lineLimit(1...5)
+                    .font(.body)
+                    .focused($focused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .onSubmit { if canSubmit { submit() } }
+                    .onChange(of: input) { _, _ in pwd = "" }
+                trailingControl
+            }
+            if !trimmed.isEmpty {
+                detectionRow.transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(focused || canSubmit ? Color.ink3.opacity(0.6) : Color.hairline, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControl: some View {
+        if working {
+            Button { cancelWork() } label: { ProgressRing(value: nil, size: 30) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("正在解析，点按取消")
+        } else if trimmed.isEmpty {
+            Menu {
+                Button { showBookmarks = true } label: { Label { Text("从收藏打开") } icon: { Image(icon: .star) } }
+                Button { focused = true } label: { Label { Text("手动输入") } icon: { Image(icon: .pencil) } }
+            } label: {
+                IconView(.plus, size: 18)
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(Color.ink2)
+            }
+            .accessibilityLabel("更多来源")
+        } else {
+            HStack(spacing: 2) {
+                Button {
+                    input = ""
+                    focused = true
+                } label: {
+                    IconView(.close, size: 14).frame(width: 30, height: 34).foregroundStyle(Color.ink3)
+                }
+                .accessibilityLabel("清空")
+                Button(action: submit) { IconView(.arrowUp, size: 17) }
+                    .buttonStyle(CircleIconButtonStyle(size: 34, filled: canSubmit))
+                    .disabled(!canSubmit)
+                    .opacity(canSubmit ? 1 : 0.4)
+                    .accessibilityLabel(submitLabel)
+            }
+        }
+    }
+
+    private var submitLabel: String {
         if case .direct = detected { return "添加到下载" }
         if case .github(.file) = detected { return "添加到下载" }
         return "开始解析"
     }
 
-    // MARK: 收藏与历史
+    /// 识别结果：平台 + 说明；网盘分享可就地改提取码
+    @ViewBuilder
+    private var detectionRow: some View {
+        HStack(spacing: 8) {
+            if let mark = detectedMark {
+                PlatformGlyph(mark: mark, size: 15).foregroundStyle(Color.ink2)
+            } else {
+                IconView(canSubmit ? .download : .warning, size: 15).foregroundStyle(Color.ink3)
+            }
+            Text(detectionText).font(.footnote).foregroundStyle(Color.ink2).lineLimit(1)
+            Spacer(minLength: 0)
+            if case .share(let share) = detected {
+                pwdToken(recognized: share.pwd)
+            }
+        }
+        .padding(.trailing, 8)
+    }
 
-    private var shortcutSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "收藏", action: "全部") { showBookmarks = true }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(app.bookmarks.bookmarks.prefix(12)) { b in
-                        Button {
-                            input = b.text
-                            resolve()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Image(systemName: "star.fill")
-                                    .foregroundStyle(.yellow)
-                                Text(b.title)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .foregroundStyle(.primary)
-                                Text(b.source)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(width: 130, height: 92, alignment: .topLeading)
-                            .padding(12)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
+    private func pwdToken(recognized: String?) -> some View {
+        let value = pwd.isEmpty ? (recognized ?? "") : pwd
+        return Group {
+            if editingPwd {
+                TextField("提取码", text: $pwd)
+                    .font(.mono)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .frame(width: 90)
+                    .onSubmit { editingPwd = false }
+            } else {
+                Button { pwd = value; editingPwd = true } label: {
+                    Text(value.isEmpty ? "加提取码" : value)
+                        .font(value.isEmpty ? .caption : .mono)
+                        .foregroundStyle(value.isEmpty ? Color.ink2 : Color.clayInk)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(value.isEmpty ? "添加提取码" : "提取码 \(value)，点按修改")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(value.isEmpty && !editingPwd ? Color.fillMuted : Color.claySoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private var detectedMark: PlatformMark? {
+        switch detected {
+        case .share(let s): return .share(s.platform)
+        case .video(let v): return .video(v.platform)
+        case .github: return .github
+        case .direct, nil: return isKouling ? .share(.xunlei) : nil
+        }
+    }
+
+    private var detectionText: String {
+        switch detected {
+        case .share(let s): return s.platform.displayName
+        case .video(let v): return v.platform.displayName + (input.count > v.url.count + 8 ? " · 已从文案里取出链接" : "")
+        case .github(.file): return "GitHub 文件 · 直接下载"
+        case .github(.account(let owner)): return "GitHub · \(owner) 的仓库"
+        case .github: return "GitHub 仓库"
+        case .direct: return "下载直链"
+        case nil: return isKouling ? "迅雷口令" : "没有识别到链接"
+        }
+    }
+
+    // MARK: 剪贴板
+
+    private var clipboardCard: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color.fillMuted)
+                .frame(width: 38, height: 38)
+                .overlay { IconView(.paste, size: 20).foregroundStyle(Color.ink) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("剪贴板里有一个链接").font(.subheadline)
+                Text("粘贴后自动识别并打开").font(.caption).foregroundStyle(Color.ink2)
+            }
+            Spacer(minLength: 0)
+            // 系统粘贴控件：读取剪贴板不弹授权提示
+            PasteButton(payloadType: String.self) { strings in
+                guard let text = strings.first else { return }
+                Task { @MainActor in
+                    markClipboardHandled()
+                    open(text: text)
                 }
             }
+            .labelStyle(.titleOnly)
+            .buttonBorderShape(.capsule)
+            .tint(Color.ink)
+            .controlSize(.small)
+            Button { markClipboardHandled() } label: {
+                IconView(.close, size: 12).frame(width: 24, height: 24).foregroundStyle(Color.ink3)
+            }
+            .accessibilityLabel("忽略")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .card()
+    }
+
+    private func markClipboardHandled() {
+        handledChange = UIPasteboard.general.changeCount
+        clipboardOffer = false
+    }
+
+    private func checkClipboard() async {
+        // 只探测「有没有链接」，不读取内容，不会触发系统的粘贴提示；处理过的同一份内容不再提示
+        let board = UIPasteboard.general
+        guard app.settings.clipboardHint, board.hasStrings, board.changeCount != handledChange else {
+            clipboardOffer = false
+            return
+        }
+        let pattern = UIPasteboard.DetectionPattern.probableWebURL
+        clipboardOffer = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            board.detectPatterns(for: [pattern]) { result in
+                cont.resume(returning: (try? result.get())?.contains(pattern) ?? false)
+            }
+        }
+    }
+
+    // MARK: 收藏与最近
+
+    private var bookmarkSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel(title: "收藏")
+                Button("全部") { showBookmarks = true }.font(.subheadline)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(app.bookmarks.bookmarks.prefix(12)) { b in
+                        Button { open(text: b.text) } label: {
+                            VStack(alignment: .leading, spacing: 14) {
+                                markView(for: b.text, size: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(b.title).font(.subheadline.weight(.medium)).lineLimit(1).foregroundStyle(Color.ink)
+                                    Text(b.source).font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
+                                }
+                            }
+                            .frame(width: 124, alignment: .leading)
+                            .padding(12)
+                            .card()
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: {
+                                Label { Text("取消收藏") } icon: { Image(icon: .trash) }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .padding(.horizontal, -16)
         }
     }
 
     private var historySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "最近解析", action: "清除") { app.bookmarks.clearHistory() }
-            VStack(spacing: 0) {
-                ForEach(Array(app.bookmarks.history.prefix(8).enumerated()), id: \.element.id) { index, h in
-                    Button {
-                        input = h.text
-                        resolve()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(h.title).lineLimit(1).foregroundStyle(.primary)
-                                Text(h.source).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(title: "最近")
+                Menu {
+                    Button(role: .destructive) { withAnimation { app.bookmarks.clearHistory() } } label: {
+                        Label { Text("清空最近记录") } icon: { Image(icon: .trash) }
                     }
-                    .buttonStyle(.plain)
-                    if index < min(8, app.bookmarks.history.count) - 1 { Divider().padding(.leading, 44) }
+                } label: {
+                    Text("编辑").font(.subheadline)
                 }
             }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            VStack(spacing: 0) {
+                let items = Array(app.bookmarks.history.prefix(10))
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, h in
+                    HistoryRow(item: h, progress: downloadProgress(for: h.text)) { open(text: h.text) }
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = h.text } label: { Label { Text("复制链接") } icon: { Image(icon: .link) } }
+                            Button { app.bookmarks.add(title: h.title, text: h.text, source: h.source) } label: {
+                                Label { Text("收藏") } icon: { Image(icon: .star) }
+                            }
+                            Button(role: .destructive) { withAnimation { app.bookmarks.removeHistory(h.id) } } label: {
+                                Label { Text("删除这条记录") } icon: { Image(icon: .trash) }
+                            }
+                        }
+                    if index < items.count - 1 { RowDivider() }
+                }
+            }
+            .card()
         }
     }
 
-    private var platformFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("支持的平台")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text("网盘：" + SharePlatform.allCases.filter(\.isResolvable).map(\.displayName).joined(separator: "、"))
-            Text("视频 / 图集：" + VideoPlatform.allCases.map(\.displayName).joined(separator: "、"))
-            Text("以及任意 http(s) 下载直链与 m3u8")
+    @ViewBuilder
+    private func markView(for text: String, size: CGFloat) -> some View {
+        if let mark = Self.mark(for: text) {
+            PlatformGlyph(mark: mark, size: size).foregroundStyle(mark.isVideo ? Color.clayInk : Color.ink)
+        } else {
+            IconView(.link, size: size).foregroundStyle(Color.ink)
         }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+    }
+
+    static func mark(for text: String) -> PlatformMark? {
+        switch DetectedInput.detect(text) {
+        case .share(let s): return .share(s.platform)
+        case .video(let v): return .video(v.platform)
+        case .github: return .github
+        default: return nil
+        }
+    }
+
+    /// 某条记录对应分享的下载情况：(已完成, 总数)
+    private func downloadProgress(for text: String) -> (done: Int, total: Int)? {
+        guard let share = ShareLinkParser.parse(text) else { return nil }
+        let related = app.downloads.items.filter {
+            guard let origin = $0.request.origin else { return false }
+            return origin.platform == share.platform && ShareLinkParser.parse(origin.shareURL)?.shareId == share.shareId
+        }
+        guard !related.isEmpty else { return nil }
+        return (related.filter { $0.status == .completed }.count, related.count)
+    }
+
+    /// 支持的平台：一排图标，不写长段文字
+    private var supportFooter: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ForEach(SharePlatform.allCases) { PlatformGlyph(mark: .share($0), size: 15) }
+            }
+            HStack(spacing: 10) {
+                ForEach(VideoPlatform.allCases) { PlatformGlyph(mark: .video($0), size: 15) }
+                PlatformGlyph(mark: .github, size: 15)
+            }
+            Text("以及任意 http(s) 下载直链与 m3u8").font(.caption)
+        }
+        .foregroundStyle(Color.ink3)
         .padding(.horizontal, 4)
+        .padding(.top, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("支持 \(SharePlatform.allCases.count) 个网盘、\(VideoPlatform.allCases.count) 个视频平台、GitHub 与下载直链")
     }
 
     // MARK: 动作
@@ -251,23 +401,24 @@ struct ResolveView: View {
     private func consumePending() {
         guard let text = app.pendingInput else { return }
         app.pendingInput = nil
+        open(text: text)
+    }
+
+    private func open(text: String) {
         input = text
-        resolve()
+        pwd = ""
+        submit()
     }
 
-    private func checkClipboard() async {
-        // 只探测「有没有链接」，不读取内容，不会触发系统的粘贴提示
-        guard app.settings.clipboardHint, UIPasteboard.general.hasStrings else { clipboardHasURL = false; return }
-        let pattern = UIPasteboard.DetectionPattern.probableWebURL
-        clipboardHasURL = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            UIPasteboard.general.detectPatterns(for: [pattern]) { result in
-                cont.resume(returning: (try? result.get())?.contains(pattern) ?? false)
-            }
-        }
+    private func cancelWork() {
+        workTask?.cancel()
+        workTask = nil
+        working = false
     }
 
-    private func resolve() {
+    private func submit() {
         focused = false
+        editingPwd = false
         guard let detected else {
             if isKouling { resolveKouling() }
             return
@@ -275,39 +426,30 @@ struct ResolveView: View {
         switch detected {
         case .share(let share):
             guard share.platform.isResolvable else {
-                app.show("暂不支持解析\(share.platform.displayName)，敬请期待", error: true)
+                app.show("暂不支持解析\(share.platform.displayName)", error: true)
                 return
             }
             let effectivePwd = pwd.isEmpty ? share.pwd : pwd
             // 收藏/历史里保存的文本要带上手填的提取码，下次点开能直接解析
-            var source = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            var source = trimmed
             if let p = effectivePwd, !p.isEmpty, ShareLinkParser.parse(source)?.pwd != p { source += " 提取码：\(p)" }
-            let model = ShareBrowserModel(app: app, share: share, pwd: effectivePwd, sourceText: source)
-            shareModel = model
+            shareModel = ShareBrowserModel(app: app, share: share, pwd: effectivePwd, sourceText: source)
         case .video(let link):
-            parsingVideo = true
             let text = input
-            Task {
-                defer { parsingVideo = false }
-                do {
-                    let result = try await app.videoService.parse(link)
-                    guard !result.medias.isEmpty else {
-                        app.show("没有解析到可下载的媒体", error: true)
-                        return
-                    }
-                    app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
-                                         text: text, source: result.platform.displayName)
-                    videoResult = result
-                } catch {
-                    app.show(error.localizedDescription, error: true)
-                }
+            run {
+                let result = try await app.videoService.parse(link)
+                try Task.checkCancellation()
+                guard !result.medias.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
+                app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
+                                     text: text, source: result.platform.displayName)
+                videoResult = result
             }
         case .github(let link):
             if case .file(let url, let name) = link {
                 app.downloadGitHubFile(url: url, name: name)
                 input = ""
             } else {
-                app.bookmarks.record(title: input.trimmingCharacters(in: .whitespacesAndNewlines), text: input, source: "GitHub")
+                app.bookmarks.record(title: trimmed, text: input, source: "GitHub")
                 githubLink = link
             }
         case .direct(let url):
@@ -323,76 +465,83 @@ struct ResolveView: View {
             input = ""
         }
     }
-}
 
-extension ResolveView {
+    /// 后台执行一次解析；发送键变成可取消的进度环
+    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
+        workTask?.cancel()
+        working = true
+        workTask = Task { @MainActor in
+            defer { working = false }
+            do {
+                try await operation()
+            } catch is CancellationError {
+            } catch {
+                if !Task.isCancelled { app.show(error.localizedDescription, error: true) }
+            }
+        }
+    }
+
     /// 迅雷中文口令：直接问迅雷换成带提取码的分享链接，再按普通分享打开
     private func resolveKouling() {
         let text = input
-        parsingVideo = true
-        Task {
-            defer { parsingVideo = false }
-            do {
-                open(try await XunleiKouling.resolve(text))
-            } catch {
-                app.show(error.localizedDescription, error: true)
-            }
-        }
-    }
-
-    private func open(_ url: String) {
-        guard let share = ShareLinkParser.parse(url) else {
-            app.show("口令对应的链接无法识别", error: true)
-            return
-        }
-        shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
-    }
-}
-
-private struct DetectionChip: View {
-    let detected: DetectedInput
-
-    var body: some View {
-        let (symbol, text) = describe
-        Label(text, systemImage: symbol)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(.tint)
-            .lineLimit(1)
-    }
-
-    private var describe: (String, String) {
-        switch detected {
-        case .share(let s): return (s.platform.symbol, s.platform.displayName)
-        case .video(let v): return (v.platform.symbol, v.platform.displayName)
-        case .github(.file): return ("arrow.down.circle", "GitHub 文件")
-        case .github: return ("chevron.left.forwardslash.chevron.right", "GitHub")
-        case .direct: return ("arrow.down.circle", "下载直链")
+        run {
+            let url = try await XunleiKouling.resolve(text)
+            try Task.checkCancellation()
+            guard let share = ShareLinkParser.parse(url) else { throw CloudnError("口令对应的链接无法识别") }
+            shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
         }
     }
 }
 
-struct SectionHeader: View {
-    let title: String
-    var action: String?
-    var onAction: (() -> Void)?
-
-    init(title: String, action: String? = nil, onAction: (() -> Void)? = nil) {
-        self.title = title
-        self.action = action
-        self.onAction = onAction
-    }
+/// 最近记录的一行：平台图标、标题、来源、下载情况
+private struct HistoryRow: View {
+    let item: Bookmark
+    let progress: (done: Int, total: Int)?
+    let action: () -> Void
 
     var body: some View {
-        HStack {
-            Text(title).font(.headline)
-            Spacer()
-            if let action, let onAction {
-                Button(action, action: onAction).font(.subheadline)
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if let mark = ResolveView.mark(for: item.text) {
+                    PlatformTile(mark: mark, size: 36)
+                } else {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.fillMuted).frame(width: 36, height: 36)
+                        .overlay { IconView(.link, size: 18).foregroundStyle(Color.ink) }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title).font(.body).lineLimit(1).foregroundStyle(Color.ink)
+                    Text("\(item.source) · \(item.createdAt.formatted(.relative(presentation: .named)))")
+                        .font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                trailing
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 4)
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        if let progress {
+            if progress.done == progress.total {
+                IconView(.check, size: 18).foregroundStyle(Color.success).accessibilityLabel("已下载")
+            } else {
+                HStack(spacing: 5) {
+                    ZStack {
+                        Circle().stroke(Color.hairline, lineWidth: 2)
+                        Circle().trim(from: 0, to: Double(progress.done) / Double(max(1, progress.total)))
+                            .stroke(.tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .frame(width: 15, height: 15)
+                    Text("\(progress.done)/\(progress.total)").font(.monoSmall).foregroundStyle(.tint)
+                }
+            }
+        } else {
+            IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)
+        }
     }
 }

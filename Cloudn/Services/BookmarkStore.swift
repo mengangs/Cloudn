@@ -66,6 +66,11 @@ final class BookmarkStore {
         write(history, to: historyURL)
     }
 
+    func removeHistory(_ id: UUID) {
+        history.removeAll { $0.id == id }
+        write(history, to: historyURL)
+    }
+
     func clearHistory() {
         history = []
         write(history, to: historyURL)
