@@ -66,7 +66,7 @@ public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
                                   fallback: "获取下载地址失败")
         } catch let e as CloudnError where e.code == 207 {
             guard let cred = try? await credential() else {
-                throw CloudnError("分享者未开放免登录下载，请先到「账号」页登录光鸭云盘（会临时转存后下载）", code: 207)
+                throw CloudnError("分享者未开放免登录下载，请先到「我的」页登录光鸭云盘（会临时转存后下载）", code: 207)
             }
             return try await transferAndLink(session, file: file, cred: cred)
         }

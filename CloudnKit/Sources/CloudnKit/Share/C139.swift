@@ -63,7 +63,7 @@ public final class C139Resolver: ShareResolver, @unchecked Sendable {
     public func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink {
         guard let cookie = await credentials.cookie(for: .c139), Self.isValidCookie(cookie),
               let account = Self.account(in: cookie) else {
-            throw CloudnError("139 网盘需要登录后才能下载，请到「账号」页登录 139 网盘")
+            throw CloudnError("139 网盘需要登录后才能下载，请到「我的」页登录 139 网盘")
         }
         let body = OrderedJSON.object([("dlFromOutLinkReqV3", .object([
             ("account", .string(account)), ("linkID", .string(session.shareId)),
@@ -219,7 +219,7 @@ extension C139Resolver: ShareSaver {
     /// 个人网盘接口（明文 JSON）：需要网页版登录给的 authorization
     public func listFolders(_ parentId: String) async throws -> [ShareFile] {
         guard let cookie = await credentials.cookie(for: .c139), let authorization = Self.authorization(in: cookie) else {
-            throw CloudnError("请先到「账号」页用网页登录 139 网盘（需要 authorization）")
+            throw CloudnError("请先到「我的」页用网页登录 139 网盘（需要 authorization）")
         }
         var all: [ShareFile] = []
         var cursor: OrderedJSON = .null

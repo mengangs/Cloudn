@@ -134,12 +134,12 @@ public final class ILanzouResolver: ShareResolver, @unchecked Sendable {
             request = .get(url, headers: Self.headers)
         }
         let r = try await client.send(request)
-        if r.status == 401 || r.status == 403 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        if r.status == 401 || r.status == 403 { throw CloudnError("蓝奏优享登录已过期，请到「我的」页重新登录") }
         guard let json = r.json, json.isObject else {
             throw CloudnError(r.status == 409 ? "蓝奏优享触发了访问验证，请稍后重试" : "蓝奏优享请求失败（HTTP \(r.status)）")
         }
         let code = json["code"].int
-        if code == -1 || code == -2 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        if code == -1 || code == -2 { throw CloudnError("蓝奏优享登录已过期，请到「我的」页重新登录") }
         guard code == 200 else { throw CloudnError(json["msg"].string.nilIfBlank ?? "蓝奏优享请求失败（\(code)）") }
         return json
     }
@@ -285,10 +285,10 @@ extension ILanzouResolver: DriveManager {
             let resolved = URL(string: location, relativeTo: URL(string: base))?.absoluteString ?? location
             return DownloadLink(fileName: file.name, url: resolved, size: file.size > 0 ? file.size : -1, headers: dlHeaders)
         }
-        if r.status == 401 || r.status == 403 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        if r.status == 401 || r.status == 403 { throw CloudnError("蓝奏优享登录已过期，请到「我的」页重新登录") }
         guard let json = r.json, json.isObject else { throw CloudnError("蓝奏优享未返回下载地址") }
         let code = json["code"].int
-        if code == -1 || code == -2 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        if code == -1 || code == -2 { throw CloudnError("蓝奏优享登录已过期，请到「我的」页重新登录") }
         let link = json["url"].string.nilIfBlank ?? json["data"]["url"].string
         guard !link.isEmpty else {
             throw CloudnError(json["msg"].string.nilIfBlank ?? "蓝奏优享未返回下载地址，请检查文件权限")

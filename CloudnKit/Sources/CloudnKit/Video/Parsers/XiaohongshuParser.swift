@@ -85,7 +85,7 @@ struct XiaohongshuParser: VideoParser {
     private func fetchPage(_ url: String, headers: [String: String]) async throws -> String {
         let r = try await VideoHTTP.send(.get(url, headers: headers.sortedPairs))
         if Self.isLoginWall(r.url) {
-            throw VideoParseError(.unsupported, "小红书要求登录后才能查看笔记内容，请先到「账号」页登录小红书")
+            throw VideoParseError(.unsupported, "小红书要求登录后才能查看笔记内容，请先到「我的」页登录小红书")
         }
         try VideoHTTP.requireSuccess(r, "小红书笔记")
         return r.text

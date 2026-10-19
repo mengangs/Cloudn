@@ -329,6 +329,8 @@ struct ProgressRing: View {
     var size: CGFloat = 26
     var lineWidth: CGFloat = 2.4
     var paused = false
+    /// 中间是否画暂停 / 继续符号（只表示「正在处理」时关掉）
+    var glyph = true
 
     @State private var spin = false
 
@@ -341,11 +343,13 @@ struct ProgressRing: View {
                 .rotationEffect(.degrees(-90))
                 .rotationEffect(.degrees(value == nil && spin ? 360 : 0))
                 .animation(.easeOut(duration: 0.4), value: value)
-            Image(icon: paused ? .play : .pause)
-                .resizable()
-                .scaledToFit()
-                .frame(width: size * 0.36, height: size * 0.36)
-                .foregroundStyle(.tint)
+            if glyph {
+                Image(icon: paused ? .play : .pause)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * 0.36, height: size * 0.36)
+                    .foregroundStyle(.tint)
+            }
         }
         .frame(width: size, height: size)
         .onAppear {

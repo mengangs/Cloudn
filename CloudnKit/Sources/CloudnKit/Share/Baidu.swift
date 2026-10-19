@@ -71,7 +71,7 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
     /// 转存到临时目录 → locatedownload 取 appall 明文直链（自带签名，删除转存后仍有效）→ 立即删除转存
     public func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink {
         guard let cookie = await loginCookie() else {
-            throw CloudnError("百度网盘需要登录后才能下载，请到「账号」页登录百度网盘")
+            throw CloudnError("百度网盘需要登录后才能下载，请到「我的」页登录百度网盘")
         }
         let info = try await shareInfo(session, cookie: cookie)
         let bdstoken = try await self.bdstoken(cookie)
@@ -168,7 +168,7 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
     private func bdstoken(_ cookie: String) async throws -> String {
         if let cached = await state.bdstoken[cookie] { return cached }
         guard let token = await templateVariable(cookie, fields: #"["bdstoken"]"#)?["bdstoken"].string, !token.isEmpty else {
-            throw CloudnError("百度网盘登录已失效，请到「账号」页重新登录")
+            throw CloudnError("百度网盘登录已失效，请到「我的」页重新登录")
         }
         await state.setToken(cookie, token)
         return token

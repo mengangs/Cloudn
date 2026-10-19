@@ -230,11 +230,11 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     /// 读取登录凭据；access_token 即将过期（< 60s）时先用 refresh_token 续期并回写账号
     private func loginIdentity() async throws -> Identity {
         guard let raw = await credentials.cookie(for: .xunlei), var cred = XunleiCredential.parse(raw) else {
-            throw CloudnError("迅雷网盘需要登录后才能下载，请到「账号」页登录迅雷网盘")
+            throw CloudnError("迅雷网盘需要登录后才能下载，请到「我的」页登录迅雷网盘")
         }
         let exp = XunleiCredential.jwtClaim(cred.accessToken, "exp").int64
         if cred.accessToken.isEmpty || (exp > 0 && exp - Int64(Date().timeIntervalSince1970) < 60) {
-            guard let renewed = await refresh(cred) else { throw CloudnError("迅雷登录已过期，请到「账号」页重新登录") }
+            guard let renewed = await refresh(cred) else { throw CloudnError("迅雷登录已过期，请到「我的」页重新登录") }
             cred = renewed
             await credentials.updateCookie(cred.serialized, replacing: raw, for: .xunlei)
         }
@@ -364,7 +364,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
                 continue
             }
             if r.status == 401 || err == "unauthenticated" {
-                throw CloudnError(anonymous ? "迅雷拒绝了匿名访问，请稍后重试" : "迅雷登录已失效，请到「账号」页重新登录")
+                throw CloudnError(anonymous ? "迅雷拒绝了匿名访问，请稍后重试" : "迅雷登录已失效，请到「我的」页重新登录")
             }
             let msg = json.string("error_description", "message").nilIfBlank ?? err.nilIfBlank ?? "迅雷请求失败（HTTP \(r.status)）"
             throw CloudnError(msg)

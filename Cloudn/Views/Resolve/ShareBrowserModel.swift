@@ -51,7 +51,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
         case .pan115: return "未登录 115：可直接下载小文件，大文件需要先登录"
         default:
             guard resolver?.supportsGuestDownload == false else { return nil }
-            return "未登录\(kind.displayName)：可以浏览分享内容，下载前请先到「账号」页登录"
+            return "未登录\(kind.displayName)：可以浏览分享内容，下载前请先到「我的」页登录"
         }
     }
 
@@ -202,6 +202,19 @@ final class ShareBrowserModel: Hashable, Identifiable {
             app.show("没有可下载的文件", error: true)
             return
         }
+        // 已下完或正在下载的文件跳过，重复点「下载全部」不会重复入队
+        let existing = Set(app.downloads.items.compactMap { item -> String? in
+            guard item.status != .failed, let origin = item.request.origin,
+                  origin.platform == share.platform, origin.shareURL == share.url else { return nil }
+            return origin.fileId
+        })
+        let total = queue.count
+        queue.removeAll { existing.contains($0.0.fid) }
+        let skipped = total - queue.count
+        guard !queue.isEmpty else {
+            app.show("这些文件都已在下载列表中")
+            return
+        }
         batch = (0, queue.count)
         // 多个文件归成一组：只选了一个文件夹时以它命名，否则用分享标题
         let groupTitle = items.count == 1 && items[0].isDirectory ? items[0].name : title
@@ -219,8 +232,9 @@ final class ShareBrowserModel: Hashable, Identifiable {
             batch = (index + 1, queue.count)
         }
         batch = nil
+        let skipNote = skipped > 0 ? " · 跳过 \(skipped) 个已下载" : ""
         if failures == 0 {
-            app.show("已添加 \(queue.count) 个下载任务")
+            app.show("已添加 \(queue.count) 个\(skipNote)")
         } else {
             app.show("\(queue.count - failures) 个已添加，\(failures) 个失败：\(lastError)", error: true)
         }

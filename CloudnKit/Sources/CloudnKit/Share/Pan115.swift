@@ -93,7 +93,7 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
             // 网页端对大文件拒发直链；已登录则走「转存 + 电脑端接口」
             guard let cookie else {
                 if let e = error as? CloudnError, e.code == 50029 || e.code == 50028 {
-                    throw CloudnError("该文件较大，115 只向客户端下发直链：请到「账号」页登录 115 网盘后重试", code: e.code)
+                    throw CloudnError("该文件较大，115 只向客户端下发直链：请到「我的」页登录 115 网盘后重试", code: e.code)
                 }
                 throw error
             }
@@ -344,7 +344,7 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
         let errno = json.has("errno") ? json["errno"].int : json["errNo"].int
         let message: String
         switch errno {
-        case 990001: message = "115 登录已过期，请到「账号」页重新登录"
+        case 990001: message = "115 登录已过期，请到「我的」页重新登录"
         case 4100012: message = "该分享需要访问码，请填写后重试"
         case 4100008: message = "访问码错误，请检查后重试"
         case 4100026: message = "分享链接不存在或已被删除"

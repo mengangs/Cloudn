@@ -213,7 +213,7 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
         let current = await freshCookieNoRefresh() ?? cookie
         return try parseLink(r, file: file, headers: loginDownloadHeaders(current)) { code, message in
             switch code {
-            case 31001: return "\(self.config.platform.displayName)登录态已失效，请到「账号」页重新登录"
+            case 31001: return "\(self.config.platform.displayName)登录态已失效，请到「我的」页重新登录"
             default: return message
             }
         }

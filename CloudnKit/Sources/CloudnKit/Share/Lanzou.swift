@@ -523,7 +523,7 @@ extension LanzouResolver: DriveManager {
         guard let cookie = await credentials.cookie(for: .lanzou)?.nilIfBlank else { throw SharePlatform.lanzou.loginRequired }
         if let cached = await login.get(cookie) { return (cookie, cached.uid, cached.vei) }
         guard let params = await LanzouAccount.loginParams(cookie: cookie, client: client) else {
-            throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录")
+            throw CloudnError("蓝奏登录已过期，请到「我的」页重新登录")
         }
         await login.set(cookie, uid: params.uid, vei: params.vei)
         return (cookie, params.uid, params.vei)
@@ -538,7 +538,7 @@ extension LanzouResolver: DriveManager {
         let r = try await client.send(.postForm(url, fields, headers: headers))
         if r.status == 401 || r.status == 403 {
             await login.clear()
-            throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录")
+            throw CloudnError("蓝奏登录已过期，请到「我的」页重新登录")
         }
         guard let json = r.json, json.isObject else { throw CloudnError("蓝奏文件操作失败，请在官网检查权限和文件类型") }
         do {
@@ -566,7 +566,7 @@ extension LanzouResolver: DriveManager {
         if zt == 1 || (zt == 2 && allowEnd) { return }
         switch zt {
         case 4: throw CloudnError("蓝奏请求频繁，请稍后重试", code: 4)
-        case 9: throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录", code: 9)
+        case 9: throw CloudnError("蓝奏登录已过期，请到「我的」页重新登录", code: 9)
         default:
             let info = json["info"].isObject ? "" : json["info"].string
             throw CloudnError(info.isEmpty ? "蓝奏文件操作失败（\(zt)），请在官网检查权限和文件类型" : "蓝奏：\(info)", code: zt)

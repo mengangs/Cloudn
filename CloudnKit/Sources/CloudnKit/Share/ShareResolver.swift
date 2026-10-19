@@ -43,7 +43,7 @@ public protocol ShareSaver: Sendable {
 
 extension SharePlatform {
     /// 未登录时给转存 / 取链的统一提示
-    var loginRequired: CloudnError { CloudnError("请先到「账号」页登录\(displayName)") }
+    var loginRequired: CloudnError { CloudnError("请先到「我的」页登录\(displayName)") }
 }
 
 /// 运行时可调的解析选项（设置页修改后即时生效）

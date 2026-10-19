@@ -63,7 +63,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
 
     public func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink {
         guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else {
-            throw CloudnError("123 云盘需要登录后才能下载，请到「账号」页登录 123 云盘")
+            throw CloudnError("123 云盘需要登录后才能下载，请到「我的」页登录 123 云盘")
         }
         let parts = file.token.components(separatedBy: "|")
         let body: [String: Any] = [
@@ -212,7 +212,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
     static func check(_ json: JSON, fallback: String) throws {
         let code = json.has("code") ? json["code"].int : -1
         guard code != 0 else { return }
-        if code == 401 { throw CloudnError("123 云盘登录已失效，请到「账号」页重新登录", code: code) }
+        if code == 401 { throw CloudnError("123 云盘登录已失效，请到「我的」页重新登录", code: code) }
         let msg = json["message"].string
         throw CloudnError(msg.isEmpty ? "\(fallback)（\(code)）" : msg, code: code)
     }
