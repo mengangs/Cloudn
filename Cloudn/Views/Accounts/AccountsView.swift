@@ -7,6 +7,9 @@ struct AccountsView: View {
     @State private var loginKind: AccountKind?
     @State private var manualKind: AccountKind?
     @State private var logoutKind: AccountKind?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var importData: ImportData?
 
     var body: some View {
         NavigationStack {
@@ -26,12 +29,31 @@ struct AccountsView: View {
                     Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录；Pixiv 未登录只能解析公开作品。")
                 }
                 Section {
+                    Button { exporting = true } label: { Label("导出登录凭据（加密备份）", systemImage: "square.and.arrow.up") }
+                        .disabled(app.accounts.accounts.isEmpty)
+                    Button { importing = true } label: { Label("从备份导入", systemImage: "square.and.arrow.down") }
+                } header: {
+                    Text("备份与恢复")
+                }
+                Section {
                     Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("账号")
+            .sheet(isPresented: $exporting) { AuthExportView() }
+            .sheet(item: $importData) { AuthImportView(data: $0.data) }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
+                guard case .success(let url) = result else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                if let data = try? Data(contentsOf: url) {
+                    importData = ImportData(data: data)
+                } else {
+                    app.show("无法读取所选文件", error: true)
+                }
+            }
             .sheet(item: $loginKind) { kind in
                 WebLoginView(kind: kind)
             }
@@ -143,4 +165,9 @@ struct ManualCookieView: View {
             }
         }
     }
+}
+
+struct ImportData: Identifiable {
+    let id = UUID()
+    let data: Data
 }

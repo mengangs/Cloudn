@@ -77,6 +77,12 @@ final class AccountStore {
         return nickname
     }
 
+    /// 从备份恢复：覆盖同平台的现有账号
+    func restore(_ restored: [AccountKind: Account]) async {
+        for (kind, account) in restored { await vault.save(account, for: kind) }
+        await reload()
+    }
+
     func logout(_ kind: AccountKind) async {
         await vault.remove(kind)
         await reload()
