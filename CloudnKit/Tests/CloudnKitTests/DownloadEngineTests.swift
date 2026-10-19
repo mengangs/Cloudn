@@ -52,6 +52,20 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(data, expected(size))
     }
 
+    /// 多源分片：一条正常链接 + 一条被拒绝的链接，分片应自动换用可用的链接并完整下载
+    func testMultiSourceFallsBackFromRejectedMirror() async throws {
+        let engine = makeEngine()
+        let size = 12 * 1024 * 1024 + 7
+        let mirrors = [DownloadSource(url: "\(server!)/file/\(size)?m=1", headers: [:]),
+                       DownloadSource(url: "\(server!)/forbidden", headers: [:])]
+        let id = await engine.enqueue(DownloadRequest(url: "\(server!)/file/\(size)", fileName: "multi.bin", mirrors: mirrors))
+        let item = try await wait(engine, id, for: .completed)
+        XCTAssertEqual(try Data(contentsOf: engine.fileURL(for: item)!), expected(size))
+        XCTAssertEqual(RangeTransfer.sourceIndex(chunk: 2, attempt: 0, count: 3), 2)
+        XCTAssertEqual(RangeTransfer.sourceIndex(chunk: 2, attempt: 1, count: 3), 0)
+        XCTAssertEqual(RangeTransfer.sourceIndex(chunk: 5, attempt: 0, count: 1), 0)
+    }
+
     func testNoRangeServer() async throws {
         let engine = makeEngine()
         let size = 3 * 1024 * 1024

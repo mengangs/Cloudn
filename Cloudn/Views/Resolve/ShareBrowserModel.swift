@@ -134,8 +134,30 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     func download(_ file: ShareFile, folder: String = "", group: DownloadGroup? = nil, slot: Int = 0) async throws {
         let link = try await link(for: file, slot: slot)
+        let mirrors = await extraSources(for: file, primarySlot: slot, primary: link)
         app.downloads.enqueue(link: link, platform: share.platform, folder: folder,
-                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file), group: group, slot: slot)
+                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file), group: group, slot: slot,
+                              mirrors: mirrors)
+    }
+
+    /// 多源分片：大文件再用其他账号各取一条直链。需要临时转存才能取到的链接不用（下载完成后无法逐个清理），取到了就立即清理
+    private func extraSources(for file: ShareFile, primarySlot: Int, primary: DownloadLink) async -> [DownloadLink] {
+        let rotation = rotationCount
+        guard app.settings.multiSourceDownload, rotation > 1, !file.isDirectory,
+              max(file.size, primary.size) >= 64 * 1024 * 1024, let session, let resolver else { return [] }
+        var result: [DownloadLink] = []
+        for offset in 1..<rotation {
+            let slot = (primarySlot + offset) % rotation
+            guard let extra = try? await AccountSlot.$current.withValue(slot, operation: {
+                try await resolver.downloadLink(session, file: file)
+            }) else { continue }
+            if let token = extra.cleanupToken {
+                await AccountSlot.$current.withValue(slot) { await resolver.cleanup(token: token) }
+                continue
+            }
+            if extra.url != primary.url { result.append(extra) }
+        }
+        return result
     }
 
     /// 多账号下载：开启且该平台登录了多个账号时，批量下载按文件轮换账号

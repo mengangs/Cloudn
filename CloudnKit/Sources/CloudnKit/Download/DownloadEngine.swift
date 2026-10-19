@@ -144,6 +144,8 @@ public actor DownloadEngine {
         leaveBackground(i)
         items[i].request.url = url
         items[i].request.headers = headers
+        // 其他账号的旧直链多半也过期了，换链后只用新链
+        items[i].request.mirrors = nil
         items[i].status = .queued
         items[i].errorMessage = nil
         changed(force: true)
@@ -230,7 +232,8 @@ public actor DownloadEngine {
         case .file:
             let target = dir.appendingPathComponent("data")
             try await RangeTransfer(url: request.url, headers: request.headers, destination: target, progress: box,
-                                    connections: connections, retryCount: config.retryCount, streamer: streamer).run()
+                                    connections: connections, retryCount: config.retryCount, streamer: streamer,
+                                    mirrors: request.mirrors ?? []).run()
             return target
         case .hls:
             return try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),

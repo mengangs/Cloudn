@@ -71,6 +71,16 @@ struct RangeTransfer {
     let connections: Int
     let retryCount: Int
     let streamer: StreamingSession
+    /// 同一文件的其他直链：分片按序号轮流使用各条链接，某条失败时换下一条重试
+    var mirrors: [DownloadSource] = []
+
+    /// 主链在前
+    var sources: [DownloadSource] { [DownloadSource(url: url, headers: headers)] + mirrors }
+
+    /// 第 index 个分片第 attempt 次尝试用哪条链接
+    static func sourceIndex(chunk index: Int, attempt: Int, count: Int) -> Int {
+        count <= 1 ? 0 : (index + attempt) % count
+    }
 
     static let minChunkSize: Int64 = 2 * 1024 * 1024
 
@@ -144,10 +154,12 @@ struct RangeTransfer {
         var attempt = 0
         while true {
             do {
-                try await fetchChunk(index)
+                try await fetchChunk(index, source: Self.sourceIndex(chunk: index, attempt: attempt, count: sources.count))
                 return
             } catch let e as TransferError where e.message.hasPrefix("HTTP 4") {
-                throw e
+                // 多源时某条链接被拒绝，换下一条；每条都试过仍被拒绝才放弃
+                attempt += 1
+                if sources.count <= 1 || attempt >= sources.count { throw e }
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 attempt += 1
@@ -157,12 +169,12 @@ struct RangeTransfer {
         }
     }
 
-    private func fetchChunk(_ index: Int) async throws {
+    private func fetchChunk(_ index: Int, source: Int = 0) async throws {
         let chunk = progress.chunk(index)
         if chunk.isDone { return }
         let single = progress.chunks.count == 1
         var offset = chunk.start + chunk.received
-        var request = makeRequest()
+        var request = makeRequest(source: source)
         if offset > 0 || chunk.end >= 0 {
             request.setValue("bytes=\(offset)-\(chunk.end >= 0 ? String(chunk.end) : "")", forHTTPHeaderField: "Range")
         }
@@ -211,10 +223,13 @@ struct RangeTransfer {
         }
     }
 
-    private func makeRequest() -> URLRequest {
-        var request = URLRequest(url: URL(string: url)!)
+    /// source 为链接序号（0 为主链，探测总长度一律用主链）
+    private func makeRequest(source: Int = 0) -> URLRequest {
+        let all = sources
+        let picked = all[min(max(0, source), all.count - 1)]
+        var request = URLRequest(url: URL(string: picked.url) ?? URL(string: url)!)
         request.httpShouldHandleCookies = false
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        for (k, v) in picked.headers { request.setValue(v, forHTTPHeaderField: k) }
         return request
     }
 

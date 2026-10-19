@@ -62,6 +62,17 @@ public struct DownloadGroup: Codable, Sendable, Hashable {
     }
 }
 
+/// 同一文件的另一条直链（多账号各自取到的链接），多源分片下载时分摊分片
+public struct DownloadSource: Codable, Sendable, Hashable {
+    public var url: String
+    public var headers: [String: String]
+
+    public init(url: String, headers: [String: String]) {
+        self.url = url
+        self.headers = headers
+    }
+}
+
 public struct DownloadRequest: Codable, Sendable, Hashable {
     public var url: String
     public var headers: [String: String]
@@ -76,10 +87,13 @@ public struct DownloadRequest: Codable, Sendable, Hashable {
     public var origin: ShareOrigin?
     /// 所属批次（可选；旧任务表里没有这个字段）
     public var group: DownloadGroup?
+    /// 同一文件的其他直链（多源分片；旧任务表里没有这个字段）
+    public var mirrors: [DownloadSource]?
 
     public init(url: String, headers: [String: String] = [:], fileName: String, folder: String = "", kind: DownloadKind = .file,
                 expectedSize: Int64 = -1, source: String = "", cleanup: CleanupToken? = nil, origin: ShareOrigin? = nil,
-                group: DownloadGroup? = nil) {
+                group: DownloadGroup? = nil, mirrors: [DownloadSource]? = nil) {
+        self.mirrors = mirrors
         self.origin = origin
         self.group = group
         self.url = url

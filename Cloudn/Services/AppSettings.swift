@@ -51,6 +51,10 @@ final class AppSettings {
     var multiAccountDownload: Bool {
         didSet { defaults.set(multiAccountDownload, forKey: "multiAccountDownload") }
     }
+    /// 单文件多源分片：大文件同时用多个账号各自取到的直链分摊分片（依赖多账号下载）
+    var multiSourceDownload: Bool {
+        didSet { defaults.set(multiSourceDownload, forKey: "multiSourceDownload") }
+    }
     /// 允许把夸克 / UC 中文口令发给第三方「星海」服务解析（首次使用时询问）
     var allowCommandService: Bool {
         didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
@@ -121,6 +125,7 @@ final class AppSettings {
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         allowCommandService = defaults.bool(forKey: "allowCommandService")
+        multiSourceDownload = defaults.bool(forKey: "multiSourceDownload")
         accentHex = defaults.string(forKey: "accentHex") ?? ""
         githubMirror = defaults.string(forKey: "githubMirror") ?? ""
         githubToken = Keychain.read("github.token").map { String(decoding: $0, as: UTF8.self) } ?? ""
