@@ -94,7 +94,7 @@ struct AccountsView: View {
         HStack(spacing: 14) {
             Image(systemName: kind.symbol)
                 .font(.title2)
-                .foregroundStyle(account == nil ? Color.secondary : Color.accentColor)
+                .foregroundStyle(account == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
                 .frame(width: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(kind.displayName)

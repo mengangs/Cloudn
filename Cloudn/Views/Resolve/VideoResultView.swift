@@ -147,7 +147,7 @@ struct VideoResultView: View {
                                 if selecting {
                                     Image(systemName: selected.contains(media.id) ? "checkmark.circle.fill" : "circle")
                                         .font(.title3)
-                                        .foregroundStyle(.white, Color.accentColor)
+                                        .foregroundStyle(.white, .tint)
                                         .shadow(radius: 2)
                                         .padding(8)
                                 }

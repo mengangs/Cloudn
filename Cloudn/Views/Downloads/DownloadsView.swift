@@ -269,7 +269,8 @@ struct DownloadRow: View {
         .padding(.vertical, 4)
     }
 
-    private var tint: Color { item.status == .paused ? .orange : .accentColor }
+    /// nil 表示沿用应用主题色
+    private var tint: Color? { item.status == .paused ? .orange : nil }
 
     @ViewBuilder
     private var statusIcon: some View {

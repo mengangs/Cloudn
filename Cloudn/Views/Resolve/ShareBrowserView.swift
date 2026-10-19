@@ -55,7 +55,7 @@ struct ShareBrowserView: View {
                             if model.selecting {
                                 Image(systemName: model.selection.contains(file.fid) ? "checkmark.circle.fill" : "circle")
                                     .font(.title3)
-                                    .foregroundStyle(model.selection.contains(file.fid) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(model.selection.contains(file.fid) ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                             }
                             FileRow(file: file, busy: model.busyFileIds.contains(file.fid))
                         }

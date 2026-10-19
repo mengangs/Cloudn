@@ -64,6 +64,7 @@ struct SettingsView: View {
                         ForEach(Appearance.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    AccentPicker()
                 }
 
                 Section {

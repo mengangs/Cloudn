@@ -126,7 +126,7 @@ struct ResolveView: View {
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .background(.tint.opacity(0.12), in: Capsule())
                         .foregroundStyle(.tint)
                 }
             }
@@ -372,7 +372,7 @@ private struct DetectionChip: View {
             .font(.caption.weight(.medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+            .background(.tint.opacity(0.12), in: Capsule())
             .foregroundStyle(.tint)
             .lineLimit(1)
     }

@@ -3,6 +3,7 @@ import CloudnKit
 import Foundation
 import Observation
 import SwiftUI
+import UIKit
 
 /// 全部偏好设置的唯一入口（UserDefaults），值域在 setter 里兜住
 @MainActor
@@ -53,6 +54,10 @@ final class AppSettings {
     /// 允许把夸克 / UC 中文口令发给第三方「星海」服务解析（首次使用时询问）
     var allowCommandService: Bool {
         didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
+    }
+    /// 主题色（十六进制 RRGGBB，空串为默认蓝）
+    var accentHex: String {
+        didSet { defaults.set(accentHex, forKey: "accentHex") }
     }
     /// 外观：跟随系统 / 浅色 / 深色
     var appearance: Appearance {
@@ -106,6 +111,7 @@ final class AppSettings {
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         allowCommandService = defaults.bool(forKey: "allowCommandService")
+        accentHex = defaults.string(forKey: "accentHex") ?? ""
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")
@@ -145,6 +151,34 @@ extension AppSettings {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         exportFolderBookmark = try? url.bookmarkData()
+    }
+}
+
+extension AppSettings {
+    /// 主题色；nil 表示使用默认强调色
+    var accentColor: Color? { Color(hex: accentHex) }
+
+    /// 预设主题色
+    static let accentPresets: [(name: String, hex: String)] = [
+        ("默认", ""), ("靛青", "5856D6"), ("紫", "AF52DE"), ("粉", "FF2D55"), ("橙", "FF9500"),
+        ("绿", "34C759"), ("薄荷", "00C7BE"), ("青", "30B0C7"), ("棕", "A2845E")
+    ]
+}
+
+extension Color {
+    /// RRGGBB → 颜色；格式不对返回 nil
+    init?(hex: String) {
+        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
+
+    /// 颜色 → RRGGBB（按 sRGB 取分量）
+    var hexString: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
+        func byte(_ c: CGFloat) -> Int { Int((min(1, max(0, c)) * 255).rounded()) }
+        return String(format: "%02X%02X%02X", byte(r), byte(g), byte(b))
     }
 }
 
