@@ -68,6 +68,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         AccentPicker()
+                        PlatformIconStylePicker()
                     }
 
                     Section {
@@ -258,7 +259,9 @@ struct LicenseView: View {
                 依照该许可，Cloudn 的完整源代码同样以 AGPL-3.0 开放。
 
                 平台图标改绘自 Arcticons（https://github.com/Arcticons-Team/Arcticons，CC BY-SA 4.0），\
-                115、光鸭云盘、蓝奏云、蓝奏云优享版、AcFun 图标为本项目按同一规格绘制，同样以 CC BY-SA 4.0 提供；\
+                115、光鸭云盘、蓝奏云、蓝奏云优享版、AcFun 图标为本项目按同一规格绘制，同样以 CC BY-SA 4.0 提供。\
+                实心平台图标中，百度、哔哩哔哩、抖音、快手、微博、小红书、Pixiv、GitHub 取自 Simple Icons（https://simpleicons.org，CC0 1.0），\
+                其余由本项目在上述线性图标基础上绘制（CC BY-SA 4.0）；\
                 各平台名称与标识归其所有者，仅用于标明来源。
 
                 标题字体为思源宋体（Noto Serif SC，SIL Open Font License 1.1）的子集，许可文本随应用一同分发。
@@ -272,5 +275,45 @@ struct LicenseView: View {
         }
         .navigationTitle("开源许可")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// 平台图标风格：线性 / 实心，各带一排预览，点哪排选哪个
+struct PlatformIconStylePicker: View {
+    @Environment(AppModel.self) private var app
+    private let samples: [PlatformMark] = [.share(.quark), .share(.baidu), .share(.xunlei), .share(.pan115), .video(.bilibili), .video(.douyin), .github]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("平台图标")
+            ForEach(PlatformIconStyle.allCases) { style in
+                let on = app.settings.platformIconStyle == style
+                Button {
+                    withAnimation(.snappy) { app.settings.platformIconStyle = style }
+                } label: {
+                    HStack(spacing: 12) {
+                        SelectMark(on: on, size: 20)
+                        Text(style.title).font(.subheadline).foregroundStyle(Color.ink).frame(width: 34, alignment: .leading)
+                        HStack(spacing: 10) {
+                            ForEach(samples, id: \.name) { mark in
+                                Image(mark.asset(style))
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 18, height: 18)
+                                    .foregroundStyle(mark.isVideo ? Color.clayInk : Color.ink)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(style.title)平台图标")
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 4)
+        .sensoryFeedback(.selection, trigger: app.settings.platformIconStyle)
     }
 }

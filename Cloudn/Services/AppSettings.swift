@@ -77,6 +77,10 @@ final class AppSettings {
     var appearance: Appearance {
         didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
     }
+    /// 平台图标：线性（默认）/ 实心。组件直接用 @AppStorage 读同一个键，改了即时生效
+    var platformIconStyle: PlatformIconStyle {
+        didSet { defaults.set(platformIconStyle.rawValue, forKey: PlatformIconStyle.key) }
+    }
     /// 启动时自动检查更新（每天最多一次）
     var autoCheckUpdates: Bool {
         didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") }
@@ -131,6 +135,7 @@ final class AppSettings {
         githubMirror = defaults.string(forKey: "githubMirror") ?? ""
         githubToken = Keychain.read("github.token").map { String(decoding: $0, as: UTF8.self) } ?? ""
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        platformIconStyle = PlatformIconStyle(rawValue: defaults.string(forKey: PlatformIconStyle.key) ?? "") ?? .line
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")
         lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date
@@ -196,6 +201,20 @@ extension Color {
         UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
         func byte(_ c: CGFloat) -> Int { Int((min(1, max(0, c)) * 255).rounded()) }
         return String(format: "%02X%02X%02X", byte(r), byte(g), byte(b))
+    }
+}
+
+enum PlatformIconStyle: String, CaseIterable, Identifiable {
+    case line, solid
+
+    static let key = "platformIconStyle"
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .line: return "线性"
+        case .solid: return "实心"
+        }
     }
 }
 

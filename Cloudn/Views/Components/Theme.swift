@@ -97,16 +97,19 @@ struct IconView: View {
 
 /// 平台图标资源名与类别（网盘暖灰底 / 视频平台陶土浅底）
 struct PlatformMark: Equatable {
-    let asset: String
+    let name: String
     let isVideo: Bool
 
-    static func share(_ p: SharePlatform) -> PlatformMark { PlatformMark(asset: "p.\(p.rawValue)", isVideo: false) }
-    static func video(_ p: VideoPlatform) -> PlatformMark { PlatformMark(asset: "p.\(p.rawValue)", isVideo: true) }
-    static let github = PlatformMark(asset: "p.github", isVideo: false)
+    static func share(_ p: SharePlatform) -> PlatformMark { PlatformMark(name: p.rawValue, isVideo: false) }
+    static func video(_ p: VideoPlatform) -> PlatformMark { PlatformMark(name: p.rawValue, isVideo: true) }
+    static let github = PlatformMark(name: "github", isVideo: false)
 
     static func account(_ kind: AccountKind) -> PlatformMark {
-        PlatformMark(asset: "p.\(kind.rawValue)", isVideo: !kind.isDrive)
+        PlatformMark(name: kind.rawValue, isVideo: !kind.isDrive)
     }
+
+    /// 线性在 Platforms/p.*，实心在 PlatformsSolid/ps.*
+    func asset(_ style: PlatformIconStyle) -> String { (style == .solid ? "ps." : "p.") + name }
 }
 
 /// 平台图标方块
@@ -115,16 +118,18 @@ struct PlatformTile: View {
     var size: CGFloat = 36
     var dimmed = false
     var badge = false
+    @AppStorage(PlatformIconStyle.key) private var style: PlatformIconStyle = .line
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
             .fill(mark.isVideo ? Color.claySoft : Color.fillMuted)
             .frame(width: size, height: size)
             .overlay {
-                Image(mark.asset)
+                // 实心图形视觉上更重，略缩一点与线性对齐
+                Image(mark.asset(style))
                     .resizable()
                     .scaledToFit()
-                    .frame(width: size * 0.58, height: size * 0.58)
+                    .frame(width: size * (style == .solid ? 0.54 : 0.58), height: size * (style == .solid ? 0.54 : 0.58))
                     .foregroundStyle(mark.isVideo ? Color.clayInk : (dimmed ? Color.ink3 : Color.ink))
             }
             .overlay(alignment: .bottomTrailing) {
@@ -145,9 +150,10 @@ struct PlatformTile: View {
 struct PlatformGlyph: View {
     let mark: PlatformMark
     var size: CGFloat = 14
+    @AppStorage(PlatformIconStyle.key) private var style: PlatformIconStyle = .line
 
     var body: some View {
-        Image(mark.asset).resizable().scaledToFit().frame(width: size, height: size).accessibilityHidden(true)
+        Image(mark.asset(style)).resizable().scaledToFit().frame(width: size, height: size).accessibilityHidden(true)
     }
 }
 
