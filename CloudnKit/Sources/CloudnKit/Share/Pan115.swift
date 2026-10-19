@@ -360,7 +360,14 @@ enum Pan115Crypto {
 
     /// key[i] = ((seed[i] + T[size*i]) & 0xff) ^ T[size*(size-1-i)]
     static func deriveKey(_ seed: [UInt8], _ size: Int) -> [UInt8] {
-        (0..<size).map { i in (seed[i % seed.count] &+ keyTable[size * i]) ^ keyTable[size * (size - 1 - i)] }
+        var out = [UInt8](repeating: 0, count: size)
+        for i in 0..<size {
+            let left: UInt8 = keyTable[size * i]
+            let right: UInt8 = keyTable[size * (size - 1 - i)]
+            let sum: UInt8 = seed[i % seed.count] &+ left
+            out[i] = sum ^ right
+        }
+        return out
     }
 
     /// 先处理 len % 4 的前缀，其余部分从 key 开头重新对齐

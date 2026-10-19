@@ -29,7 +29,7 @@ public final class ILanzouResolver: ShareResolver, @unchecked Sendable {
     }
 
     /// `apiBase` / `shareBase` 仅供测试替换为本地服务器
-    public init(client: HTTPClient = .shared, apiBase: String = ILanzouResolver.apiBase, shareBase: String = ILanzouResolver.shareAPIBase) {
+    public init(client: HTTPClient = .shared, apiBase: String = "https://apis.ilanzou.com", shareBase: String = "https://apix.ilanzou.com") {
         self.client = client
         self.base = apiBase
         self.shareBase = shareBase
