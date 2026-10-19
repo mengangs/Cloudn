@@ -274,18 +274,17 @@ struct GitHubSettingsView: View {
                 Text("未填写时每小时只能调用 60 次 GitHub 接口；填写后提升到 5000 次，并能浏览自己的私有仓库。Token 只保存在本机钥匙串，建议只授予只读权限。")
             }
             Section {
-                TextField(GitHubMirror.defaultPrefix, text: $settings.githubMirror)
+                TextField("https://镜像地址/（留空直连）", text: $settings.githubMirror)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                Button("使用默认镜像") { app.settings.githubMirror = GitHubMirror.defaultPrefix }
                 if !app.settings.githubMirror.isEmpty {
                     Button("关闭镜像（直连 GitHub）", role: .destructive) { app.settings.githubMirror = "" }
                 }
             } header: {
                 Text("下载镜像")
             } footer: {
-                Text("填写后，GitHub 文件与 Release 附件会经该前缀下载（形如 前缀 + 原始地址），国内网络下通常更快。留空即直连。镜像由第三方提供，请自行判断是否可信。")
+                Text("默认直连 GitHub。如有自己信任的镜像，可填写其前缀，GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。应用不内置任何第三方镜像。")
             }
         }
         .navigationTitle("GitHub")

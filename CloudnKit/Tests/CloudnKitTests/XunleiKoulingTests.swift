@@ -32,19 +32,3 @@ final class XunleiKoulingTests: XCTestCase {
     }
 }
 
-final class QuarkCommandTests: XCTestCase {
-    func testLooksLikeCommand() {
-        XCTAssertTrue(QuarkCommand.looksLikeCommand("绝对有效 咐置松君杂货铺叩苓"))
-        XCTAssertFalse(QuarkCommand.looksLikeCommand("  "))
-        XCTAssertFalse(QuarkCommand.looksLikeCommand("看这个 https://example.com/a"))
-        XCTAssertFalse(QuarkCommand.looksLikeCommand(String(repeating: "字", count: 121)))
-    }
-
-    func testShareURL() {
-        XCTAssertEqual(QuarkCommand.shareURL(platform: "uc", pwdId: "abc"), "https://drive.uc.cn/s/abc")
-        XCTAssertEqual(QuarkCommand.shareURL(platform: "qk", pwdId: "abc"), "https://pan.quark.cn/s/abc")
-        XCTAssertEqual(ShareLinkParser.parse(QuarkCommand.shareURL(platform: "UC", pwdId: "abc123"))?.platform, .uc)
-        XCTAssertEqual(QuarkCommand.failureMessage(status: 429, server: ""), "口令解析服务繁忙，请稍后再试")
-        XCTAssertEqual(QuarkCommand.failureMessage(status: 500, server: "口令已过期"), "口令已过期")
-    }
-}

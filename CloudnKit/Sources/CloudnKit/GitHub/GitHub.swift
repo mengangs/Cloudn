@@ -173,10 +173,8 @@ public struct GitHubClient: Sendable {
     }
 }
 
-/// GitHub 下载镜像：给 github.com / raw.githubusercontent.com 的下载地址加前缀，改善国内下载速度
+/// GitHub 下载镜像（可选，仅使用用户自己填写的前缀，不内置任何第三方镜像）：给 GitHub 下载地址加前缀
 public enum GitHubMirror {
-    public static let defaultPrefix = "https://cdn.gh-proxy.org/"
-
     /// prefix 为空串时原样返回；只处理 GitHub 自己的下载地址
     public static func apply(_ url: String, prefix: String) -> String {
         let p = prefix.trimmed

@@ -44,11 +44,10 @@ struct SettingsView: View {
                     if settings.multiAccountDownload {
                         Toggle("单文件多源分片（实验性）", isOn: $settings.multiSourceDownload)
                     }
-                    Toggle("夸克 / UC 中文口令解析", isOn: $settings.allowCommandService)
                 } header: {
                     Text("解析")
                 } footer: {
-                    Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速；开启多源分片后，大文件还会同时用各账号的直链分段下载。中文口令：夸克 / UC 口令需发给第三方「\(QuarkCommand.serviceName)」服务换取分享 ID（不含任何账号信息），迅雷口令直接问迅雷。")
+                    Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速；开启多源分片后，大文件还会同时用各账号的直链分段下载。")
                 }
 
                 Section {

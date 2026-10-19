@@ -15,12 +15,9 @@ struct ResolveView: View {
     @FocusState private var focused: Bool
 
     private var detected: DetectedInput? { DetectedInput.detect(input) }
-    @State private var askingCommandConsent = false
     @State private var githubLink: GitHubLink?
     /// 识别不出链接、但像迅雷中文口令
-    private var isXunleiKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
-    /// 识别不出链接、但可能是网盘口令（迅雷口令，或要问第三方的夸克 / UC 口令）
-    private var isKouling: Bool { detected == nil && (isXunleiKouling || QuarkCommand.looksLikeCommand(input)) }
+    private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
 
     var body: some View {
         NavigationStack {
@@ -55,16 +52,6 @@ struct ResolveView: View {
                 case .repository(let owner, let repo, let sub): GitHubRepoView(owner: owner, repo: repo, subPath: sub)
                 case .file: EmptyView()
                 }
-            }
-            .alert("使用第三方服务解析口令？", isPresented: $askingCommandConsent) {
-                Button("取消", role: .cancel) {}
-                Button("仅这一次") { resolveKouling(consented: true) }
-                Button("总是允许") {
-                    app.settings.allowCommandService = true
-                    resolveKouling(consented: true)
-                }
-            } message: {
-                Text("夸克 / UC 中文口令无法在本机还原，需要把口令文字发给第三方「\(QuarkCommand.serviceName)」服务换取分享 ID。不会发送任何账号信息；可在设置中关闭。")
             }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
@@ -130,7 +117,7 @@ struct ResolveView: View {
                 if let detected {
                     DetectionChip(detected: detected)
                 } else if isKouling {
-                    Label(isXunleiKouling ? "迅雷 / 夸克口令" : "夸克 / UC 口令", systemImage: "text.quote")
+                    Label("迅雷口令", systemImage: SharePlatform.xunlei.symbol)
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -339,35 +326,17 @@ struct ResolveView: View {
 }
 
 extension ResolveView {
-    /// 中文口令：迅雷口令先问迅雷；不是迅雷口令（或迅雷没有对应分享）再经第三方服务按夸克 / UC 口令解析。
-    /// 换出分享链接后按普通分享打开。
-    private func resolveKouling(consented: Bool = false) {
+    /// 迅雷中文口令：直接问迅雷换成带提取码的分享链接，再按普通分享打开
+    private func resolveKouling() {
         let text = input
-        let tryXunlei = isXunleiKouling
-        let canAskService = QuarkCommand.looksLikeCommand(text)
         parsingVideo = true
         Task {
             defer { parsingVideo = false }
-            var lastError: Error?
-            if tryXunlei {
-                do {
-                    return open(try await XunleiKouling.resolve(text))
-                } catch {
-                    lastError = error
-                }
+            do {
+                open(try await XunleiKouling.resolve(text))
+            } catch {
+                app.show(error.localizedDescription, error: true)
             }
-            if canAskService {
-                guard app.settings.allowCommandService || consented else {
-                    askingCommandConsent = true
-                    return
-                }
-                do {
-                    return open(try await QuarkCommand.resolve(text))
-                } catch {
-                    lastError = error
-                }
-            }
-            app.show(lastError?.localizedDescription ?? "无法识别该口令", error: true)
         }
     }
 

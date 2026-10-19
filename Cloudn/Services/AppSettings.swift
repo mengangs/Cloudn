@@ -59,10 +59,6 @@ final class AppSettings {
     var multiSourceDownload: Bool {
         didSet { defaults.set(multiSourceDownload, forKey: "multiSourceDownload") }
     }
-    /// 允许把夸克 / UC 中文口令发给第三方「星海」服务解析（首次使用时询问）
-    var allowCommandService: Bool {
-        didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
-    }
     /// GitHub 下载镜像前缀（空串表示直连 GitHub）
     var githubMirror: String {
         didSet { defaults.set(githubMirror, forKey: "githubMirror") }
@@ -130,7 +126,6 @@ final class AppSettings {
         liveActivity = defaults.bool(forKey: "liveActivity")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
-        allowCommandService = defaults.bool(forKey: "allowCommandService")
         multiSourceDownload = defaults.bool(forKey: "multiSourceDownload")
         accentHex = defaults.string(forKey: "accentHex") ?? ""
         githubMirror = defaults.string(forKey: "githubMirror") ?? ""
