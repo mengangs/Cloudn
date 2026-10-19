@@ -187,6 +187,19 @@ extension View {
         self.listRowBackground(Color.surface).listRowSeparatorTint(Color.divider)
     }
 
+    /// 列表里一行就是一张独立卡片（plain 列表用）：背景跟着内容走，左滑时四个圆角都保留
+    func cardRow(inset: CGFloat = 0) -> some View {
+        self
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .listRowInsets(EdgeInsets(top: 4, leading: 16 + inset, bottom: 4, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+
     /// 浮层阴影（菜单、操作栏、Toast）
     func floatingShadow() -> some View {
         self.shadow(color: Color(red: 0.24, green: 0.18, blue: 0.12).opacity(0.10), radius: 12, y: 6)

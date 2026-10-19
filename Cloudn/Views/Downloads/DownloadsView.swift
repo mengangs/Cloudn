@@ -10,6 +10,8 @@ struct DownloadsView: View {
     @State private var deleting: DownloadItem?
     @State private var refreshing = Set<UUID>()
     @State private var samples: [Double] = []
+    /// 展开的分组
+    @State private var expanded = Set<UUID>()
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "全部", active = "进行中", done = "已完成"
@@ -49,7 +51,7 @@ struct DownloadsView: View {
         }
     }
 
-    private func row(_ item: DownloadItem) -> some View {
+    private func row(_ item: DownloadItem, inset: CGFloat = 0) -> some View {
         DownloadRow(item: item, refreshing: refreshing.contains(item.id))
             .contentShape(Rectangle())
             .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
@@ -72,7 +74,7 @@ struct DownloadsView: View {
                 }
             }
             .contextMenu { menu(item) }
-            .paperRow()
+            .cardRow(inset: inset)
     }
 
     @ViewBuilder
@@ -92,10 +94,10 @@ struct DownloadsView: View {
                 if !app.downloads.items.isEmpty {
                     Section {
                         SummaryCard(items: app.downloads.items, samples: samples)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
                             .listRowBackground(Color.clear)
                         filterChips
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 10, trailing: 16))
                             .listRowBackground(Color.clear)
                     }
                     .listRowSeparator(.hidden)
@@ -111,17 +113,33 @@ struct DownloadsView: View {
                         case .single(let item):
                             row(item)
                         case .group(let group, let members):
-                            DisclosureGroup {
-                                ForEach(members) { row($0) }
+                            let open = expanded.contains(group.id)
+                            Button {
+                                withAnimation(.snappy(duration: 0.25)) {
+                                    if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                                }
                             } label: {
-                                GroupHeader(title: group.title, items: members)
+                                HStack(spacing: 8) {
+                                    GroupHeader(title: group.title, items: members)
+                                    Spacer(minLength: 0)
+                                    IconView(.chevronRight, size: 14)
+                                        .foregroundStyle(Color.ink3)
+                                        .rotationEffect(.degrees(open ? 90 : 0))
+                                }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityHint(open ? "收起" : "展开")
                             .contextMenu { groupMenu(members) }
-                            .paperRow()
+                            .cardRow()
+                            if open {
+                                ForEach(members) { row($0, inset: 14) }
+                            }
                         }
                     }
                 }
             }
+            .listStyle(.plain)
             .paperList()
             .navigationTitle("下载")
             .toolbar {

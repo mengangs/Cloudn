@@ -279,6 +279,9 @@ struct GitHubSettingsView: View {
     @Environment(AppModel.self) private var app
     @State private var token = ""
     @State private var checking = false
+    @State private var probing = false
+    /// 测速结果：键为镜像前缀（直连为空串），值为毫秒，nil 表示不可用
+    @State private var latency: [String: Int?] = [:]
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -302,17 +305,24 @@ struct GitHubSettingsView: View {
                     Text("未填写时每小时只能调用 60 次 GitHub 接口；填写后提升到 5000 次，并能浏览自己的私有仓库。Token 只保存在本机钥匙串，建议只授予只读权限。")
                 }
                 Section {
-                    TextField("https://镜像地址/（留空直连）", text: $settings.githubMirror)
+                    mirrorRow(name: "直连 GitHub", prefix: "")
+                    ForEach(GitHubMirrorPresets.all, id: \.prefix) { mirrorRow(name: $0.name, prefix: $0.prefix) }
+                    TextField("自定义前缀，如 https://example.com/", text: $settings.githubMirror)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    if !app.settings.githubMirror.isEmpty {
-                        Button("关闭镜像（直连 GitHub）", role: .destructive) { app.settings.githubMirror = "" }
-                    }
+                        .font(.mono)
                 } header: {
-                    Text("下载镜像")
+                    HStack {
+                        Text("下载镜像")
+                        Spacer()
+                        Button(probing ? "测速中…" : "测速") { Task { await probe() } }
+                            .font(.footnote)
+                            .disabled(probing)
+                            .textCase(nil)
+                    }
                 } footer: {
-                    Text("默认直连 GitHub。如有自己信任的镜像，可填写其前缀，GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。应用不内置任何第三方镜像。")
+                    Text("默认直连。下面几个是常见的公共镜像，只有选中后才会使用；GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。镜像由第三方运营，可能失效或限速，私有仓库的文件不要走镜像。")
                 }
             }
             .listRowBackground(Color.surface)
@@ -321,6 +331,54 @@ struct GitHubSettingsView: View {
         .navigationTitle("GitHub")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { token = app.settings.githubToken }
+    }
+
+    private func mirrorRow(name: String, prefix: String) -> some View {
+        let on = app.settings.githubMirror.trimmingCharacters(in: .whitespaces) == prefix
+        return Button {
+            app.settings.githubMirror = prefix
+        } label: {
+            HStack(spacing: 12) {
+                SelectMark(on: on, size: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).foregroundStyle(Color.ink)
+                    if !prefix.isEmpty {
+                        Text(URL(string: prefix)?.host ?? prefix).font(.monoSmall).foregroundStyle(Color.ink3)
+                    }
+                }
+                Spacer()
+                if let result = latency[prefix] {
+                    Text(result.map { "\($0) ms" } ?? "不可用")
+                        .font(.monoSmall)
+                        .foregroundStyle(result == nil ? Color.clayInk : (result! < 800 ? Color.success : Color.ink2))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 各镜像下载同一个小文件的耗时（毫秒），失败记为 nil
+    private func probe() async {
+        probing = true
+        defer { probing = false }
+        let target = "https://raw.githubusercontent.com/github/gitignore/main/README.md"
+        let prefixes = [""] + GitHubMirrorPresets.all.map(\.prefix)
+        latency = [:]
+        await withTaskGroup(of: (String, Int?).self) { group in
+            for prefix in prefixes {
+                group.addTask {
+                    guard let url = URL(string: GitHubMirror.apply(target, prefix: prefix)) else { return (prefix, nil) }
+                    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 6)
+                    request.setValue("Cloudn-iOS", forHTTPHeaderField: "User-Agent")
+                    let start = Date()
+                    guard let (data, response) = try? await URLSession.shared.data(for: request),
+                          (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return (prefix, nil) }
+                    return (prefix, Int(Date().timeIntervalSince(start) * 1000))
+                }
+            }
+            for await (prefix, ms) in group { latency[prefix] = .some(ms) }
+        }
     }
 
     private func save() {
@@ -341,4 +399,14 @@ struct GitHubSettingsView: View {
             }
         }
     }
+}
+
+/// 可选的公共下载镜像（只在用户选中后使用，默认直连）
+enum GitHubMirrorPresets {
+    static let all: [(name: String, prefix: String)] = [
+        ("ghfast.top", "https://ghfast.top/"),
+        ("gh-proxy.com", "https://gh-proxy.com/"),
+        ("ghproxy.net", "https://ghproxy.net/"),
+        ("gh.llkk.cc", "https://gh.llkk.cc/"),
+    ]
 }
