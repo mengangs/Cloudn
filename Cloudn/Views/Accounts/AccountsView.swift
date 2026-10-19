@@ -23,7 +23,7 @@ struct AccountsView: View {
                 } header: {
                     Text("视频平台")
                 } footer: {
-                    Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录。")
+                    Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录；Pixiv 未登录只能解析公开作品。")
                 }
                 Section {
                     Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
@@ -68,18 +68,22 @@ struct AccountsView: View {
             Spacer()
             if account == nil {
                 Menu {
-                    Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+                    if kind.supportsWebLogin {
+                        Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+                    }
                     Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
                 } label: {
                     Text("登录")
                 } primaryAction: {
-                    loginKind = kind
+                    if kind.supportsWebLogin { loginKind = kind } else { manualKind = kind }
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
             } else {
                 Menu {
-                    Button { loginKind = kind } label: { Label("重新登录", systemImage: "arrow.clockwise") }
+                    Button { if kind.supportsWebLogin { loginKind = kind } else { manualKind = kind } } label: {
+                        Label("重新登录", systemImage: "arrow.clockwise")
+                    }
                     Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.title3)

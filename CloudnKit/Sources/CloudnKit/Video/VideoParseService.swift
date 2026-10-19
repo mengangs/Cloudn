@@ -16,6 +16,7 @@ public final class VideoParseService: Sendable {
         let list: [VideoParser] = [
             DouyinParser(extractor: webExtractor),
             XiaohongshuParser(),
+            PixivParser(),
             KuaishouParser(),
             WeiboParser(),
             AcFunParser(),
@@ -78,6 +79,8 @@ public enum AccountValidator {
             return await BilibiliParser.nickname(cookie: cookie)
         case .xiaohongshu:
             return await XiaohongshuParser.validate(cookie: cookie)
+        case .pixiv:
+            return await PixivParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

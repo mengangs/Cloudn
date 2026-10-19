@@ -2,7 +2,7 @@
 import Foundation
 
 public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable {
-    case douyin, xiaohongshu, kuaishou, weibo, acfun, bilibili
+    case douyin, xiaohongshu, kuaishou, weibo, acfun, bilibili, pixiv
 
     public var id: String { rawValue }
 
@@ -10,6 +10,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         switch self {
         case .douyin: return "抖音"
         case .xiaohongshu: return "小红书"
+        case .pixiv: return "Pixiv"
         case .kuaishou: return "快手"
         case .weibo: return "微博"
         case .acfun: return "AcFun"
@@ -22,6 +23,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         switch self {
         case .bilibili: return .bilibili
         case .xiaohongshu: return .xiaohongshu
+        case .pixiv: return .pixiv
         default: return nil
         }
     }

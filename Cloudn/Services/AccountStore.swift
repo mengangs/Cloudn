@@ -104,6 +104,7 @@ extension AccountKind {
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
+        case .pixiv: return URL(string: "https://accounts.pixiv.net/login")!
         }
     }
 
@@ -121,6 +122,7 @@ extension AccountKind {
         case .bilibili: return VideoHTTP.uaChrome
         // 移动 UA 下没有登录页（/login 返回 404）
         case .xiaohongshu: return VideoHTTP.uaChrome
+        case .pixiv: return VideoHTTP.uaChrome
         }
     }
 
@@ -135,6 +137,7 @@ extension AccountKind {
         case .c139: return .cookies(C139Resolver.cookieDomains)
         case .bilibili: return .cookies(["bilibili.com"])
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
+        case .pixiv: return .cookies(["pixiv.net"])
         }
     }
 
@@ -150,6 +153,7 @@ extension AccountKind {
         case .bilibili: return credential.contains("SESSDATA=")
         // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
         case .xiaohongshu: return credential.contains("web_session=")
+        case .pixiv: return credential.contains("PHPSESSID=")
         }
     }
 
@@ -164,6 +168,7 @@ extension AccountKind {
         case .c139: return "登录后可下载分享文件"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
+        case .pixiv: return "粘贴 Cookie 后可解析 R18 与受限作品"
         }
     }
 
@@ -178,6 +183,7 @@ extension AccountKind {
         case .c139: return "需包含 authorization，或 Os_SSo_Sid 与 RMKEY"
         case .bilibili: return "需包含 SESSDATA"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
+        case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
         }
     }
 
@@ -199,8 +205,12 @@ extension AccountKind {
         case .c139: return "m.circle.fill"
         case .bilibili: return "play.tv.fill"
         case .xiaohongshu: return "book.closed.fill"
+        case .pixiv: return "paintpalette.fill"
         }
     }
+
+    /// Pixiv 登录页背后是 reCAPTCHA Enterprise，在 WebView 里走不完，只支持手动粘贴 Cookie
+    var supportsWebLogin: Bool { self != .pixiv }
 
     /// 登录页加载完成后注入的脚本：桌面布局在手机宽度下会被裁掉表单
     var loginPageScript: String? {

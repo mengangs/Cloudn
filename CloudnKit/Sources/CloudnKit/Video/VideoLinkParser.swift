@@ -37,7 +37,10 @@ public enum VideoLinkParser {
 
         Rule(platform: .bilibili, kind: "short", rx: Rx(#"b23\.tv/[A-Za-z\d]+"#, ignoreCase: true)),
         Rule(platform: .bilibili, kind: "short", rx: Rx(#"bili2233\.cn/[A-Za-z\d]+"#, ignoreCase: true)),
-        Rule(platform: .bilibili, kind: "video", rx: Rx(#"bilibili\.com/video/(BV[0-9a-zA-Z]{10}|av\d+)"#, ignoreCase: true))
+        Rule(platform: .bilibili, kind: "video", rx: Rx(#"bilibili\.com/video/(BV[0-9a-zA-Z]{10}|av\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .pixiv, kind: "artwork", rx: Rx(#"pixiv\.net/(?:[a-z]{2}/)?artworks/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .pixiv, kind: "artwork", rx: Rx(#"pixiv\.net/member_illust\.php\?[^\s]*illust_id=(\d+)"#, ignoreCase: true))
     ]
 
     /// 只在链接上匹配（不看文案：抖音/快手文案里常带一堆数字，整段匹配必然误判）
