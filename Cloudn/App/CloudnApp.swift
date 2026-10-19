@@ -57,47 +57,56 @@ struct NoticeSheet: View {
     let onAccept: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(alignment: .leading, spacing: 28) {
             Image("Logo")
                 .resizable()
-                .frame(width: 88, height: 88)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .padding(.top, 40)
-            Text("欢迎使用 Cloudn")
-                .font(.title2.bold())
-            VStack(alignment: .leading, spacing: 14) {
-                NoticeRow(symbol: "link", text: "粘贴网盘分享链接或短视频链接，浏览内容并直接下载。")
-                NoticeRow(symbol: "lock.shield", text: "登录凭证只保存在本机钥匙串，不会上传到任何服务器。")
-                NoticeRow(symbol: "hand.raised", text: "仅供个人学习与技术交流，请只解析你有权访问的内容，遵守各平台服务条款与当地法律。")
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
+                .padding(.top, 48)
+            Text("使用前请了解")
+                .font(.pageTitle)
+                .foregroundStyle(Color.ink)
+            VStack(alignment: .leading, spacing: 0) {
+                NoticeRow(icon: .link, title: "能做什么", text: "粘贴网盘分享、短视频或 GitHub 链接，浏览内容并直接下载。")
+                RowDivider(leading: 50)
+                NoticeRow(icon: .lock, title: "凭据在哪", text: "登录凭据只保存在本机钥匙串，只发给对应平台，不经过任何第三方服务器。")
+                RowDivider(leading: 50)
+                NoticeRow(icon: .warning, title: "使用边界", text: "仅供个人学习与技术交流。请只解析你有权访问的内容，遵守各平台服务条款与当地法律。")
             }
-            .padding(.horizontal, 28)
+            .card()
             Spacer()
             Button(action: onAccept) {
                 Text("我已了解").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 28)
-            .padding(.bottom, 24)
+            .buttonStyle(PillButtonStyle(kind: .primary))
+            .padding(.bottom, 16)
         }
+        .padding(.horizontal, 24)
+        .background(Color.paper)
         .presentationDetents([.large])
     }
 }
 
 private struct NoticeRow: View {
-    let symbol: String
+    let icon: Icon
+    let title: String
     let text: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .frame(width: 28)
-                .foregroundStyle(.tint)
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            IconView(icon, size: 20)
+                .foregroundStyle(Color.clayInk)
+                .frame(width: 22)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(Color.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .padding(14)
     }
 }
