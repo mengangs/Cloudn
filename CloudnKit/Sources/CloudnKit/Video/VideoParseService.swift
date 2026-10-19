@@ -65,6 +65,7 @@ public enum AccountValidator {
         switch kind {
         case .pan123: return Pan123Resolver.normalizeToken(trimmed)
         case .xunlei: return XunleiCredential.parse(trimmed)?.serialized ?? trimmed
+        case .guangya: return GuangYaCredential.parse(trimmed)?.serialized ?? trimmed
         default: return trimmed
         }
     }
@@ -99,6 +100,18 @@ public enum AccountValidator {
             guard let cred = XunleiCredential.parse(cookie),
                   await XunleiResolver(credentials: NoCredentials()).validate(cred) else { return nil }
             return "迅雷网盘用户"
+        case .guangya:
+            guard let cred = GuangYaCredential.parse(cookie) else { return nil }
+            if let name = await GuangYaLogin.nickname(cred, client: .shared) { return name }
+            // 访问令牌过期但 refresh_token 仍有效：续期成功即视为有效（解析器取链时会再续期并回写）
+            guard let renewed = await GuangYaLogin.refresh(cred, client: .shared) else { return nil }
+            return await GuangYaLogin.nickname(renewed, client: .shared) ?? "光鸭云盘用户"
+        case .ilanzou:
+            guard let cred = ILanzouCredential.parse(cookie) else { return nil }
+            return await ILanzouResolver.accountInfo(appToken: cred.appToken, uuid: cred.uuid, client: .shared)?.nickname
+        case .lanzou:
+            guard let params = await LanzouAccount.loginParams(cookie: cookie) else { return nil }
+            return "蓝奏云用户 \(params.uid)"
         }
     }
 }

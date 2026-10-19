@@ -6,6 +6,7 @@ struct AccountsView: View {
     @Environment(AppModel.self) private var app
     @State private var loginKind: AccountKind?
     @State private var manualKind: AccountKind?
+    @State private var passwordKind: AccountKind?
     @State private var logoutKind: AccountKind?
     @State private var exporting = false
     @State private var importing = false
@@ -19,7 +20,7 @@ struct AccountsView: View {
                 } header: {
                     Text("网盘")
                 } footer: {
-                    Text("蓝奏云、蓝奏云优享版、光鸭云盘无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
+                    Text("蓝奏云、蓝奏云优享版、光鸭云盘的公开分享无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
                 }
                 Section {
                     ForEach(AccountKind.allCases.filter { !$0.isDrive }) { row($0) }
@@ -60,6 +61,9 @@ struct AccountsView: View {
             .sheet(item: $manualKind) { kind in
                 ManualCookieView(kind: kind)
             }
+            .sheet(item: $passwordKind) { kind in
+                PasswordLoginView(kind: kind)
+            }
             .confirmationDialog("退出登录？", isPresented: Binding(get: { logoutKind != nil }, set: { if !$0 { logoutKind = nil } }),
                                 titleVisibility: .visible, presenting: logoutKind) { kind in
                 Button("退出 \(kind.displayName)", role: .destructive) {
@@ -90,22 +94,17 @@ struct AccountsView: View {
             Spacer()
             if account == nil {
                 Menu {
-                    if kind.supportsWebLogin {
-                        Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
-                    }
-                    Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+                    loginOptions(kind)
                 } label: {
                     Text("登录")
                 } primaryAction: {
-                    if kind.supportsWebLogin { loginKind = kind } else { manualKind = kind }
+                    startLogin(kind)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
             } else {
                 Menu {
-                    Button { if kind.supportsWebLogin { loginKind = kind } else { manualKind = kind } } label: {
-                        Label("重新登录", systemImage: "arrow.clockwise")
-                    }
+                    Menu { loginOptions(kind) } label: { Label("重新登录", systemImage: "arrow.clockwise") }
                     Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.title3)
@@ -113,6 +112,24 @@ struct AccountsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func loginOptions(_ kind: AccountKind) -> some View {
+        if let provider = kind.passwordLogin {
+            Button { passwordKind = kind } label: {
+                Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", systemImage: "person.badge.key")
+            }
+        }
+        if kind.supportsWebLogin {
+            Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+        }
+        Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+    }
+
+    /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
+    private func startLogin(_ kind: AccountKind) {
+        if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
     }
 }
 

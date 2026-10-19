@@ -35,7 +35,9 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .c139: return .c139
         case .pan123: return .pan123
         case .pan115: return .pan115
-        case .guangya, .ilanzou, .lanzou: return nil
+        case .guangya: return .guangya
+        case .ilanzou: return .ilanzou
+        case .lanzou: return .lanzou
         }
     }
 }
@@ -118,7 +120,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, baidu, xunlei, pan123, pan115, c139, bilibili, xiaohongshu, pixiv
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv
 
     public var id: String { rawValue }
 
@@ -131,6 +133,9 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .pan123: return "123 云盘"
         case .pan115: return "115 网盘"
         case .c139: return "139 网盘"
+        case .guangya: return "光鸭云盘"
+        case .ilanzou: return "蓝奏云优享版"
+        case .lanzou: return "蓝奏云"
         case .bilibili: return "哔哩哔哩"
         case .xiaohongshu: return "小红书"
         case .pixiv: return "Pixiv"

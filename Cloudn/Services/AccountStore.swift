@@ -107,6 +107,9 @@ extension AccountKind {
         case .pan123: return URL(string: Pan123Resolver.loginURL)!
         case .pan115: return URL(string: Pan115Resolver.loginURL)!
         case .c139: return URL(string: C139Resolver.loginURL)!
+        case .guangya: return URL(string: "https://www.guangyapan.com/")!
+        case .ilanzou: return URL(string: "https://www.ilanzou.com/")!
+        case .lanzou: return URL(string: "https://up.woozooo.com/account.php?action=login")!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
@@ -125,6 +128,7 @@ extension AccountKind {
         case .pan115: return Pan115Resolver.webUA
         // 139 的 PC 版页面在 WebView 里会因环境检测白屏，用移动版
         case .c139: return C139Resolver.loginUA
+        case .guangya, .ilanzou, .lanzou: return VideoHTTP.uaChrome
         case .bilibili: return VideoHTTP.uaChrome
         // 移动 UA 下没有登录页（/login 返回 404）
         case .xiaohongshu: return VideoHTTP.uaChrome
@@ -141,6 +145,8 @@ extension AccountKind {
         case .pan123: return .script("(function(){try{return localStorage.getItem('\(Pan123Resolver.tokenStorageKey)')||''}catch(e){return ''}})()")
         case .pan115: return .cookies(Pan115Resolver.cookieDomains)
         case .c139: return .cookies(C139Resolver.cookieDomains)
+        case .lanzou: return .cookies(["woozooo.com"])
+        case .guangya, .ilanzou: return .cookies([])
         case .bilibili: return .cookies(["bilibili.com"])
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
         case .pixiv: return .cookies(["pixiv.net"])
@@ -156,6 +162,8 @@ extension AccountKind {
         case .pan123: return Pan123Resolver.normalizeToken(credential).count > 16
         case .pan115: return Pan115Resolver.isValidCookie(credential) && credential.contains("SEID=")
         case .c139: return C139Resolver.isValidCookie(credential)
+        case .lanzou: return LanzouAccount.isValidCookie(credential)
+        case .guangya, .ilanzou: return false
         case .bilibili: return credential.contains("SESSDATA=")
         // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
         case .xiaohongshu: return credential.contains("web_session=")
@@ -172,6 +180,9 @@ extension AccountKind {
         case .pan123: return "登录后可下载分享文件"
         case .pan115: return "登录后可下载大文件（游客仅限小文件）"
         case .c139: return "登录后可下载分享文件"
+        case .guangya: return "登录后可下载受限分享（临时转存后取链），并支持转存"
+        case .ilanzou: return "登录后可转存分享到自己的网盘"
+        case .lanzou: return "登录后可管理自己的蓝奏云文件"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "粘贴 Cookie 后可解析 R18 与受限作品"
@@ -187,6 +198,9 @@ extension AccountKind {
         case .pan123: return "粘贴网页 localStorage 中 authorToken 的值"
         case .pan115: return "需包含 UID、CID、SEID"
         case .c139: return "需包含 authorization，或 Os_SSo_Sid 与 RMKEY"
+        case .guangya: return "粘贴网页 localStorage 中的 access_token（建议改用账号密码 / 短信登录）"
+        case .ilanzou: return "粘贴 {\"appToken\":…,\"uuid\":…} 形式的凭据（建议改用账号密码登录）"
+        case .lanzou: return "需包含 ylogin 与 phpdisk_info"
         case .bilibili: return "需包含 SESSDATA"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
@@ -195,7 +209,7 @@ extension AccountKind {
 
     var manualPlaceholder: String {
         switch self {
-        case .xunlei, .pan123: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
+        case .xunlei, .pan123, .guangya, .ilanzou: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
         default: return "在电脑浏览器登录后复制请求头里的 Cookie"
         }
     }
@@ -209,6 +223,9 @@ extension AccountKind {
         case .pan123: return "1.circle.fill"
         case .pan115: return "5.circle.fill"
         case .c139: return "m.circle.fill"
+        case .guangya: return "g.circle.fill"
+        case .ilanzou: return "y.circle.fill"
+        case .lanzou: return "l.circle.fill"
         case .bilibili: return "play.tv.fill"
         case .xiaohongshu: return "book.closed.fill"
         case .pixiv: return "paintpalette.fill"
@@ -216,7 +233,11 @@ extension AccountKind {
     }
 
     /// Pixiv 登录页背后是 reCAPTCHA Enterprise，在 WebView 里走不完，只支持手动粘贴 Cookie
-    var supportsWebLogin: Bool { self != .pixiv }
+    /// 光鸭、蓝奏优享的网页登录态存在 IndexedDB / 加密存储里不便读取，只提供应用内账号密码登录
+    var supportsWebLogin: Bool { ![.pixiv, .guangya, .ilanzou].contains(self) }
+
+    /// 应用内账号密码 / 短信登录
+    var passwordLogin: PasswordLogin? { PasswordLogins.provider(for: self) }
 
     /// 登录页加载完成后注入的脚本：桌面布局在手机宽度下会被裁掉表单
     var loginPageScript: String? {

@@ -10,12 +10,15 @@ public struct XunleiCredential: Equatable, Sendable {
     public var refreshToken: String
     public var deviceId: String
     public var captchaToken: String
+    /// 令牌来源：web（网页 localStorage）或 app（应用内账号密码 / 短信登录）。两者的刷新方式不同
+    public var source: String
 
-    public init(accessToken: String, refreshToken: String, deviceId: String = "", captchaToken: String = "") {
+    public init(accessToken: String, refreshToken: String, deviceId: String = "", captchaToken: String = "", source: String = "web") {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.deviceId = deviceId
         self.captchaToken = captchaToken
+        self.source = source
     }
 
     /// 网页版 OAuth client_id：网页 token 只能用它刷新（不带 client_secret）
@@ -73,12 +76,12 @@ public struct XunleiCredential: Equatable, Sendable {
         guard !access.isEmpty || !refresh.isEmpty else { return nil }
         let captcha = obj.string("captcha_token", "captchaToken")
         return XunleiCredential(accessToken: access, refreshToken: refresh, deviceId: obj.string("device_id", "deviceId"),
-                                captchaToken: isValidToken(captcha) ? captcha : "")
+                                captchaToken: isValidToken(captcha) ? captcha : "", source: obj["source"].string == "app" ? "app" : "web")
     }
 
     public var serialized: String {
         OrderedJSON.object([("access_token", .string(accessToken)), ("refresh_token", .string(refreshToken)),
-                            ("device_id", .string(deviceId)), ("captcha_token", .string(captchaToken))]).text
+                            ("device_id", .string(deviceId)), ("captcha_token", .string(captchaToken)), ("source", .string(source))]).text
     }
 
     static let tokenRx = Rx(#"^[A-Za-z0-9._~+/=-]+$"#)
@@ -238,11 +241,22 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
                         userId: XunleiCredential.jwtClaim(cred.accessToken, "sub").string)
     }
 
-    /// 网页 token 只能用网页 client_id 刷新：JSON + 桌面 UA + Origin，且不能带 client_secret
+    /// 网页 token 只能用网页 client_id 刷新：JSON + 桌面 UA + Origin，且不能带 client_secret；
+    /// 应用内登录拿到的 app token 用 app client_id + client_secret 表单刷新
     private func refresh(_ cred: XunleiCredential) async -> XunleiCredential? {
         guard !cred.refreshToken.isEmpty else { return nil }
-        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": XunleiCredential.webClientId, "refresh_token": cred.refreshToken]
         let device = cred.deviceId.nilIfBlank ?? guestDevice
+        if cred.source == "app" {
+            guard let r = try? await client.send(.postForm(authBase + "/v1/auth/token", [
+                ("grant_type", "refresh_token"), ("client_id", Self.appClientId), ("client_secret", XunleiLogin.appClientSecret),
+                ("refresh_token", cred.refreshToken)
+            ], headers: [("X-Device-Id", device)])), let json = r.json, !json.string("access_token", "accessToken").isEmpty else { return nil }
+            var renewed = cred
+            renewed.accessToken = json.string("access_token", "accessToken")
+            renewed.refreshToken = json.string("refresh_token", "refreshToken").nilIfBlank ?? cred.refreshToken
+            return renewed
+        }
+        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": XunleiCredential.webClientId, "refresh_token": cred.refreshToken]
         guard let r = try? await client.send(.postJSON(authBase + "/v1/auth/token", body, headers: [
             ("X-Device-Id", device), ("X-Client-Id", XunleiCredential.webClientId), ("Origin", "https://pan.xunlei.com"),
             ("Referer", "https://pan.xunlei.com/"), ("User-Agent", XunleiCredential.desktopUA),
