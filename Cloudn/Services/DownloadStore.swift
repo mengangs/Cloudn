@@ -30,19 +30,19 @@ final class DownloadStore {
         Task { await engine.enqueue(request) }
     }
 
-    func enqueue(link: DownloadLink, platform: SharePlatform, folder: String, origin: ShareOrigin?) {
+    func enqueue(link: DownloadLink, platform: SharePlatform, folder: String, origin: ShareOrigin?, group: DownloadGroup? = nil) {
         let kind: DownloadKind = link.url.contains(".m3u8") ? .hls : .file
         enqueue(DownloadRequest(
             url: link.url, headers: link.headers, fileName: link.fileName, folder: folder, kind: kind,
             expectedSize: link.size, source: platform.displayName,
             cleanup: link.cleanupToken.map { CleanupToken(platform: platform.rawValue, token: $0) },
-            origin: origin))
+            origin: origin, group: group))
     }
 
-    func enqueue(media: VideoMedia, result: VideoParseResult, folder: String = "") {
+    func enqueue(media: VideoMedia, result: VideoParseResult, folder: String = "", group: DownloadGroup? = nil) {
         let kind: DownloadKind = !media.audioURL.isEmpty ? .dash(audioURL: media.audioURL) : (media.isHLS ? .hls : .file)
         enqueue(DownloadRequest(url: media.url, headers: media.headers, fileName: media.fileName, folder: folder, kind: kind,
-                                expectedSize: media.size, source: result.platform.displayName))
+                                expectedSize: media.size, source: result.platform.displayName, group: group))
     }
 
     // 交给后台会话的分片要一并撤掉，否则会在任务暂停 / 删除后继续占用流量

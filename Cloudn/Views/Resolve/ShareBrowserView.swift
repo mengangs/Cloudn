@@ -10,6 +10,7 @@ struct ShareBrowserView: View {
     @State private var preview: MediaPreviewItem?
     @State private var retryPwd = ""
     @State private var saveItems: SaveItems?
+    @State private var textPreview: TextPreviewItem?
 
     var body: some View {
         List {
@@ -75,6 +76,7 @@ struct ShareBrowserView: View {
         .sheet(item: $preview) { item in
             MediaPreviewView(item: item)
         }
+        .sheet(item: $textPreview) { TextPreviewView(item: $0) }
         .sheet(item: $saveItems) { items in
             SaveToDriveView(model: model, files: items.files)
         }
@@ -246,6 +248,16 @@ struct ShareBrowserView: View {
                 }
             } label: {
                 Label(kind == .image ? "预览" : "在线播放", systemImage: kind == .image ? "eye" : "play.circle")
+            }
+        }
+        if kind == .text {
+            Button {
+                run {
+                    let link = try await model.link(for: file)
+                    textPreview = TextPreviewItem(url: link.url, headers: link.headers, title: file.name)
+                }
+            } label: {
+                Label("在线查看", systemImage: "doc.text.magnifyingglass")
             }
         }
         Button {

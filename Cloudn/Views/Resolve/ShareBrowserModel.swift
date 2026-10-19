@@ -130,10 +130,10 @@ final class ShareBrowserModel: Hashable, Identifiable {
         return try await resolver.downloadLink(session, file: file)
     }
 
-    func download(_ file: ShareFile, folder: String = "") async throws {
+    func download(_ file: ShareFile, folder: String = "", group: DownloadGroup? = nil) async throws {
         let link = try await link(for: file)
         app.downloads.enqueue(link: link, platform: share.platform, folder: folder,
-                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file))
+                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file), group: group)
     }
 
     /// 下载所选：文件直接入队，文件夹递归展开并保留目录层级
@@ -173,11 +173,14 @@ final class ShareBrowserModel: Hashable, Identifiable {
             return
         }
         batch = (0, queue.count)
+        // 多个文件归成一组：只选了一个文件夹时以它命名，否则用分享标题
+        let groupTitle = items.count == 1 && items[0].isDirectory ? items[0].name : title
+        let group = queue.count > 1 ? DownloadGroup(title: groupTitle) : nil
         var failures = 0
         var lastError = ""
         for (index, entry) in queue.enumerated() {
             do {
-                try await download(entry.0, folder: entry.1)
+                try await download(entry.0, folder: entry.1, group: group)
             } catch {
                 failures += 1
                 lastError = error.localizedDescription

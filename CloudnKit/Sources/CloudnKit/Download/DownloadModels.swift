@@ -48,6 +48,17 @@ public struct ShareOrigin: Codable, Sendable, Hashable {
     }
 }
 
+/// 一次批量下载（整个文件夹、一组图片）：下载页把同组任务收成一个可折叠分组
+public struct DownloadGroup: Codable, Sendable, Hashable {
+    public let id: UUID
+    public let title: String
+
+    public init(id: UUID = UUID(), title: String) {
+        self.id = id
+        self.title = title
+    }
+}
+
 public struct DownloadRequest: Codable, Sendable, Hashable {
     public var url: String
     public var headers: [String: String]
@@ -60,10 +71,14 @@ public struct DownloadRequest: Codable, Sendable, Hashable {
     public var source: String
     public var cleanup: CleanupToken?
     public var origin: ShareOrigin?
+    /// 所属批次（可选；旧任务表里没有这个字段）
+    public var group: DownloadGroup?
 
     public init(url: String, headers: [String: String] = [:], fileName: String, folder: String = "", kind: DownloadKind = .file,
-                expectedSize: Int64 = -1, source: String = "", cleanup: CleanupToken? = nil, origin: ShareOrigin? = nil) {
+                expectedSize: Int64 = -1, source: String = "", cleanup: CleanupToken? = nil, origin: ShareOrigin? = nil,
+                group: DownloadGroup? = nil) {
         self.origin = origin
+        self.group = group
         self.url = url
         self.headers = headers
         self.fileName = fileName

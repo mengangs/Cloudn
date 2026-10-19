@@ -188,7 +188,8 @@ struct VideoResultView: View {
     private func download(_ medias: [VideoMedia]) {
         // 多张图片归到以作品标题命名的文件夹
         let folder = medias.count > 1 ? FileNames.base(result.title, fallback: result.platform.displayName) : ""
-        for m in medias { app.downloads.enqueue(media: m, result: result, folder: folder) }
+        let group = medias.count > 1 ? DownloadGroup(title: result.title.isEmpty ? result.platform.displayName : result.title) : nil
+        for m in medias { app.downloads.enqueue(media: m, result: result, folder: folder, group: group) }
         app.show(medias.count > 1 ? "已添加 \(medias.count) 个下载任务" : "已添加到下载")
     }
 }

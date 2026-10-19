@@ -24,6 +24,58 @@ struct DownloadsView: View {
         }
     }
 
+    /// 同一批次的任务收成一组（按首次出现的位置排列），其余单独成行
+    private var entries: [DownloadEntry] {
+        var result: [DownloadEntry] = []
+        var grouped: [UUID: [DownloadItem]] = [:]
+        var order: [DownloadGroup] = []
+        for item in items {
+            if let group = item.request.group {
+                if grouped[group.id] == nil {
+                    order.append(group)
+                    result.append(.group(group, []))
+                }
+                grouped[group.id, default: []].append(item)
+            } else {
+                result.append(.single(item))
+            }
+        }
+        return result.map { entry in
+            guard case .group(let g, _) = entry else { return entry }
+            let members = grouped[g.id] ?? []
+            // 只剩一个任务的批次不必折叠
+            return members.count == 1 ? .single(members[0]) : .group(g, members)
+        }
+    }
+
+    private func row(_ item: DownloadItem) -> some View {
+        DownloadRow(item: item, refreshing: refreshing.contains(item.id))
+            .contentShape(Rectangle())
+            .onTapGesture { primaryAction(item) }
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+            }
+            .swipeActions(edge: .leading) {
+                if item.status.isActive {
+                    Button { app.downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }.tint(.orange)
+                } else if item.status == .paused || item.status == .failed {
+                    Button { app.downloads.resume(item) } label: { Label("继续", systemImage: "play") }.tint(.green)
+                }
+            }
+            .contextMenu { menu(item) }
+    }
+
+    @ViewBuilder
+    private func groupMenu(_ members: [DownloadItem]) -> some View {
+        Button { members.filter { $0.status == .paused || $0.status == .failed }.forEach(app.downloads.resume) } label: {
+            Label("全部继续", systemImage: "play")
+        }
+        Button { members.filter(\.status.isActive).forEach(app.downloads.pause) } label: { Label("全部暂停", systemImage: "pause") }
+        Button(role: .destructive) { members.forEach { app.downloads.remove($0, deleteFile: false) } } label: {
+            Label("删除这一组记录（保留已下载文件）", systemImage: "trash")
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -40,21 +92,18 @@ struct DownloadsView: View {
                                            description: Text("在「解析」页粘贴链接，选择文件即可下载"))
                         .listRowBackground(Color.clear)
                 }
-                ForEach(items) { item in
-                    DownloadRow(item: item, refreshing: refreshing.contains(item.id))
-                        .contentShape(Rectangle())
-                        .onTapGesture { primaryAction(item) }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) { deleting = item } label: { Label("删除", systemImage: "trash") }
+                ForEach(entries) { entry in
+                    switch entry {
+                    case .single(let item):
+                        row(item)
+                    case .group(let group, let members):
+                        DisclosureGroup {
+                            ForEach(members) { row($0) }
+                        } label: {
+                            GroupHeader(title: group.title, items: members)
                         }
-                        .swipeActions(edge: .leading) {
-                            if item.status.isActive {
-                                Button { app.downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }.tint(.orange)
-                            } else if item.status == .paused || item.status == .failed {
-                                Button { app.downloads.resume(item) } label: { Label("继续", systemImage: "play") }.tint(.green)
-                            }
-                        }
-                        .contextMenu { menu(item) }
+                        .contextMenu { groupMenu(members) }
+                    }
                 }
             }
             .navigationTitle("下载")
@@ -132,6 +181,48 @@ struct DownloadsView: View {
                 app.show(error.localizedDescription, error: true)
             }
         }
+    }
+}
+
+enum DownloadEntry: Identifiable {
+    case single(DownloadItem)
+    case group(DownloadGroup, [DownloadItem])
+
+    var id: String {
+        switch self {
+        case .single(let item): return item.id.uuidString
+        case .group(let g, _): return "g-" + g.id.uuidString
+        }
+    }
+}
+
+/// 分组标题：名称 + 完成数 + 合计进度
+private struct GroupHeader: View {
+    let title: String
+    let items: [DownloadItem]
+
+    var body: some View {
+        let done = items.filter { $0.status == .completed }.count
+        let failed = items.filter { $0.status == .failed }.count
+        let total = items.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
+        let received = items.reduce(Int64(0)) { $0 + ($1.status == .completed ? max(0, $1.totalBytes) : $1.receivedBytes) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.fill").foregroundStyle(.tint)
+                Text(title).lineLimit(1)
+            }
+            HStack(spacing: 8) {
+                Text("\(done)/\(items.count) 已完成")
+                if failed > 0 { Text("\(failed) 个失败").foregroundStyle(.red) }
+                if total > 0 { Text(ByteFormat.string(total)) }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if done < items.count {
+                ProgressView(value: total > 0 ? min(1, Double(received) / Double(total)) : Double(done) / Double(max(1, items.count)))
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
