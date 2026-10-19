@@ -13,118 +13,121 @@ struct SettingsView: View {
     var body: some View {
         @Bindable var settings = app.settings
         Form {
-                Section {
-                    Stepper(value: $settings.maxConcurrentTasks, in: 1...5) {
-                        LabeledContent("同时下载任务", value: "\(settings.maxConcurrentTasks)")
-                    }
-                    Stepper(value: $settings.connectionsPerTask, in: 1...16) {
-                        LabeledContent("单任务连接数", value: "\(settings.connectionsPerTask)")
-                    }
-                    Stepper(value: $settings.retryCount, in: 0...10) {
-                        LabeledContent("失败自动重试", value: "\(settings.retryCount) 次")
-                    }
-                    Picker("下载限速", selection: $settings.speedLimitKB) {
-                        ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
-                    NavigationLink("按平台设置连接数") { PlatformConnectionsView() }
-                    Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
-                    Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
-                    Toggle("锁屏与灵动岛显示进度", isOn: $settings.liveActivity)
-                } header: {
-                    Text("下载")
-                } footer: {
-                    Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。切到后台后普通文件由系统继续下载，m3u8 与分轨视频会在回到前台时继续。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
-                }
-
-                Section {
-                    Toggle("回到应用时提示剪贴板链接", isOn: $settings.clipboardHint)
-                    Toggle("免转存下载（夸克 / UC）", isOn: $settings.directFirst)
-                    Toggle("多账号下载", isOn: $settings.multiAccountDownload)
-                    if settings.multiAccountDownload {
-                        Toggle("单文件多源分片（实验性）", isOn: $settings.multiSourceDownload)
-                    }
-                } header: {
-                    Text("解析")
-                } footer: {
-                    Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速；开启多源分片后，大文件还会同时用各账号的直链分段下载。")
-                }
-
-                Section {
-                    LabeledContent("完成后保存到", value: app.settings.exportFolder?.lastPathComponent ?? "应用下载目录")
-                    Button("选择文件夹…") { pickingFolder = true }
-                    if app.settings.exportFolderBookmark != nil {
-                        Button("恢复为应用下载目录", role: .destructive) { app.settings.setExportFolder(nil) }
-                    }
-                } header: {
-                    Text("下载位置")
-                } footer: {
-                    Text("选择「文件」App 里的文件夹（如 iCloud 云盘）后，下载完成的文件会移动过去，并保留文件夹层级。")
-                }
-
-                Section("外观") {
-                    Picker("主题", selection: $settings.appearance) {
-                        ForEach(Appearance.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    AccentPicker()
-                }
-
-                Section {
-                    Button {
-                        checkUpdate()
-                    } label: {
-                        HStack {
-                            Text("检查更新")
-                            Spacer()
-                            if checking { ProgressView() } else { Text("当前 \(AppModel.currentVersion)").foregroundStyle(.secondary) }
+            Group {
+                    Section {
+                        Stepper(value: $settings.maxConcurrentTasks, in: 1...5) {
+                            LabeledContent("同时下载任务", value: "\(settings.maxConcurrentTasks)")
                         }
+                        Stepper(value: $settings.connectionsPerTask, in: 1...16) {
+                            LabeledContent("单任务连接数", value: "\(settings.connectionsPerTask)")
+                        }
+                        Stepper(value: $settings.retryCount, in: 0...10) {
+                            LabeledContent("失败自动重试", value: "\(settings.retryCount) 次")
+                        }
+                        Picker("下载限速", selection: $settings.speedLimitKB) {
+                            ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
+                        }
+                        NavigationLink("按平台设置连接数") { PlatformConnectionsView() }
+                        Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
+                        Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
+                        Toggle("锁屏与灵动岛显示进度", isOn: $settings.liveActivity)
+                    } header: {
+                        Text("下载")
+                    } footer: {
+                        Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。切到后台后普通文件由系统继续下载，m3u8 与分轨视频会在回到前台时继续。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
                     }
-                    .disabled(checking)
-                    Toggle("自动检查更新", isOn: $settings.autoCheckUpdates)
-                    Toggle("接受预发布版更新", isOn: $settings.acceptPrerelease)
-                } header: {
-                    Text("更新")
-                } footer: {
-                    Text("从 GitHub Releases（\(UpdateChecker.repository)）读取最新版本，每天最多自动检查一次。")
-                }
 
-                Section {
-                    NavigationLink("GitHub Token 与下载镜像") { GitHubSettingsView() }
-                } header: {
-                    Text("GitHub")
-                } footer: {
-                    Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。")
-                }
+                    Section {
+                        Toggle("回到应用时提示剪贴板链接", isOn: $settings.clipboardHint)
+                        Toggle("免转存下载（夸克 / UC）", isOn: $settings.directFirst)
+                        Toggle("多账号下载", isOn: $settings.multiAccountDownload)
+                        if settings.multiAccountDownload {
+                            Toggle("单文件多源分片（实验性）", isOn: $settings.multiSourceDownload)
+                        }
+                    } header: {
+                        Text("解析")
+                    } footer: {
+                        Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速；开启多源分片后，大文件还会同时用各账号的直链分段下载。")
+                    }
 
-                Section("诊断") {
-                    if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
-                        ShareLink(item: log) { Label("导出诊断日志", glyph: .share) }
+                    Section {
+                        LabeledContent("完成后保存到", value: app.settings.exportFolder?.lastPathComponent ?? "应用下载目录")
+                        Button("选择文件夹…") { pickingFolder = true }
+                        if app.settings.exportFolderBookmark != nil {
+                            Button("恢复为应用下载目录", role: .destructive) { app.settings.setExportFolder(nil) }
+                        }
+                    } header: {
+                        Text("下载位置")
+                    } footer: {
+                        Text("选择「文件」App 里的文件夹（如 iCloud 云盘）后，下载完成的文件会移动过去，并保留文件夹层级。")
                     }
-                    Button(logCleared ? "已清空日志" : "清空日志") {
-                        Log.clear()
-                        logCleared = true
-                    }
-                    .disabled(logCleared)
-                }
 
-                Section("存储") {
-                    Button("打开下载目录") {
-                        // 用「文件」App 打开本应用的文档目录
-                        let path = app.downloads.engine.downloadsDirectory.path
-                        if let url = URL(string: "shareddocuments://" + path) { UIApplication.shared.open(url) }
+                    Section("外观") {
+                        Picker("主题", selection: $settings.appearance) {
+                            ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        AccentPicker()
                     }
-                    Button(cacheCleared ? "已清除图片缓存" : "清除图片缓存") {
-                        ImageLoader.shared.clear()
-                        cacheCleared = true
-                    }
-                    .disabled(cacheCleared)
-                }
 
-                Section {
-                    NavigationLink("关于 Cloudn") { AboutView() }
-                    NavigationLink("开源许可") { LicenseView() }
-                }
+                    Section {
+                        Button {
+                            checkUpdate()
+                        } label: {
+                            HStack {
+                                Text("检查更新")
+                                Spacer()
+                                if checking { ProgressView() } else { Text("当前 \(AppModel.currentVersion)").foregroundStyle(.secondary) }
+                            }
+                        }
+                        .disabled(checking)
+                        Toggle("自动检查更新", isOn: $settings.autoCheckUpdates)
+                        Toggle("接受预发布版更新", isOn: $settings.acceptPrerelease)
+                    } header: {
+                        Text("更新")
+                    } footer: {
+                        Text("从 GitHub Releases（\(UpdateChecker.repository)）读取最新版本，每天最多自动检查一次。")
+                    }
+
+                    Section {
+                        NavigationLink("GitHub Token 与下载镜像") { GitHubSettingsView() }
+                    } header: {
+                        Text("GitHub")
+                    } footer: {
+                        Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。")
+                    }
+
+                    Section("诊断") {
+                        if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
+                            ShareLink(item: log) { Label("导出诊断日志", glyph: .share) }
+                        }
+                        Button(logCleared ? "已清空日志" : "清空日志") {
+                            Log.clear()
+                            logCleared = true
+                        }
+                        .disabled(logCleared)
+                    }
+
+                    Section("存储") {
+                        Button("打开下载目录") {
+                            // 用「文件」App 打开本应用的文档目录
+                            let path = app.downloads.engine.downloadsDirectory.path
+                            if let url = URL(string: "shareddocuments://" + path) { UIApplication.shared.open(url) }
+                        }
+                        Button(cacheCleared ? "已清除图片缓存" : "清除图片缓存") {
+                            ImageLoader.shared.clear()
+                            cacheCleared = true
+                        }
+                        .disabled(cacheCleared)
+                    }
+
+                    Section {
+                        NavigationLink("关于 Cloudn") { AboutView() }
+                        NavigationLink("开源许可") { LicenseView() }
+                    }
             }
+            .listRowBackground(Color.surface)
+        }
         .paperList()
         .navigationTitle("设置")
         .sheet(isPresented: $pickingFolder) {
@@ -162,27 +165,30 @@ struct UpdateSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    LabeledContent("新版本", value: release.isPrerelease ? "\(release.version)（预发布）" : release.version)
-                    LabeledContent("当前版本", value: AppModel.currentVersion)
-                }
-                if !release.notes.isEmpty {
-                    Section("更新说明") {
-                        Text(release.notes).font(.callout).textSelection(.enabled)
+                Group {
+                    Section {
+                        LabeledContent("新版本", value: release.isPrerelease ? "\(release.version)（预发布）" : release.version)
+                        LabeledContent("当前版本", value: AppModel.currentVersion)
+                    }
+                    if !release.notes.isEmpty {
+                        Section("更新说明") {
+                            Text(release.notes).font(.callout).textSelection(.enabled)
+                        }
+                    }
+                    Section {
+                        if let url = URL(string: release.pageURL) {
+                            Button { openURL(url) } label: { Label("前往发布页", glyph: .share) }
+                        }
+                        if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
+                            Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
+                        }
+                        Button("忽略此版本", role: .destructive) {
+                            app.settings.skippedVersion = release.version
+                            dismiss()
+                        }
                     }
                 }
-                Section {
-                    if let url = URL(string: release.pageURL) {
-                        Button { openURL(url) } label: { Label("前往发布页", glyph: .share) }
-                    }
-                    if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
-                        Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
-                    }
-                    Button("忽略此版本", role: .destructive) {
-                        app.settings.skippedVersion = release.version
-                        dismiss()
-                    }
-                }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle(release.name)
@@ -210,27 +216,30 @@ struct AboutView: View {
                         .frame(width: 96, height: 96)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
-                    Text("Cloudn").font(.title2.bold())
-                    Text("版本 \(version)").font(.footnote).foregroundStyle(.secondary)
+                    Text("Cloudn").font(.pageTitle).foregroundStyle(Color.ink)
+                    Text("版本 \(version)").font(.mono).foregroundStyle(Color.ink3)
                     Text("粘贴分享链接，浏览并高速下载网盘文件与短视频。")
                         .font(.subheadline)
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.ink2)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .listRowBackground(Color.clear)
             }
-            Section("能力") {
-                LabeledContent("网盘", value: SharePlatform.allCases.filter(\.isResolvable).map(\.displayName).joined(separator: "、"))
-                LabeledContent("视频", value: VideoPlatform.allCases.map(\.displayName).joined(separator: "、"))
-                LabeledContent("下载", value: "多连接分片 · 断点续传 · m3u8 · 音视频合轨")
+            Group {
+                Section("能力") {
+                    LabeledContent("网盘", value: SharePlatform.allCases.filter(\.isResolvable).map(\.displayName).joined(separator: "、"))
+                    LabeledContent("视频", value: VideoPlatform.allCases.map(\.displayName).joined(separator: "、"))
+                    LabeledContent("下载", value: "多连接分片 · 断点续传 · m3u8 · 音视频合轨")
+                }
+                Section {
+                    Text("本应用为个人独立开发，仅供学习与技术交流。请只解析你有权访问的内容，并遵守各平台的服务条款与当地法律法规。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Section {
-                Text("本应用为个人独立开发，仅供学习与技术交流。请只解析你有权访问的内容，并遵守各平台的服务条款与当地法律法规。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            .listRowBackground(Color.surface)
         }
         .paperList()
         .navigationTitle("关于")

@@ -283,36 +283,39 @@ struct GitHubSettingsView: View {
     var body: some View {
         @Bindable var settings = app.settings
         Form {
-            Section {
-                SecureField("ghp_… / github_pat_…", text: $token)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button(checking ? "正在校验…" : "保存并校验") { save() }
-                    .disabled(checking || token == app.settings.githubToken)
-                if !app.settings.githubToken.isEmpty {
-                    Button("清除 Token", role: .destructive) {
-                        app.settings.githubToken = ""
-                        token = ""
+            Group {
+                Section {
+                    SecureField("ghp_… / github_pat_…", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button(checking ? "正在校验…" : "保存并校验") { save() }
+                        .disabled(checking || token == app.settings.githubToken)
+                    if !app.settings.githubToken.isEmpty {
+                        Button("清除 Token", role: .destructive) {
+                            app.settings.githubToken = ""
+                            token = ""
+                        }
                     }
+                } header: {
+                    Text("GitHub Token（可选）")
+                } footer: {
+                    Text("未填写时每小时只能调用 60 次 GitHub 接口；填写后提升到 5000 次，并能浏览自己的私有仓库。Token 只保存在本机钥匙串，建议只授予只读权限。")
                 }
-            } header: {
-                Text("GitHub Token（可选）")
-            } footer: {
-                Text("未填写时每小时只能调用 60 次 GitHub 接口；填写后提升到 5000 次，并能浏览自己的私有仓库。Token 只保存在本机钥匙串，建议只授予只读权限。")
-            }
-            Section {
-                TextField("https://镜像地址/（留空直连）", text: $settings.githubMirror)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                if !app.settings.githubMirror.isEmpty {
-                    Button("关闭镜像（直连 GitHub）", role: .destructive) { app.settings.githubMirror = "" }
+                Section {
+                    TextField("https://镜像地址/（留空直连）", text: $settings.githubMirror)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    if !app.settings.githubMirror.isEmpty {
+                        Button("关闭镜像（直连 GitHub）", role: .destructive) { app.settings.githubMirror = "" }
+                    }
+                } header: {
+                    Text("下载镜像")
+                } footer: {
+                    Text("默认直连 GitHub。如有自己信任的镜像，可填写其前缀，GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。应用不内置任何第三方镜像。")
                 }
-            } header: {
-                Text("下载镜像")
-            } footer: {
-                Text("默认直连 GitHub。如有自己信任的镜像，可填写其前缀，GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。应用不内置任何第三方镜像。")
             }
+            .listRowBackground(Color.surface)
         }
         .paperList()
         .navigationTitle("GitHub")

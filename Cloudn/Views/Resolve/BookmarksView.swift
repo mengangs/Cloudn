@@ -12,29 +12,32 @@ struct BookmarksView: View {
     var body: some View {
         NavigationStack {
             List {
-                if app.bookmarks.bookmarks.isEmpty {
-                    ContentUnavailableView("还没有收藏", systemImage: "star",
-                                           description: Text("在分享页右上角点星标即可收藏，下次一键打开"))
-                }
-                ForEach(app.bookmarks.bookmarks) { b in
-                    Button { onOpen(b) } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(b.title).foregroundStyle(.primary)
-                            Text("\(b.source) · \(b.createdAt.formatted(date: .numeric, time: .omitted))")
-                                .font(.caption).foregroundStyle(.secondary)
+                Group {
+                    if app.bookmarks.bookmarks.isEmpty {
+                        ContentUnavailableView("还没有收藏", systemImage: "star",
+                                               description: Text("在分享页右上角点星标即可收藏，下次一键打开"))
+                    }
+                    ForEach(app.bookmarks.bookmarks) { b in
+                        Button { onOpen(b) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(b.title).foregroundStyle(.primary)
+                                Text("\(b.source) · \(b.createdAt.formatted(date: .numeric, time: .omitted))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
+                            Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
+                                .tint(Color.ink2)
+                        }
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = b.text; app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
+                            Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
+                            Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
                         }
                     }
-                    .swipeActions {
-                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
-                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
-                            .tint(.orange)
-                    }
-                    .contextMenu {
-                        Button { UIPasteboard.general.string = b.text; app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
-                        Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
-                        Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
-                    }
                 }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("收藏")

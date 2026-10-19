@@ -14,39 +14,42 @@ struct AccountListView: View {
         let list = app.accounts.list(kind)
         NavigationStack {
             List {
-                Section {
-                    ForEach(Array(list.enumerated()), id: \.offset) { index, account in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(account.nickname)
-                                Text("更新于 \(account.updatedAt.formatted(date: .numeric, time: .shortened))")
-                                    .font(.caption).foregroundStyle(.secondary)
+                Group {
+                    Section {
+                        ForEach(Array(list.enumerated()), id: \.offset) { index, account in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(account.nickname)
+                                    Text("更新于 \(account.updatedAt.formatted(date: .numeric, time: .shortened))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if index == 0 {
+                                    Text("主账号").font(.caption.weight(.medium)).foregroundStyle(.tint)
+                                }
                             }
-                            Spacer()
-                            if index == 0 {
-                                Text("主账号").font(.caption.weight(.medium)).foregroundStyle(.tint)
+                            .swipeActions {
+                                Button(role: .destructive) { removing = index } label: { Label("退出", systemImage: "rectangle.portrait.and.arrow.right") }
+                                if index > 0 {
+                                    Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
+                                        .tint(Color.ink2)
+                                }
+                            }
+                            .contextMenu {
+                                if index > 0 {
+                                    Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
+                                }
+                                Button(role: .destructive) { removing = index } label: { Label("退出该账号", systemImage: "rectangle.portrait.and.arrow.right") }
                             }
                         }
-                        .swipeActions {
-                            Button(role: .destructive) { removing = index } label: { Label("退出", systemImage: "rectangle.portrait.and.arrow.right") }
-                            if index > 0 {
-                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
-                                    .tint(.orange)
-                            }
-                        }
-                        .contextMenu {
-                            if index > 0 {
-                                Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
-                            }
-                            Button(role: .destructive) { removing = index } label: { Label("退出该账号", systemImage: "rectangle.portrait.and.arrow.right") }
-                        }
+                    } footer: {
+                        Text("解析、转存与网盘管理使用主账号。在设置中开启「多账号下载」后，批量下载会按文件轮换使用这里的全部账号。")
                     }
-                } footer: {
-                    Text("解析、转存与网盘管理使用主账号。在设置中开启「多账号下载」后，批量下载会按文件轮换使用这里的全部账号。")
+                    Section {
+                        Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }
+                    }
                 }
-                Section {
-                    Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }
-                }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("\(kind.displayName)账号")

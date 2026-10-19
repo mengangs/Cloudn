@@ -44,38 +44,41 @@ struct PasswordLoginView: View {
                         .listRowInsets(EdgeInsets())
                     }
                 }
-                switch mode {
-                case .password:
-                    Section {
-                        TextField(provider?.accountHint ?? "账号", text: $account)
-                            .textContentType(.username)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("密码", text: $password)
-                            .textContentType(.password)
-                    } footer: {
-                        Text("账号密码只用于本次向\(kind.displayName)发起登录，不会保存；保存的是登录后得到的令牌。")
-                    }
-                case .sms:
-                    Section {
-                        TextField("手机号", text: $phone)
-                            .keyboardType(.phonePad)
-                            .textContentType(.telephoneNumber)
-                        HStack {
-                            TextField("验证码", text: $code)
-                                .keyboardType(.numberPad)
-                                .textContentType(.oneTimeCode)
-                            Button(countdown > 0 ? "\(countdown) 秒" : (challenge == nil ? "获取验证码" : "重新获取")) { sendCode() }
-                                .disabled(phone.isEmpty || countdown > 0 || working)
-                                .buttonStyle(.borderless)
+                Group {
+                    switch mode {
+                    case .password:
+                        Section {
+                            TextField(provider?.accountHint ?? "账号", text: $account)
+                                .textContentType(.username)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            SecureField("密码", text: $password)
+                                .textContentType(.password)
+                        } footer: {
+                            Text("账号密码只用于本次向\(kind.displayName)发起登录，不会保存；保存的是登录后得到的令牌。")
                         }
-                    } footer: {
-                        if let challenge { Text(challenge.message) }
+                    case .sms:
+                        Section {
+                            TextField("手机号", text: $phone)
+                                .keyboardType(.phonePad)
+                                .textContentType(.telephoneNumber)
+                            HStack {
+                                TextField("验证码", text: $code)
+                                    .keyboardType(.numberPad)
+                                    .textContentType(.oneTimeCode)
+                                Button(countdown > 0 ? "\(countdown) 秒" : (challenge == nil ? "获取验证码" : "重新获取")) { sendCode() }
+                                    .disabled(phone.isEmpty || countdown > 0 || working)
+                                    .buttonStyle(.borderless)
+                            }
+                        } footer: {
+                            if let challenge { Text(challenge.message) }
+                        }
+                    }
+                    if let error {
+                        Section { Text(error).foregroundStyle(Color.clayInk) }
                     }
                 }
-                if let error {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("登录\(kind.displayName)")

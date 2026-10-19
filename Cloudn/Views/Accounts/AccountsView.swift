@@ -13,45 +13,66 @@ struct AccountsView: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var importData: ImportData?
+    @State private var quotas: [SharePlatform: DriveQuota] = [:]
+
+    private var loggedInSummary: String {
+        let n = AccountKind.allCases.filter { $0.isDrive && app.accounts.accounts[$0] != nil }.count
+        return n == 0 ? "未登录" : "已登录 \(n) 个"
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    ForEach(AccountKind.allCases.filter(\.isDrive)) { row($0) }
-                } header: {
-                    Text("网盘")
-                } footer: {
-                    Text("蓝奏云、蓝奏云优享版、光鸭云盘的公开分享无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionLabel(title: "网盘", trailing: loggedInSummary)
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                            ForEach(AccountKind.allCases.filter(\.isDrive)) { driveTile($0) }
+                        }
+                        Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号。")
+                            .font(.caption)
+                            .foregroundStyle(Color.ink3)
+                            .padding(.horizontal, 4)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionLabel(title: "视频平台")
+                        VStack(spacing: 0) {
+                            let kinds = AccountKind.allCases.filter { !$0.isDrive }
+                            ForEach(Array(kinds.enumerated()), id: \.element) { index, kind in
+                                videoRow(kind)
+                                if index < kinds.count - 1 { RowDivider(leading: 60) }
+                            }
+                        }
+                        .card()
+                        Text("抖音、快手、微博、AcFun 无需登录；小红书需要登录；Pixiv 未登录只能解析公开作品。")
+                            .font(.caption)
+                            .foregroundStyle(Color.ink3)
+                            .padding(.horizontal, 4)
+                    }
+                    VStack(spacing: 0) {
+                        NavigationLink { SettingsView() } label: { linkRow(.gear, "设置") }
+                        RowDivider(leading: 52)
+                        Button { exporting = true } label: { linkRow(.share, "导出登录凭据（加密备份）") }
+                            .disabled(app.accounts.accounts.isEmpty)
+                        RowDivider(leading: 52)
+                        Button { importing = true } label: { linkRow(.save, "从备份导入") }
+                    }
+                    .buttonStyle(.plain)
+                    .card()
+                    HStack(alignment: .top, spacing: 8) {
+                        IconView(.lock, size: 14)
+                        Text("登录凭据只保存在本机钥匙串，只用于向对应平台发起请求。")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(Color.ink3)
+                    .padding(.horizontal, 4)
                 }
-                Section {
-                    ForEach(AccountKind.allCases.filter { !$0.isDrive }) { row($0) }
-                } header: {
-                    Text("视频平台")
-                } footer: {
-                    Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录；Pixiv 未登录只能解析公开作品。")
-                }
-                Section {
-                    Button { exporting = true } label: { Label("导出登录凭据（加密备份）", glyph: .share) }
-                        .disabled(app.accounts.accounts.isEmpty)
-                    Button { importing = true } label: { Label("从备份导入", glyph: .save) }
-                } header: {
-                    Text("备份与恢复")
-                }
-                Section {
-                    Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", glyph: .lock)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .paperList()
+            .background(Color.paper)
+            .task(id: app.accounts.accounts.keys.map(\.rawValue).sorted()) { await loadQuotas() }
             .navigationTitle("我的")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { SettingsView() } label: { IconView(.gear, size: 22) }
-                        .accessibilityLabel("设置")
-                }
-            }
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
@@ -95,49 +116,134 @@ struct AccountsView: View {
         }
     }
 
-    @ViewBuilder
-    private func row(_ kind: AccountKind) -> some View {
+    /// 网盘卡片：点按进入我的网盘（未登录则去登录），长按管理账号
+    private func driveTile(_ kind: AccountKind) -> some View {
         let account = app.accounts.accounts[kind]
-        HStack(spacing: 14) {
-            Image(systemName: kind.symbol)
-                .font(.title2)
-                .foregroundStyle(account == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
-                .frame(width: 34)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(kind.displayName)
-                if let account {
-                    let count = app.accounts.count(for: kind)
-                    Text("已登录：\(account.nickname)" + (count > 1 ? "（共 \(count) 个账号）" : "")).font(.caption).foregroundStyle(.green)
+        let platform = kind.drivePlatform
+        let quota = platform.flatMap { quotas[$0] }
+        return Menu {
+            accountMenu(kind)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    PlatformTile(mark: .account(kind), size: 34, dimmed: account == nil)
+                    Spacer()
+                    if account != nil {
+                        Circle().fill(Color.success).frame(width: 7, height: 7)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(kind.displayName).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink).lineLimit(1)
+                    if let account {
+                        let count = app.accounts.count(for: kind)
+                        Text(account.nickname + (count > 1 ? " 等 \(count) 个" : ""))
+                            .font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
+                    } else {
+                        Text("未登录").font(.caption).foregroundStyle(Color.ink3)
+                    }
+                }
+                if let quota, quota.total > 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressLine(value: min(1, Double(quota.used) / Double(quota.total)))
+                        Text("\(ByteFormat.string(quota.used)) / \(ByteFormat.string(quota.total))")
+                            .font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(1).minimumScaleFactor(0.8)
+                    }
                 } else {
-                    Text(kind.benefit).font(.caption).foregroundStyle(.secondary)
+                    Text(account == nil ? "点按登录" : " ").font(.monoSmall).foregroundStyle(Color.ink3)
                 }
             }
-            Spacer()
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card()
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } primaryAction: {
             if account == nil {
-                Menu {
-                    loginOptions(kind)
-                } label: {
+                app.accounts.pendingAdd = nil
+                startLogin(kind)
+            } else if let platform, app.resolvers.manager(for: platform) != nil {
+                drivePlatform = platform
+            } else {
+                listKind = kind
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 视频平台：一行一个，右侧是登录状态 / 登录键
+    private func videoRow(_ kind: AccountKind) -> some View {
+        let account = app.accounts.accounts[kind]
+        return HStack(spacing: 12) {
+            PlatformTile(mark: .account(kind), size: 32, dimmed: account == nil)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kind.displayName).font(.subheadline.weight(.medium)).foregroundStyle(Color.ink)
+                Text(account.map { "已登录 · \($0.nickname)" } ?? kind.benefit)
+                    .font(.caption)
+                    .foregroundStyle(account == nil ? Color.ink3 : Color.success)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if account == nil {
+                Menu { loginOptions(kind) } label: {
                     Text("登录")
                 } primaryAction: {
                     app.accounts.pendingAdd = nil
                     startLogin(kind)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+                .buttonStyle(PillButtonStyle(kind: .secondary, height: 30))
+                .font(.footnote)
             } else {
-                Menu {
-                    if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
-                        Button { drivePlatform = platform } label: { Label("我的网盘", glyph: .cloud) }
-                    }
-                    Button { listKind = kind } label: { Label("账号管理 / 添加账号", glyph: .user) }
-                    Menu { loginOptions(kind) } label: { Label("重新登录", glyph: .refresh) }
-                    Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
-                } label: {
-                    Image(systemName: "ellipsis.circle").font(.title3)
+                Menu { accountMenu(kind) } label: {
+                    Image(systemName: "ellipsis").foregroundStyle(Color.ink2).frame(width: 30, height: 30)
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func linkRow(_ icon: Icon, _ title: String) -> some View {
+        HStack(spacing: 12) {
+            IconView(icon, size: 19).foregroundStyle(Color.ink).frame(width: 26)
+            Text(title).foregroundStyle(Color.ink)
+            Spacer()
+            IconView(.chevronRight, size: 13).foregroundStyle(Color.ink3)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 50)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func accountMenu(_ kind: AccountKind) -> some View {
+        if app.accounts.accounts[kind] == nil {
+            loginOptions(kind)
+        } else {
+            if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
+                Button { drivePlatform = platform } label: { Label("我的网盘", glyph: .cloud) }
+            }
+            Button { listKind = kind } label: { Label("账号管理 / 添加账号", glyph: .user) }
+            Menu { loginOptions(kind) } label: { Label("重新登录", glyph: .refresh) }
+            Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
+        }
+    }
+
+    /// 已登录网盘的容量（并发取，取不到就不显示）
+    private func loadQuotas() async {
+        let targets = AccountKind.allCases.compactMap { kind -> (SharePlatform, DriveManager)? in
+            guard kind.isDrive, app.accounts.accounts[kind] != nil, let platform = kind.drivePlatform,
+                  let manager = app.resolvers.manager(for: platform) else { return nil }
+            return (platform, manager)
+        }
+        var result: [SharePlatform: DriveQuota] = [:]
+        await withTaskGroup(of: (SharePlatform, DriveQuota?).self) { group in
+            for (platform, manager) in targets {
+                group.addTask { (platform, await manager.quota()) }
+            }
+            for await (platform, quota) in group {
+                if let quota { result[platform] = quota }
+            }
+        }
+        quotas = result
     }
 
     @ViewBuilder
@@ -171,18 +277,21 @@ struct ManualCookieView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField(kind.manualPlaceholder, text: $cookie, axis: .vertical)
-                        .lineLimit(4...10)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } footer: {
-                    Text(kind.manualHint)
+                Group {
+                    Section {
+                        TextField(kind.manualPlaceholder, text: $cookie, axis: .vertical)
+                            .lineLimit(4...10)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } footer: {
+                        Text(kind.manualHint)
+                    }
+                    if let error {
+                        Section { Text(error).foregroundStyle(Color.clayInk) }
+                    }
                 }
-                if let error {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("\(kind.displayName) 凭据")

@@ -21,16 +21,19 @@ struct PlatformConnectionsView: View {
 
     var body: some View {
         Form {
-            Section {
-                ForEach(sources, id: \.self) { source in
-                    Picker(source, selection: binding(source)) {
-                        Text("跟随全局（\(app.settings.connectionsPerTask)）").tag(0)
-                        ForEach(1...16, id: \.self) { Text("\($0)").tag($0) }
+            Group {
+                Section {
+                    ForEach(sources, id: \.self) { source in
+                        Picker(source, selection: binding(source)) {
+                            Text("跟随全局（\(app.settings.connectionsPerTask)）").tag(0)
+                            ForEach(1...16, id: \.self) { Text("\($0)").tag($0) }
+                        }
                     }
+                } footer: {
+                    Text("部分网盘对并发连接数敏感（如百度、115），遇到 403 或频繁失败时可单独调低。")
                 }
-            } footer: {
-                Text("部分网盘对并发连接数敏感（如百度、115），遇到 403 或频繁失败时可单独调低。")
             }
+            .listRowBackground(Color.surface)
         }
         .paperList()
         .navigationTitle("按平台设置连接数")

@@ -9,6 +9,7 @@ struct DownloadsView: View {
     @State private var previewURL: URL?
     @State private var deleting: DownloadItem?
     @State private var refreshing = Set<UUID>()
+    @State private var samples: [Double] = []
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "全部", active = "进行中", done = "已完成"
@@ -57,12 +58,13 @@ struct DownloadsView: View {
             }
             .swipeActions(edge: .leading) {
                 if item.status.isActive {
-                    Button { app.downloads.pause(item) } label: { Label("暂停", glyph: .pause) }.tint(.orange)
+                    Button { app.downloads.pause(item) } label: { Label("暂停", glyph: .pause) }.tint(Color.ink2)
                 } else if item.status == .paused || item.status == .failed {
-                    Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }.tint(.green)
+                    Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }.tint(Color.success)
                 }
             }
             .contextMenu { menu(item) }
+            .paperRow()
     }
 
     @ViewBuilder
@@ -79,30 +81,36 @@ struct DownloadsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Picker("筛选", selection: $filter) {
-                        ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                if !app.downloads.items.isEmpty {
+                    Section {
+                        SummaryCard(items: app.downloads.items, samples: samples)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(Color.clear)
+                        filterChips
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
+                            .listRowBackground(Color.clear)
                     }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
                 }
                 if items.isEmpty {
-                    ContentUnavailableView("没有下载任务", systemImage: "arrow.down.circle",
-                                           description: Text("在「解析」页粘贴链接，选择文件即可下载"))
+                    emptyState
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
-                ForEach(entries) { entry in
-                    switch entry {
-                    case .single(let item):
-                        row(item)
-                    case .group(let group, let members):
-                        DisclosureGroup {
-                            ForEach(members) { row($0) }
-                        } label: {
-                            GroupHeader(title: group.title, items: members)
+                Section {
+                    ForEach(entries) { entry in
+                        switch entry {
+                        case .single(let item):
+                            row(item)
+                        case .group(let group, let members):
+                            DisclosureGroup {
+                                ForEach(members) { row($0) }
+                            } label: {
+                                GroupHeader(title: group.title, items: members)
+                            }
+                            .contextMenu { groupMenu(members) }
+                            .paperRow()
                         }
-                        .contextMenu { groupMenu(members) }
                     }
                 }
             }
@@ -114,11 +122,13 @@ struct DownloadsView: View {
                         Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
                         Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
                         Button(role: .destructive) { app.downloads.clearFinished() } label: {
-                            Label("清除已完成记录", systemImage: "checkmark.circle.badge.xmark")
+                            Label("清除已完成记录", glyph: .trash)
                         }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                    } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
+                    .disabled(app.downloads.items.isEmpty)
                 }
             }
+            .task { await sampleSpeed() }
             .sheet(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
                 QuickLookPreview(url: item.url).ignoresSafeArea()
             }
@@ -131,6 +141,50 @@ struct DownloadsView: View {
                     Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
                 }
             }
+        }
+    }
+
+    private var filterChips: some View {
+        let all = app.downloads.items
+        let active = all.filter { $0.status != .completed }.count
+        return HStack(spacing: 8) {
+            FilterChip(title: "全部 \(all.count)", selected: filter == .all) { filter = .all }
+            FilterChip(title: "进行中 \(active)", selected: filter == .active) { filter = .active }
+            FilterChip(title: "已完成 \(all.count - active)", selected: filter == .done) { filter = .done }
+            Spacer(minLength: 0)
+        }
+        .sensoryFeedback(.selection, trigger: filter)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            IconView(.download, size: 28).foregroundStyle(Color.ink3)
+            Text(filter == .all ? "还没有下载" : (filter == .active ? "没有进行中的任务" : "还没有完成的任务"))
+                .font(.cardTitle)
+                .foregroundStyle(Color.ink)
+            if filter == .all {
+                Text("在「解析」页打开链接，点文件右侧的下载键即可").font(.footnote).foregroundStyle(Color.ink2)
+                Button("去解析") { app.selectedTab = .resolve }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                    .padding(.top, 4)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    /// 每秒记一次总速度，给速度曲线用；没有任务在下时清空
+    private func sampleSpeed() async {
+        while !Task.isCancelled {
+            let running = app.downloads.items.filter { $0.status == .running }
+            if running.isEmpty {
+                if !samples.isEmpty { samples = [] }
+            } else {
+                samples.append(running.reduce(0) { $0 + $1.speed })
+                if samples.count > 48 { samples.removeFirst(samples.count - 48) }
+            }
+            try? await Task.sleep(for: .seconds(1))
         }
     }
 
@@ -197,6 +251,107 @@ enum DownloadEntry: Identifiable {
     }
 }
 
+/// 顶部汇总：总速度、预计剩余时间、速度曲线、总进度
+private struct SummaryCard: View {
+    let items: [DownloadItem]
+    let samples: [Double]
+
+    var body: some View {
+        let active = items.filter { $0.status.isActive }
+        let speed = items.filter { $0.status == .running }.reduce(0) { $0 + $1.speed }
+        let total = active.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
+        let received = active.reduce(Int64(0)) { $0 + $1.receivedBytes }
+        let done = items.filter { $0.status == .completed }
+        VStack(alignment: .leading, spacing: 12) {
+            if active.isEmpty {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(items.contains { $0.status == .failed } ? "有任务未完成" : "全部完成")
+                        .font(.cardTitle)
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    Text("\(done.count) 个 · \(ByteFormat.string(done.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }))")
+                        .font(.mono)
+                        .foregroundStyle(Color.ink2)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(ByteFormat.speed(speed))
+                        .font(.serif(26, relativeTo: .title))
+                        .foregroundStyle(Color.ink)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: speed)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        let eta = speed > 0 && total > received ? Humanize.eta(Double(total - received) / speed) : ""
+                        Text(eta.isEmpty ? "\(active.count) 个进行中" : eta).font(.subheadline.weight(.medium)).foregroundStyle(Color.ink)
+                        if !eta.isEmpty { Text("\(active.count) 个进行中").font(.caption).foregroundStyle(Color.ink3) }
+                    }
+                }
+                Sparkline(values: samples)
+                    .frame(height: 40)
+                if total > 0 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressLine(value: Double(received) / Double(total))
+                        Text("\(ByteFormat.string(received)) / \(ByteFormat.string(total))").font(.monoSmall).foregroundStyle(Color.ink3)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .card()
+    }
+}
+
+/// 速度曲线：最近几十秒的总速度，填充一层淡色
+private struct Sparkline: View {
+    let values: [Double]
+
+    var body: some View {
+        GeometryReader { geo in
+            let peak = max(values.max() ?? 0, 1)
+            let points = values.enumerated().map { index, v in
+                CGPoint(x: values.count > 1 ? geo.size.width * CGFloat(index) / CGFloat(values.count - 1) : geo.size.width,
+                        y: geo.size.height * (1 - CGFloat(v / peak) * 0.9))
+            }
+            ZStack {
+                if points.count > 1 {
+                    Path { p in
+                        p.move(to: CGPoint(x: points[0].x, y: geo.size.height))
+                        points.forEach { p.addLine(to: $0) }
+                        p.addLine(to: CGPoint(x: points[points.count - 1].x, y: geo.size.height))
+                        p.closeSubpath()
+                    }
+                    .fill(LinearGradient(colors: [Color.accentColor.opacity(0.18), Color.accentColor.opacity(0)], startPoint: .top, endPoint: .bottom))
+                    Path { p in p.addLines(points) }
+                        .stroke(.tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                } else {
+                    Path { p in
+                        p.move(to: CGPoint(x: 0, y: geo.size.height - 1))
+                        p.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height - 1))
+                    }
+                    .stroke(Color.hairline, style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+                }
+            }
+            .animation(.easeOut(duration: 0.6), value: values)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+enum Humanize {
+    /// 剩余时间说成人话
+    static func eta(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "" }
+        if seconds < 10 { return "马上就好" }
+        if seconds < 60 { return "不到 1 分钟" }
+        if seconds < 3600 { return "还剩约 \(Int((seconds / 60).rounded())) 分钟" }
+        if seconds > 86400 * 2 { return "还要很久" }
+        let h = Int(seconds / 3600)
+        let m = Int((seconds - Double(h) * 3600) / 60)
+        return m > 0 ? "还剩约 \(h) 小时 \(m) 分" : "还剩约 \(h) 小时"
+    }
+}
+
 /// 分组标题：名称 + 完成数 + 合计进度
 private struct GroupHeader: View {
     let title: String
@@ -207,20 +362,20 @@ private struct GroupHeader: View {
         let failed = items.filter { $0.status == .failed }.count
         let total = items.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
         let received = items.reduce(Int64(0)) { $0 + ($1.status == .completed ? max(0, $1.totalBytes) : $1.receivedBytes) }
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "folder.fill").foregroundStyle(.tint)
-                Text(title).lineLimit(1)
-            }
-            HStack(spacing: 8) {
-                Text("\(done)/\(items.count) 已完成")
-                if failed > 0 { Text("\(failed) 个失败").foregroundStyle(.red) }
-                if total > 0 { Text(ByteFormat.string(total)) }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            if done < items.count {
-                ProgressView(value: total > 0 ? min(1, Double(received) / Double(total)) : Double(done) / Double(max(1, items.count)))
+        HStack(spacing: 12) {
+            FileIcon(name: title, isDirectory: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.subheadline.weight(.medium)).foregroundStyle(Color.ink).lineLimit(1)
+                if done < items.count {
+                    ProgressLine(value: total > 0 ? min(1, Double(received) / Double(total)) : Double(done) / Double(max(1, items.count)))
+                }
+                HStack(spacing: 8) {
+                    Text("\(done)/\(items.count) 已完成")
+                    if failed > 0 { Text("\(failed) 个失败").foregroundStyle(Color.clayInk) }
+                    if total > 0 { Text(ByteFormat.string(total)) }
+                }
+                .font(.monoSmall)
+                .foregroundStyle(Color.ink3)
             }
         }
         .padding(.vertical, 2)
@@ -238,16 +393,17 @@ struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            FileIcon(name: item.displayName, size: 40)
+            FileIcon(name: item.displayName)
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.displayName)
                     .lineLimit(2)
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.ink)
                 if item.status != .completed {
                     if let fraction = item.fraction {
-                        ProgressView(value: fraction).tint(tint)
+                        ProgressLine(value: fraction, tint: item.status == .paused ? Color.ink3 : (item.status == .failed ? Color.clayInk : nil))
                     } else if item.status == .running || item.status == .merging {
-                        ProgressView().progressViewStyle(.linear).tint(tint)
+                        ProgressLine(value: nil)
                     }
                 }
                 HStack(spacing: 6) {
@@ -257,57 +413,42 @@ struct DownloadRow: View {
                     Text(sizeText).monospacedDigit()
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ink3)
                 if item.status == .failed, let message = item.errorMessage {
-                    Text(message).font(.caption2).foregroundStyle(.red).lineLimit(3)
+                    Text(message).font(.caption2).foregroundStyle(Color.clayInk).lineLimit(3)
                 }
                 if let exported = item.exportedTo {
-                    Label("已移到：\(exported)", glyph: .folder).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    Label("已移到：\(exported)", glyph: .folder).font(.caption2).foregroundStyle(Color.ink3).lineLimit(2)
                 }
             }
-            statusIcon
+            DownloadStateControl(item: item, busy: refreshing || item.status == .merging) {}
         }
         .padding(.vertical, 4)
-    }
-
-    /// nil 表示沿用应用主题色
-    private var tint: Color? { item.status == .paused ? .orange : nil }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        if refreshing {
-            ProgressView()
-        } else {
-            switch item.status {
-            case .running, .queued: Image(systemName: "pause.circle").font(.title2).foregroundStyle(.secondary)
-            case .paused: Image(systemName: "play.circle").font(.title2).foregroundStyle(.tint)
-            case .failed: Image(systemName: "arrow.clockwise.circle").font(.title2).foregroundStyle(.red)
-            case .merging: ProgressView()
-            case .completed: Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green)
-            }
-        }
     }
 
     private var statusText: String {
         switch item.status {
         case .queued: return "排队中"
         case .running:
+            let eta = item.totalBytes > item.receivedBytes && item.speed > 0
+                ? " · " + Humanize.eta(Double(item.totalBytes - item.receivedBytes) / item.speed) : ""
             if item.backgrounded { return "后台下载中 " + ByteFormat.speed(item.speed) }
             if item.segmentsTotal > 0 { return "分片 \(item.segmentsDone)/\(item.segmentsTotal)" }
             if case .dash = item.request.kind { return (item.phase == 0 ? "视频轨 " : "音轨 ") + ByteFormat.speed(item.speed) }
-            return ByteFormat.speed(item.speed)
+            return ByteFormat.speed(item.speed) + eta
         case .paused: return "已暂停"
         case .merging: return "合并中"
         case .failed: return "失败"
-        case .completed: return item.finishedAt.map { $0.formatted(date: .numeric, time: .shortened) } ?? "已完成"
+        case .completed: return item.finishedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "已完成"
         }
     }
 
     private var statusColor: Color {
         switch item.status {
-        case .failed: return .red
-        case .paused: return .orange
-        default: return .secondary
+        case .failed: return Color.clayInk
+        case .paused: return Color.ink2
+        case .completed: return Color.ink3
+        default: return Color.ink2
         }
     }
 

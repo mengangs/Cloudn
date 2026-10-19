@@ -15,27 +15,30 @@ struct AuthExportView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    SecureField("口令", text: $passphrase)
-                    SecureField("再输一次", text: $confirm)
-                } footer: {
-                    Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
-                }
-                if let error { Section { Text(error).foregroundStyle(.red) } }
-                if let file {
+                Group {
                     Section {
-                        ShareLink(item: file) { Label("分享 / 存储到文件", glyph: .share) }
+                        SecureField("口令", text: $passphrase)
+                        SecureField("再输一次", text: $confirm)
                     } footer: {
-                        Text(file.lastPathComponent)
+                        Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
                     }
-                } else {
-                    Section {
-                        Button("生成备份文件") { generate() }
-                            .disabled(passphrase.count < 6 || passphrase != confirm || app.accounts.accounts.isEmpty)
-                    } footer: {
-                        Text("口令至少 6 位")
+                    if let error { Section { Text(error).foregroundStyle(Color.clayInk) } }
+                    if let file {
+                        Section {
+                            ShareLink(item: file) { Label("分享 / 存储到文件", glyph: .share) }
+                        } footer: {
+                            Text(file.lastPathComponent)
+                        }
+                    } else {
+                        Section {
+                            Button("生成备份文件") { generate() }
+                                .disabled(passphrase.count < 6 || passphrase != confirm || app.accounts.accounts.isEmpty)
+                        } footer: {
+                            Text("口令至少 6 位")
+                        }
                     }
                 }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("导出登录凭据")
@@ -67,16 +70,19 @@ struct AuthImportView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    SecureField("备份时设置的口令", text: $passphrase)
-                } footer: {
-                    Text("导入后会覆盖本机同平台的已登录账号。")
+                Group {
+                    Section {
+                        SecureField("备份时设置的口令", text: $passphrase)
+                    } footer: {
+                        Text("导入后会覆盖本机同平台的已登录账号。")
+                    }
+                    if let error { Section { Text(error).foregroundStyle(Color.clayInk) } }
+                    Section {
+                        Button(working ? "正在导入…" : "导入") { Task { await restore() } }
+                            .disabled(passphrase.isEmpty || working)
+                    }
                 }
-                if let error { Section { Text(error).foregroundStyle(.red) } }
-                Section {
-                    Button(working ? "正在导入…" : "导入") { Task { await restore() } }
-                        .disabled(passphrase.isEmpty || working)
-                }
+                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("导入登录凭据")
