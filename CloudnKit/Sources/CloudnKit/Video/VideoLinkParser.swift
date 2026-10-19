@@ -61,11 +61,13 @@ public enum VideoLinkParser {
 public enum DetectedInput: Sendable, Equatable {
     case share(ParsedShare)
     case video(DetectedVideoLink)
+    case github(GitHubLink)
     case direct(String)
 
     public static func detect(_ text: String) -> DetectedInput? {
         if let v = VideoLinkParser.parse(text) { return .video(v) }
         if let s = ShareLinkParser.parse(text) { return .share(s) }
+        if let g = GitHubLink.parse(text) { return .github(g) }
         if let url = ShareLinkParser.firstURL(in: text), let u = URL(string: url), u.host != nil {
             return .direct(url)
         }

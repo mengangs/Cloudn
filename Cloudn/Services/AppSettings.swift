@@ -55,6 +55,16 @@ final class AppSettings {
     var allowCommandService: Bool {
         didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
     }
+    /// GitHub 下载镜像前缀（空串表示直连 GitHub）
+    var githubMirror: String {
+        didSet { defaults.set(githubMirror, forKey: "githubMirror") }
+    }
+    /// GitHub Token（存钥匙串；只用于提高接口限额 / 访问自己的私有仓库）
+    var githubToken: String {
+        didSet {
+            if githubToken.isEmpty { Keychain.delete("github.token") } else { Keychain.write("github.token", Data(githubToken.utf8)) }
+        }
+    }
     /// 主题色（十六进制 RRGGBB，空串为默认蓝）
     var accentHex: String {
         didSet { defaults.set(accentHex, forKey: "accentHex") }
@@ -112,6 +122,8 @@ final class AppSettings {
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         allowCommandService = defaults.bool(forKey: "allowCommandService")
         accentHex = defaults.string(forKey: "accentHex") ?? ""
+        githubMirror = defaults.string(forKey: "githubMirror") ?? ""
+        githubToken = Keychain.read("github.token").map { String(decoding: $0, as: UTF8.self) } ?? ""
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")

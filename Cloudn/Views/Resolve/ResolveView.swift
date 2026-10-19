@@ -16,6 +16,7 @@ struct ResolveView: View {
 
     private var detected: DetectedInput? { DetectedInput.detect(input) }
     @State private var askingCommandConsent = false
+    @State private var githubLink: GitHubLink?
     /// 识别不出链接、但像迅雷中文口令
     private var isXunleiKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
     /// 识别不出链接、但可能是网盘口令（迅雷口令，或要问第三方的夸克 / UC 口令）
@@ -47,6 +48,13 @@ struct ResolveView: View {
             }
             .navigationDestination(item: $videoResult) { result in
                 VideoResultView(result: result)
+            }
+            .navigationDestination(item: $githubLink) { link in
+                switch link {
+                case .account(let owner): GitHubAccountView(owner: owner)
+                case .repository(let owner, let repo, let sub): GitHubRepoView(owner: owner, repo: repo, subPath: sub)
+                case .file: EmptyView()
+                }
             }
             .alert("使用第三方服务解析口令？", isPresented: $askingCommandConsent) {
                 Button("取消", role: .cancel) {}
@@ -167,6 +175,7 @@ struct ResolveView: View {
 
     private var buttonTitle: String {
         if case .direct = detected { return "添加到下载" }
+        if case .github(.file) = detected { return "添加到下载" }
         return "开始解析"
     }
 
@@ -306,6 +315,14 @@ struct ResolveView: View {
                     app.show(error.localizedDescription, error: true)
                 }
             }
+        case .github(let link):
+            if case .file(let url, let name) = link {
+                app.downloadGitHubFile(url: url, name: name)
+                input = ""
+            } else {
+                app.bookmarks.record(title: input.trimmingCharacters(in: .whitespacesAndNewlines), text: input, source: "GitHub")
+                githubLink = link
+            }
         case .direct(let url):
             let name = URL(string: url).map { u -> String in
                 let last = u.lastPathComponent.removingPercentEncoding ?? u.lastPathComponent
@@ -381,6 +398,8 @@ private struct DetectionChip: View {
         switch detected {
         case .share(let s): return (s.platform.symbol, s.platform.displayName)
         case .video(let v): return (v.platform.symbol, v.platform.displayName)
+        case .github(.file): return ("arrow.down.circle", "GitHub 文件")
+        case .github: return ("chevron.left.forwardslash.chevron.right", "GitHub")
         case .direct: return ("arrow.down.circle", "下载直链")
         }
     }

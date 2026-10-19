@@ -86,6 +86,14 @@ struct SettingsView: View {
                     Text("从 GitHub Releases（\(UpdateChecker.repository)）读取最新版本，每天最多自动检查一次。")
                 }
 
+                Section {
+                    NavigationLink("GitHub Token 与下载镜像") { GitHubSettingsView() }
+                } header: {
+                    Text("GitHub")
+                } footer: {
+                    Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。")
+                }
+
                 Section("诊断") {
                     if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
                         ShareLink(item: log) { Label("导出诊断日志", systemImage: "square.and.arrow.up") }
