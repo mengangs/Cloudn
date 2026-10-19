@@ -51,7 +51,7 @@ final class PasswordLoginTests: XCTestCase {
     }
 
     func testXunleiAppCredential() throws {
-        let cred = XunleiCredential(accessToken: "a.b.c", refreshToken: "r", deviceId: "d", source: "app")
+        let cred = XunleiCredential(accessToken: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJlLXZhbHVl", refreshToken: "a1.refresh-token-0123456789abcdef", deviceId: "d", source: "app")
         XCTAssertEqual(XunleiCredential.parse(cred.serialized)?.source, "app")
         let device = XunleiLogin.Device(id: String(repeating: "0", count: 32), peer: "p")
         XCTAssertTrue(device.sign.hasPrefix("div101." + device.id))

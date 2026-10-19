@@ -175,12 +175,10 @@ final class DrivePlatformTests: XCTestCase {
 final class SaveToDriveTests: XCTestCase {
     func testSaversRegistered() {
         let resolvers = ShareResolvers(credentials: NoCredentials())
-        for p in [SharePlatform.quark, .uc, .baidu, .xunlei, .pan115, .pan123, .c139] {
+        for p in [SharePlatform.quark, .uc, .baidu, .xunlei, .pan115, .pan123, .c139, .ilanzou, .guangya] {
             XCTAssertNotNil(resolvers.saver(for: p), "\(p) 应支持转存")
         }
-        for p in [SharePlatform.lanzou, .ilanzou, .guangya] {
-            XCTAssertNil(resolvers.saver(for: p))
-        }
+        XCTAssertNil(resolvers.saver(for: .lanzou))
         XCTAssertEqual(resolvers.saver(for: .baidu)?.rootFolderId, "/")
         XCTAssertEqual(resolvers.saver(for: .c139)?.rootFolderId, "/")
         XCTAssertEqual(resolvers.saver(for: .xunlei)?.rootFolderId, "")
