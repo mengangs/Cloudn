@@ -6,6 +6,8 @@ import UIKit
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @State private var cacheCleared = false
+    @State private var pickingFolder = false
+    @State private var logCleared = false
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -18,6 +20,13 @@ struct SettingsView: View {
                     Stepper(value: $settings.connectionsPerTask, in: 1...16) {
                         LabeledContent("单任务连接数", value: "\(settings.connectionsPerTask)")
                     }
+                    Stepper(value: $settings.retryCount, in: 0...10) {
+                        LabeledContent("失败自动重试", value: "\(settings.retryCount) 次")
+                    }
+                    Picker("下载限速", selection: $settings.speedLimitKB) {
+                        ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    NavigationLink("按平台设置连接数") { PlatformConnectionsView() }
                     Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
                     Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
                 } header: {
@@ -26,8 +35,36 @@ struct SettingsView: View {
                     Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。切到后台后普通文件由系统继续下载，m3u8 与分轨视频会在回到前台时继续。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
                 }
 
-                Section("解析") {
+                Section {
                     Toggle("回到应用时提示剪贴板链接", isOn: $settings.clipboardHint)
+                    Toggle("免转存下载（夸克 / UC）", isOn: $settings.directFirst)
+                } header: {
+                    Text("解析")
+                } footer: {
+                    Text("开启时先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。")
+                }
+
+                Section {
+                    LabeledContent("完成后保存到", value: app.settings.exportFolder?.lastPathComponent ?? "应用下载目录")
+                    Button("选择文件夹…") { pickingFolder = true }
+                    if app.settings.exportFolderBookmark != nil {
+                        Button("恢复为应用下载目录", role: .destructive) { app.settings.setExportFolder(nil) }
+                    }
+                } header: {
+                    Text("下载位置")
+                } footer: {
+                    Text("选择「文件」App 里的文件夹（如 iCloud 云盘）后，下载完成的文件会移动过去，并保留文件夹层级。")
+                }
+
+                Section("诊断") {
+                    if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
+                        ShareLink(item: log) { Label("导出诊断日志", systemImage: "square.and.arrow.up") }
+                    }
+                    Button(logCleared ? "已清空日志" : "清空日志") {
+                        Log.clear()
+                        logCleared = true
+                    }
+                    .disabled(logCleared)
                 }
 
                 Section("存储") {
@@ -49,6 +86,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
+            .sheet(isPresented: $pickingFolder) {
+                FolderPicker { app.settings.setExportFolder($0) }
+            }
         }
     }
 }

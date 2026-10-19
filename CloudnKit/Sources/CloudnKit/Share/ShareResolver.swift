@@ -40,16 +40,32 @@ extension SharePlatform {
     var loginRequired: CloudnError { CloudnError("请先到「账号」页登录\(displayName)") }
 }
 
+/// 运行时可调的解析选项（设置页修改后即时生效）
+public final class ResolverOptions: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _directFirst = true
+
+    public init() {}
+
+    /// 免转存下载：先用分享凭证直接取链，失败再临时转存；关闭后夸克 / UC 一律先转存再取链（个别分享更稳）
+    public var directFirst: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _directFirst }
+        set { lock.lock(); _directFirst = newValue; lock.unlock() }
+    }
+}
+
 /// 平台 → 解析器
 public final class ShareResolvers: Sendable {
     public let credentials: CredentialStore
+    public let options: ResolverOptions
     private let resolvers: [SharePlatform: ShareResolver]
 
-    public init(credentials: CredentialStore, client: HTTPClient = .shared) {
+    public init(credentials: CredentialStore, client: HTTPClient = .shared, options: ResolverOptions = ResolverOptions()) {
         self.credentials = credentials
+        self.options = options
         var map: [SharePlatform: ShareResolver] = [:]
-        map[.quark] = QuarkFamilyResolver(config: .quark, credentials: credentials, client: client)
-        map[.uc] = QuarkFamilyResolver(config: .uc, credentials: credentials, client: client)
+        map[.quark] = QuarkFamilyResolver(config: .quark, credentials: credentials, client: client, options: options)
+        map[.uc] = QuarkFamilyResolver(config: .uc, credentials: credentials, client: client, options: options)
         map[.lanzou] = LanzouResolver(client: client)
         map[.ilanzou] = ILanzouResolver(client: client)
         map[.pan123] = Pan123Resolver(credentials: credentials, client: client)

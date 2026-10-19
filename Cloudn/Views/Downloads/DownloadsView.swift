@@ -260,6 +260,9 @@ struct DownloadRow: View {
                 if item.status == .failed, let message = item.errorMessage {
                     Text(message).font(.caption2).foregroundStyle(.red).lineLimit(3)
                 }
+                if let exported = item.exportedTo {
+                    Label("已移到：\(exported)", systemImage: "folder").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                }
             }
             statusIcon
         }

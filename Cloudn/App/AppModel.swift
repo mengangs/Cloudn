@@ -43,10 +43,11 @@ final class AppModel {
         let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         try? fm.createDirectory(at: support, withIntermediateDirectories: true)
 
+        Log.configure(file: support.appendingPathComponent("logs/cloudn.log"))
         settings = AppSettings()
         accounts = AccountStore()
         bookmarks = BookmarkStore(directory: support)
-        resolvers = ShareResolvers(credentials: accounts.vault)
+        resolvers = ShareResolvers(credentials: accounts.vault, options: settings.resolverOptions)
         videoService = VideoParseService(credentials: accounts.vault, webExtractor: HeadlessWebExtractor())
 
         let snapshot = settings.snapshot
@@ -77,15 +78,47 @@ final class AppModel {
 
     private func didFinish(_ item: DownloadItem) async {
         notify(title: "下载完成", body: item.displayName)
-        guard settings.autoSaveToPhotos, let url = downloads.engine.fileURL(for: item), MediaTools.canSaveToPhotos(url) else { return }
+        guard let url = downloads.engine.fileURL(for: item) else { return }
+        if settings.autoSaveToPhotos, MediaTools.canSaveToPhotos(url) {
+            do {
+                try await MediaTools.saveToPhotos(url)
+            } catch {
+                show(error.localizedDescription, error: true)
+            }
+        }
+        await exportIfNeeded(item, file: url)
+    }
+
+    /// 设置了「完成后移动到」时，把文件（保留子目录）移到所选文件夹
+    private func exportIfNeeded(_ item: DownloadItem, file: URL) async {
+        guard let folder = settings.exportFolder else { return }
+        let accessing = folder.startAccessingSecurityScopedResource()
+        defer { if accessing { folder.stopAccessingSecurityScopedResource() } }
+        let fm = FileManager.default
+        let sub = (item.outputPath as NSString?)?.deletingLastPathComponent ?? ""
+        let dir = sub.isEmpty ? folder : folder.appendingPathComponent(sub, isDirectory: true)
         do {
-            try await MediaTools.saveToPhotos(url)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var target = dir.appendingPathComponent(file.lastPathComponent)
+            var n = 1
+            let base = (file.lastPathComponent as NSString).deletingPathExtension
+            let ext = file.pathExtension
+            while fm.fileExists(atPath: target.path) {
+                target = dir.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
+                n += 1
+            }
+            // 跨卷（如 iCloud 云盘）不能直接 move，先复制再删
+            try fm.copyItem(at: file, to: target)
+            try? fm.removeItem(at: file)
+            let location = folder.lastPathComponent + (sub.isEmpty ? "" : "/" + sub) + "/" + target.lastPathComponent
+            await downloads.engine.markExported(item.id, to: location)
         } catch {
-            show(error.localizedDescription, error: true)
+            show("移动到所选文件夹失败：\(error.localizedDescription)", error: true)
         }
     }
 
     func show(_ message: String, error: Bool = false) {
+        if error { Log.error(message) }
         toast = Toast(message: message, isError: error)
     }
 

@@ -26,7 +26,8 @@ public actor DownloadEngine {
     private var observers: [UUID: AsyncStream<[DownloadItem]>.Continuation] = [:]
     private var ticker: Task<Void, Never>?
     private var lastSave = Date.distantPast
-    private let streamer = StreamingSession()
+    private let limiter: RateLimiter
+    private let streamer: StreamingSession
     private let client: HTTPClient
 
     public init(baseDirectory: URL, downloadsDirectory: URL, client: HTTPClient = .shared,
@@ -36,6 +37,9 @@ public actor DownloadEngine {
         stateFile = baseDirectory.appendingPathComponent("downloads.json")
         self.settings = settings
         self.client = client
+        let limiter = RateLimiter()
+        self.limiter = limiter
+        streamer = StreamingSession(limiter: limiter)
         let fm = FileManager.default
         try? fm.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         try? fm.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
@@ -194,6 +198,7 @@ public actor DownloadEngine {
 
     private func start(_ id: UUID) {
         guard let i = index(id) else { return }
+        Log.info("开始下载：\(items[i].request.fileName)（\(items[i].request.source)）\(items[i].request.url)")
         items[i].status = .running
         let item = items[i]
         let box = progress[id] ?? TransferProgress(chunks: item.chunks, total: item.totalBytes)
@@ -219,27 +224,29 @@ public actor DownloadEngine {
         let dir = workDir(item.id)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let request = item.request
+        limiter.setLimit(config.speedLimit)
+        let connections = config.connections(for: request.source)
         switch request.kind {
         case .file:
             let target = dir.appendingPathComponent("data")
             try await RangeTransfer(url: request.url, headers: request.headers, destination: target, progress: box,
-                                    connections: config.connectionsPerTask, retryCount: config.retryCount, streamer: streamer).run()
+                                    connections: connections, retryCount: config.retryCount, streamer: streamer).run()
             return target
         case .hls:
             return try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),
-                                         progress: box, connections: config.connectionsPerTask, retryCount: config.retryCount,
-                                         client: client).run()
+                                         progress: box, connections: connections, retryCount: config.retryCount,
+                                         client: client, limiter: limiter).run()
         case .dash(let audioURL):
             let video = dir.appendingPathComponent("video.m4s")
             let audio = dir.appendingPathComponent("audio.m4s")
             if item.phase == 0 {
                 try await RangeTransfer(url: request.url, headers: request.headers, destination: video, progress: box,
-                                        connections: config.connectionsPerTask, retryCount: config.retryCount, streamer: streamer).run()
+                                        connections: connections, retryCount: config.retryCount, streamer: streamer).run()
                 await advancePhase(item.id, to: 1, box: box)
             }
             if await currentPhase(item.id) <= 1 {
                 try await RangeTransfer(url: audioURL, headers: request.headers, destination: audio, progress: box,
-                                        connections: config.connectionsPerTask, retryCount: config.retryCount, streamer: streamer).run()
+                                        connections: connections, retryCount: config.retryCount, streamer: streamer).run()
                 await advancePhase(item.id, to: 2, box: box)
             }
             guard let merger = await currentMerger() else { throw TransferError("当前平台不支持音视频合并") }
@@ -283,6 +290,7 @@ public actor DownloadEngine {
             syncProgress(i)
             leaveBackground(i)
             items[i].status = .completed
+            Log.info("下载完成：\(request.fileName)")
             items[i].finishedAt = Date()
             items[i].speed = 0
             let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value ?? items[i].receivedBytes
@@ -308,6 +316,7 @@ public actor DownloadEngine {
         items[i].status = .failed
         items[i].speed = 0
         items[i].errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        Log.error("下载失败：\(items[i].request.fileName)：\(items[i].errorMessage ?? "")（\(items[i].request.url)）")
         runners[id] = nil
         changed(force: true)
         if let onFailed {
@@ -356,7 +365,10 @@ public actor DownloadEngine {
             items[i].backgrounded = true
             items[i].speed = 0
         }
-        if !jobs.isEmpty { changed(force: true) }
+        if !jobs.isEmpty {
+            Log.info("交给后台会话：\(Set(jobs.map(\.itemId)).count) 个任务、\(jobs.count) 个分片")
+            changed(force: true)
+        }
         return jobs
     }
 
@@ -417,6 +429,7 @@ public actor DownloadEngine {
     /// 后台分片失败：任务退回前台引擎，从已写回数据文件的位置续传
     public func backgroundChunkFailed(itemId: UUID) {
         guard let i = index(itemId), items[i].backgrounded else { return }
+        Log.error("后台分片失败，退回前台：\(items[i].request.fileName)")
         leaveBackground(i)
         items[i].status = .queued
         changed(force: true)
@@ -428,6 +441,14 @@ public actor DownloadEngine {
         for item in items where item.backgrounded && !activeItemIds.contains(item.id) {
             backgroundChunkFailed(itemId: item.id)
         }
+    }
+
+    /// 完成的文件已被移到应用外的文件夹：记录去向，任务不再指向下载目录里的文件
+    public func markExported(_ id: UUID, to location: String) {
+        guard let i = index(id), items[i].status == .completed else { return }
+        items[i].outputPath = nil
+        items[i].exportedTo = location
+        changed(force: true)
     }
 
     /// 应用即将被挂起：暂停仍在前台下载的任务（m3u8 / 分轨等无法交给后台会话的），返回它们的 id 供回到前台时继续
@@ -491,6 +512,8 @@ public actor DownloadEngine {
     /// 刷新进度与速度；没有活动任务时停止计时器
     private func tick() -> Bool {
         let now = Date()
+        // 限速改动对进行中的任务即时生效
+        limiter.setLimit(settings().speedLimit)
         var active = false
         for i in items.indices where items[i].status == .running || items[i].status == .merging {
             active = true

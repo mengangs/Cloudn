@@ -1,0 +1,43 @@
+import XCTest
+@testable import CloudnKit
+
+final class DownloadSettingsTests: XCTestCase {
+    func testRateLimiter() {
+        let limiter = RateLimiter()
+        let now = Date()
+        XCTAssertEqual(limiter.reserve(1_000_000, now: now), 0)   // 不限速
+        limiter.setLimit(1000)
+        // 1000 B/s：先预约 500 字节需等 0.5 秒，再预约 500 字节累计到 1 秒
+        XCTAssertEqual(limiter.reserve(500, now: now), 0.5, accuracy: 0.01)
+        XCTAssertEqual(limiter.reserve(500, now: now), 1.0, accuracy: 0.01)
+        // 空闲很久之后不攒额度：最多只抵扣 1 秒
+        XCTAssertEqual(limiter.reserve(1000, now: now.addingTimeInterval(100)), 0, accuracy: 0.01)
+        XCTAssertEqual(limiter.reserve(1000, now: now.addingTimeInterval(100)), 1, accuracy: 0.01)
+    }
+
+    func testConnectionsBySource() {
+        let s = DownloadSettings(connectionsPerTask: 8, connectionsBySource: ["百度网盘": 2])
+        XCTAssertEqual(s.connections(for: "百度网盘"), 2)
+        XCTAssertEqual(s.connections(for: "夸克网盘"), 8)
+    }
+
+    func testResolverOptions() {
+        let options = ResolverOptions()
+        XCTAssertTrue(options.directFirst)
+        options.directFirst = false
+        XCTAssertFalse(ShareResolvers(credentials: NoCredentials(), options: options).options.directFirst)
+    }
+
+    func testLogRedactsQuery() {
+        XCTAssertEqual(Log.redact("开始下载 https://cdn.x.com/a/b.mp4?sign=SECRET&t=1 结束"), "开始下载 https://cdn.x.com/a/b.mp4?… 结束")
+        XCTAssertEqual(Log.redact("没有链接"), "没有链接")
+    }
+
+    func testOldItemDecodesWithoutNewFields() throws {
+        let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","request":{"url":"https://a","headers":{},"fileName":"a","folder":"","kind":{"file":{}},"expectedSize":-1,"source":"x"},"status":"completed","totalBytes":1,"receivedBytes":1,"createdAt":0,"chunks":[],"phase":0,"segmentsDone":0,"segmentsTotal":0}"#
+        let item = try JSONDecoder().decode(DownloadItem.self, from: Data(json.utf8))
+        XCTAssertFalse(item.backgrounded)
+        XCTAssertNil(item.exportedTo)
+        XCTAssertNil(item.request.group)
+    }
+}

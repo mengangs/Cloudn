@@ -124,12 +124,14 @@ public struct DownloadItem: Codable, Identifiable, Sendable, Hashable {
     public var segmentsTotal: Int
     /// 剩余分片已交给系统后台下载会话（状态仍为 running）
     public var backgrounded: Bool = false
+    /// 完成后已移动到用户选择的文件夹（展示用的位置描述）；此时 outputPath 为空
+    public var exportedTo: String?
     /// 瞬时速度（不落盘）
     public var speed: Double = 0
 
     enum CodingKeys: String, CodingKey {
         case id, request, status, totalBytes, receivedBytes, errorMessage, createdAt, finishedAt, outputPath, chunks, phase, segmentsDone, segmentsTotal
-        case backgrounded
+        case backgrounded, exportedTo
     }
 
     /// 兼容旧版任务表：新增字段缺失时取默认值
@@ -149,6 +151,7 @@ public struct DownloadItem: Codable, Identifiable, Sendable, Hashable {
         segmentsDone = try c.decodeIfPresent(Int.self, forKey: .segmentsDone) ?? 0
         segmentsTotal = try c.decodeIfPresent(Int.self, forKey: .segmentsTotal) ?? 0
         backgrounded = try c.decodeIfPresent(Bool.self, forKey: .backgrounded) ?? false
+        exportedTo = try c.decodeIfPresent(String.self, forKey: .exportedTo)
     }
 
     init(request: DownloadRequest) {
@@ -181,11 +184,22 @@ public struct DownloadSettings: Sendable {
     public var maxConcurrentTasks: Int
     public var connectionsPerTask: Int
     public var retryCount: Int
+    /// 全局限速（字节 / 秒），0 表示不限
+    public var speedLimit: Int64
+    /// 按来源（DownloadRequest.source，即平台显示名）覆盖单任务连接数
+    public var connectionsBySource: [String: Int]
 
-    public init(maxConcurrentTasks: Int = 3, connectionsPerTask: Int = 8, retryCount: Int = 3) {
+    public init(maxConcurrentTasks: Int = 3, connectionsPerTask: Int = 8, retryCount: Int = 3,
+                speedLimit: Int64 = 0, connectionsBySource: [String: Int] = [:]) {
         self.maxConcurrentTasks = maxConcurrentTasks
         self.connectionsPerTask = connectionsPerTask
         self.retryCount = retryCount
+        self.speedLimit = speedLimit
+        self.connectionsBySource = connectionsBySource
+    }
+
+    public func connections(for source: String) -> Int {
+        max(1, connectionsBySource[source] ?? connectionsPerTask)
     }
 }
 

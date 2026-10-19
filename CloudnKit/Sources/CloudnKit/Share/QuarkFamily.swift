@@ -96,10 +96,14 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
     public var platform: SharePlatform { config.platform }
     public var supportsGuestDownload: Bool { true }
 
-    public init(config: QuarkFamilyConfig, credentials: CredentialStore, client: HTTPClient = .shared) {
+    private let options: ResolverOptions
+
+    public init(config: QuarkFamilyConfig, credentials: CredentialStore, client: HTTPClient = .shared,
+                options: ResolverOptions = ResolverOptions()) {
         self.config = config
         self.credentials = credentials
         self.client = client
+        self.options = options
     }
 
     private func url(_ path: String, _ extra: String = "") -> String {
@@ -183,6 +187,9 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
            let preview = try? await ucVideoPreview(session, file: file, cookie: cookie) {
             // UC 非会员下载视频会被换成宣传片；分享态 video_preview 给的是原画直链
             return preview
+        }
+        if !options.directFirst && config.transferFallback {
+            return try await transferAndLink(session, file: file, cookie: cookie)
         }
         do {
             return try await shareLinkWithoutSave(session, file: file, cookie: cookie)

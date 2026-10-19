@@ -96,6 +96,7 @@ struct HLSTransfer {
     let connections: Int
     let retryCount: Int
     let client: HTTPClient
+    var limiter: RateLimiter?
 
     /// 返回拼接后的文件
     func run() async throws -> URL {
@@ -167,6 +168,7 @@ struct HLSTransfer {
             do {
                 let r = try await client.send(HTTPRequest(url: segment.url, headers: headers.sortedPairs, timeout: 60))
                 guard r.isSuccess else { throw TransferError(RangeTransfer.statusMessage(r.status)) }
+                try await limiter?.throttleAsync(r.body.count)
                 var data = r.body
                 if let key = segment.key {
                     guard key.method == "AES-128", let k = keys[key.uri] else { throw TransferError("不支持的加密方式 \(key.method)") }
