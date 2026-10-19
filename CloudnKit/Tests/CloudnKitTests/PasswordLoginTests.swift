@@ -92,3 +92,19 @@ final class DeviceFingerprintTests: XCTestCase {
         XCTAssertEqual(GuangYaLogin.newDevice().sign, GuangYaLogin.newDevice().sign)
     }
 }
+
+final class XunleiVerifyTests: XCTestCase {
+    func testPolicyAndURL() {
+        XCTAssertTrue(LoginVerificationPolicy.isTrustedPage("https://i.xunlei.com/xluser/validate/v2/review.html?a=1"))
+        XCTAssertTrue(LoginVerificationPolicy.isTrustedPage("https://xunlei.com/"))
+        XCTAssertFalse(LoginVerificationPolicy.isTrustedPage("http://i.xunlei.com/x"))
+        XCTAssertFalse(LoginVerificationPolicy.isTrustedPage("https://evilxunlei.com/x"))
+        XCTAssertTrue(LoginVerificationPolicy.isCallback("xlaccsdk01://xunlei.com/callback?state=harbor"))
+        XCTAssertFalse(LoginVerificationPolicy.isCallback("https://xunlei.com/callback"))
+        XCTAssertEqual(XunleiLogin.verifyURL("https://i.xunlei.com/r?a=1", deviceId: "abc"), "https://i.xunlei.com/r?a=1&deviceid=abc")
+        XCTAssertEqual(XunleiLogin.verifyURL("https://i.xunlei.com/r", deviceId: "abc"), "https://i.xunlei.com/r?deviceid=abc")
+        let script = XunleiLogin.verifyInitScript(deviceId: "dev\"1")
+        XCTAssertTrue(script.contains("IFRAME_BOX_ID:'captch-wrap'"))
+        XCTAssertTrue(script.contains(#""dev\"1""#))
+    }
+}

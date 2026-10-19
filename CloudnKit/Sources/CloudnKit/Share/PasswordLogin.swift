@@ -16,6 +16,24 @@ public struct SMSChallenge: Sendable {
     }
 }
 
+/// 平台要求先在网页里完成一次安全验证（如迅雷新设备 review_panel）；验证通过后重新登录即可
+public struct LoginVerificationRequired: Error, LocalizedError, Sendable {
+    /// 验证页地址（已拼好所需参数）
+    public let url: String
+    /// 页面加载完后注入的初始化脚本
+    public let script: String
+    /// 加载验证页用的 UA
+    public let userAgent: String
+
+    public var errorDescription: String? { "需要完成安全验证" }
+}
+
+/// 应用内验证页的地址校验：只放行迅雷 https 页面，识别验证完成的回调
+public enum LoginVerificationPolicy {
+    public static func isTrustedPage(_ url: String?) -> Bool { XunleiLogin.isTrustedVerifyPage(url) }
+    public static func isCallback(_ url: String?) -> Bool { XunleiLogin.isVerifyCallback(url) }
+}
+
 /// 应用内登录：成功时返回要存进账号的凭据串（Cookie / 令牌 / 凭据 JSON）
 public protocol PasswordLogin: Sendable {
     var supportsPassword: Bool { get }
@@ -359,6 +377,12 @@ struct XunleiLogin: PasswordLogin {
         let ok = json["errorCode"].string == "0" || json["error"].string == "success"
         guard ok, case let session = json["sessionID"].string, !session.isEmpty else {
             if json["error"].string == "review_panel" || json["errorCode"].string == "1007" || !json["verifyType"].string.isEmpty {
+                // 有验证页就在应用内完成网页验证（设备随之受信任，再登录即可），否则只能改用短信
+                let review = json["reviewurl"].string
+                if Self.isTrustedVerifyPage(review) {
+                    throw LoginVerificationRequired(url: Self.verifyURL(review, deviceId: device.id),
+                                                    script: Self.verifyInitScript(deviceId: device.id), userAgent: XunleiResolver.appUA)
+                }
                 throw CloudnError("迅雷要求短信验证，请改用短信验证码登录")
             }
             throw CloudnError(json.string("errorDesc", "error_description").nilIfBlank ?? "迅雷登录失败，请检查账号密码")
@@ -389,6 +413,55 @@ struct XunleiLogin: PasswordLogin {
         guard !access.isEmpty else { throw CloudnError(tokens.string("error_description", "error").nilIfBlank ?? "迅雷换取令牌失败，请重试") }
         return XunleiCredential(accessToken: access, refreshToken: tokens.string("refresh_token", "refreshToken"),
                                 deviceId: device.id, captchaToken: captcha, source: "app").serialized
+    }
+
+    // MARK: 网页安全验证（参考 YunX 的 XunleiVerifyWebViewScreen / XunleiVerificationPolicy）
+
+    /// 只信任 https 的 xunlei.com 及其子域
+    static func isTrustedVerifyPage(_ url: String?) -> Bool {
+        guard let url, let u = URL(string: url), u.scheme?.lowercased() == "https", let host = u.host?.lowercased() else { return false }
+        return host == "xunlei.com" || host.hasSuffix(".xunlei.com")
+    }
+
+    /// 验证完成后页面跳转的回调地址
+    static func isVerifyCallback(_ url: String?) -> Bool {
+        guard let url, let u = URL(string: url) else { return false }
+        return u.scheme?.lowercased() == "xlaccsdk01" && u.host?.lowercased() == "xunlei.com" && u.path == "/callback"
+    }
+
+    /// 页面只从地址栏读 deviceid，必须拼进 URL，否则「获取验证码」报 deviceid 不能为空
+    static func verifyURL(_ review: String, deviceId: String) -> String {
+        guard !deviceId.isEmpty else { return review }
+        return review + (review.contains("?") ? "&" : "?") + "deviceid=" + deviceId.formEncoded
+    }
+
+    /// 初始化验证面板：补齐 App 环境变量；init 必须带非空 IFRAME_BOX_ID（否则调用不存在的 isMobileSDK 报错、页面空白）；
+    /// 验证成功经 XLJSWebViewBridge.onVerifyResult 回传
+    static func verifyInitScript(deviceId: String) -> String {
+        let pkg = OrderedJSON.string("ANDROID-" + XunleiResolver.appPackage).text
+        let cv = OrderedJSON.string(XunleiResolver.appClientVersion).text
+        let did = OrderedJSON.string(deviceId).text
+        return """
+        (function(){
+          try { window.env='android'; window.appid='40'; window.appName=\(pkg); window.clientVersion=\(cv);
+                window.deviceid=\(did); window.platformVersion='10'; window.event='login3'; } catch(e) {}
+          function fire(){
+            if (window.__xunleiInited) return true;
+            if (window.XlCaptcha && typeof window.XlCaptcha.init === 'function') {
+              try {
+                if (typeof window.XlCaptcha.isMobileSDK !== 'function') { window.XlCaptcha.isMobileSDK = function(){ return false; }; }
+                window.XlCaptcha.init({ appid:'40', appName:\(pkg), clientVersion:\(cv), deviceid:\(did), event:'login3',
+                  platformVersion:'10', IFRAME_BOX_ID:'captch-wrap',
+                  VERTIFYSUCCFUNC: function(res){ try { window.XLJSWebViewBridge.onVerifyResult(JSON.stringify(res || {})); } catch(e){} } });
+                window.__xunleiInited = true;
+                return true;
+              } catch(e) {}
+            }
+            return false;
+          }
+          if (!fire()) { var t = setInterval(function(){ if (fire()) { clearInterval(t); } }, 120); setTimeout(function(){ clearInterval(t); }, 10000); }
+        })();
+        """
     }
 
     private func post(_ path: String, _ body: [(String, OrderedJSON)], ua: String) async throws -> JSON {

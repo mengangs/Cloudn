@@ -22,6 +22,12 @@ struct PasswordLoginView: View {
     @State private var countdown = 0
     @State private var working = false
     @State private var error: String?
+    @State private var verification: VerificationItem?
+
+    struct VerificationItem: Identifiable {
+        let id = UUID()
+        let challenge: LoginVerificationRequired
+    }
 
     private var provider: PasswordLogin? { kind.passwordLogin }
 
@@ -82,6 +88,16 @@ struct PasswordLoginView: View {
                     }
                 }
             }
+            .sheet(item: $verification) { item in
+                LoginVerifyView(challenge: item.challenge) { ok in
+                    if ok {
+                        // 设备已通过验证：自动重新登录
+                        submit()
+                    } else {
+                        error = "未完成安全验证；也可以改用短信验证码登录"
+                    }
+                }
+            }
             .task(id: countdown > 0) {
                 while countdown > 0 {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -126,6 +142,8 @@ struct PasswordLoginView: View {
                 } else {
                     error = "登录成功，但凭据校验未通过，请稍后重试"
                 }
+            } catch let challenge as LoginVerificationRequired {
+                verification = VerificationItem(challenge: challenge)
             } catch {
                 self.error = error.localizedDescription
             }
