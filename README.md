@@ -23,6 +23,7 @@ Cloudn 是一款个人独立开发的 iOS 应用：粘贴网盘分享链接即�
 - **在线预览**：视频 / 音频在线播放（逐请求带 Referer / Cookie），图片缩放查看，下载完成的文件用 QuickLook 打开
 - **文件管理**：下载文件出现在「文件」App →「我的 iPhone」→ Cloudn，可分享、存入相册
 - **账号**：网页登录（独立的 WKWebView 会话，自动识别登录完成，Cookie 或网页本地存储里的令牌都能读取）或手动粘贴凭据；凭证只存钥匙串
+- **分享扩展**：在 Safari、微信等应用里「分享 → Cloudn」直接唤起解析
 - **收藏与历史**：常用分享一键打开；`cloudn://resolve?text=<链接>` 可从快捷指令等外部唤起解析
 
 光鸭云盘中「分享者未开放免登录下载」的分享暂不支持（需要光鸭账号转存）。
@@ -44,6 +45,7 @@ open Cloudn/Cloudn.xcodeproj
 
 ```
 Cloudn.xcodeproj        Xcode 工程（同步文件夹，新增文件无需手动加入工程）
+CloudnShare/            分享扩展（把链接交给主应用）
 Cloudn/                 SwiftUI 应用
   App/                  入口与全局状态（AppModel）
   Services/             钥匙串账号、设置、收藏、下载状态、隐藏 WebView、AVFoundation 合轨
