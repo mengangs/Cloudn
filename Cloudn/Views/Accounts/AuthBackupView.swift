@@ -19,7 +19,7 @@ struct AuthExportView: View {
                     SecureField("口令", text: $passphrase)
                     SecureField("再输一次", text: $confirm)
                 } footer: {
-                    Text("将导出 \(app.accounts.accounts.count) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
+                    Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
                 if let file {
@@ -45,7 +45,7 @@ struct AuthExportView: View {
 
     private func generate() {
         do {
-            let data = try AuthBackup.export(app.accounts.accounts, passphrase: passphrase)
+            let data = try AuthBackup.export(app.accounts.accounts, extras: app.accounts.extras, passphrase: passphrase)
             file = try AuthBackup.writeTemporaryFile(data)
             error = nil
         } catch {
@@ -89,9 +89,9 @@ struct AuthImportView: View {
         do {
             // PBKDF2 二十万轮，放到后台算
             let fileData = self.data, secret = self.passphrase
-            let accounts = try await Task.detached { try AuthBackup.decrypt(fileData, passphrase: secret) }.value
-            await app.accounts.restore(accounts)
-            app.show("已导入 \(accounts.count) 个账号")
+            let restored = try await Task.detached { try AuthBackup.decrypt(fileData, passphrase: secret) }.value
+            await app.accounts.restore(restored.accounts, extras: restored.extras)
+            app.show("已导入 \(restored.count) 个账号")
             dismiss()
         } catch {
             self.error = error.localizedDescription

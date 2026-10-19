@@ -20,6 +20,14 @@ enum AuthBackup {
     struct Payload: Codable {
         var exportedAt: Date
         var accounts: [String: Account]
+        /// 附加账号（多账号）；旧备份没有该字段
+        var extras: [String: [Account]]?
+    }
+
+    struct Restored {
+        var accounts: [AccountKind: Account]
+        var extras: [AccountKind: [Account]]
+        var count: Int { accounts.count + extras.values.reduce(0) { $0 + $1.count } }
     }
 
     enum Failure: LocalizedError {
@@ -34,9 +42,10 @@ enum AuthBackup {
         }
     }
 
-    static func export(_ accounts: [AccountKind: Account], passphrase: String) throws -> Data {
+    static func export(_ accounts: [AccountKind: Account], extras: [AccountKind: [Account]] = [:], passphrase: String) throws -> Data {
         guard !passphrase.isEmpty else { throw Failure.emptyPassphrase }
-        let payload = Payload(exportedAt: Date(), accounts: Dictionary(uniqueKeysWithValues: accounts.map { ($0.key.rawValue, $0.value) }))
+        let payload = Payload(exportedAt: Date(), accounts: Dictionary(uniqueKeysWithValues: accounts.map { ($0.key.rawValue, $0.value) }),
+                              extras: Dictionary(uniqueKeysWithValues: extras.map { ($0.key.rawValue, $0.value) }))
         let plain = try JSONEncoder().encode(payload)
         let salt = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         let key = try deriveKey(passphrase, salt: salt, iterations: iterations)
@@ -47,7 +56,7 @@ enum AuthBackup {
         return try encoder.encode(envelope)
     }
 
-    static func decrypt(_ data: Data, passphrase: String) throws -> [AccountKind: Account] {
+    static func decrypt(_ data: Data, passphrase: String) throws -> Restored {
         guard !passphrase.isEmpty else { throw Failure.emptyPassphrase }
         guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data), envelope.version == 1,
               let salt = Data(base64Encoded: envelope.salt), let combined = Data(base64Encoded: envelope.box),
@@ -55,9 +64,12 @@ enum AuthBackup {
         let key = try deriveKey(passphrase, salt: salt, iterations: envelope.iterations)
         guard let box = try? AES.GCM.SealedBox(combined: combined), let plain = try? AES.GCM.open(box, using: key),
               let payload = try? JSONDecoder().decode(Payload.self, from: plain) else { throw Failure.wrongPassphrase }
-        var result: [AccountKind: Account] = [:]
+        var result = Restored(accounts: [:], extras: [:])
         for (raw, account) in payload.accounts {
-            if let kind = AccountKind(rawValue: raw) { result[kind] = account }
+            if let kind = AccountKind(rawValue: raw) { result.accounts[kind] = account }
+        }
+        for (raw, list) in payload.extras ?? [:] {
+            if let kind = AccountKind(rawValue: raw), !list.isEmpty { result.extras[kind] = list }
         }
         return result
     }

@@ -7,6 +7,8 @@ struct AccountsView: View {
     @State private var loginKind: AccountKind?
     @State private var manualKind: AccountKind?
     @State private var passwordKind: AccountKind?
+    @State private var drivePlatform: SharePlatform?
+    @State private var listKind: AccountKind?
     @State private var logoutKind: AccountKind?
     @State private var exporting = false
     @State private var importing = false
@@ -64,6 +66,17 @@ struct AccountsView: View {
             .sheet(item: $passwordKind) { kind in
                 PasswordLoginView(kind: kind)
             }
+            .navigationDestination(item: $drivePlatform) { MyDriveView(platform: $0) }
+            .sheet(item: $listKind) { kind in
+                AccountListView(kind: kind) { add in
+                    listKind = nil
+                    // 等账号列表收起后再弹登录页（同一时刻只能展示一个 sheet）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        app.accounts.pendingAdd = add
+                        startLogin(add)
+                    }
+                }
+            }
             .confirmationDialog("退出登录？", isPresented: Binding(get: { logoutKind != nil }, set: { if !$0 { logoutKind = nil } }),
                                 titleVisibility: .visible, presenting: logoutKind) { kind in
                 Button("退出 \(kind.displayName)", role: .destructive) {
@@ -86,7 +99,8 @@ struct AccountsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(kind.displayName)
                 if let account {
-                    Text("已登录：\(account.nickname)").font(.caption).foregroundStyle(.green)
+                    let count = app.accounts.count(for: kind)
+                    Text("已登录：\(account.nickname)" + (count > 1 ? "（共 \(count) 个账号）" : "")).font(.caption).foregroundStyle(.green)
                 } else {
                     Text(kind.benefit).font(.caption).foregroundStyle(.secondary)
                 }
@@ -98,12 +112,17 @@ struct AccountsView: View {
                 } label: {
                     Text("登录")
                 } primaryAction: {
+                    app.accounts.pendingAdd = nil
                     startLogin(kind)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
             } else {
                 Menu {
+                    if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
+                        Button { drivePlatform = platform } label: { Label("我的网盘", systemImage: "externaldrive") }
+                    }
+                    Button { listKind = kind } label: { Label("账号管理 / 添加账号", systemImage: "person.2") }
                     Menu { loginOptions(kind) } label: { Label("重新登录", systemImage: "arrow.clockwise") }
                     Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
                 } label: {
@@ -117,14 +136,14 @@ struct AccountsView: View {
     @ViewBuilder
     private func loginOptions(_ kind: AccountKind) -> some View {
         if let provider = kind.passwordLogin {
-            Button { passwordKind = kind } label: {
+            Button { app.accounts.pendingAdd = nil; passwordKind = kind } label: {
                 Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", systemImage: "person.badge.key")
             }
         }
         if kind.supportsWebLogin {
-            Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+            Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
         }
-        Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+        Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
     }
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
@@ -187,4 +206,9 @@ struct ManualCookieView: View {
 struct ImportData: Identifiable {
     let id = UUID()
     let data: Data
+}
+
+extension AccountKind {
+    /// 对应的网盘平台（视频账号为 nil）
+    var drivePlatform: SharePlatform? { SharePlatform.allCases.first { $0.accountKind == self } }
 }

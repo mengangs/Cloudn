@@ -30,12 +30,12 @@ final class DownloadStore {
         Task { await engine.enqueue(request) }
     }
 
-    func enqueue(link: DownloadLink, platform: SharePlatform, folder: String, origin: ShareOrigin?, group: DownloadGroup? = nil) {
+    func enqueue(link: DownloadLink, platform: SharePlatform, folder: String, origin: ShareOrigin?, group: DownloadGroup? = nil, slot: Int = 0) {
         let kind: DownloadKind = link.url.contains(".m3u8") ? .hls : .file
         enqueue(DownloadRequest(
             url: link.url, headers: link.headers, fileName: link.fileName, folder: folder, kind: kind,
             expectedSize: link.size, source: platform.displayName,
-            cleanup: link.cleanupToken.map { CleanupToken(platform: platform.rawValue, token: $0) },
+            cleanup: link.cleanupToken.map { CleanupToken(platform: platform.rawValue, token: $0, slot: slot == 0 ? nil : slot) },
             origin: origin, group: group))
     }
 

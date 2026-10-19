@@ -123,17 +123,25 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     // MARK: 下载
 
-    func link(for file: ShareFile) async throws -> DownloadLink {
+    func link(for file: ShareFile, slot: Int = 0) async throws -> DownloadLink {
         guard let session, let resolver else { throw CloudnError("分享会话已失效，请重新解析") }
         busyFileIds.insert(file.fid)
         defer { busyFileIds.remove(file.fid) }
-        return try await resolver.downloadLink(session, file: file)
+        return try await AccountSlot.$current.withValue(slot) {
+            try await resolver.downloadLink(session, file: file)
+        }
     }
 
-    func download(_ file: ShareFile, folder: String = "", group: DownloadGroup? = nil) async throws {
-        let link = try await link(for: file)
+    func download(_ file: ShareFile, folder: String = "", group: DownloadGroup? = nil, slot: Int = 0) async throws {
+        let link = try await link(for: file, slot: slot)
         app.downloads.enqueue(link: link, platform: share.platform, folder: folder,
-                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file), group: group)
+                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: pwd, file: file), group: group, slot: slot)
+    }
+
+    /// 多账号下载：开启且该平台登录了多个账号时，批量下载按文件轮换账号
+    private var rotationCount: Int {
+        guard app.settings.multiAccountDownload, let kind = share.platform.accountKind else { return 1 }
+        return max(1, app.accounts.count(for: kind))
     }
 
     /// 下载所选：文件直接入队，文件夹递归展开并保留目录层级
@@ -178,9 +186,10 @@ final class ShareBrowserModel: Hashable, Identifiable {
         let group = queue.count > 1 ? DownloadGroup(title: groupTitle) : nil
         var failures = 0
         var lastError = ""
+        let rotation = rotationCount
         for (index, entry) in queue.enumerated() {
             do {
-                try await download(entry.0, folder: entry.1, group: group)
+                try await download(entry.0, folder: entry.1, group: group, slot: index % rotation)
             } catch {
                 failures += 1
                 lastError = error.localizedDescription

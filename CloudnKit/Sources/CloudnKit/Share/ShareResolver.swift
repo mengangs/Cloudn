@@ -8,6 +8,12 @@ public protocol CredentialStore: Sendable {
     func updateCookie(_ new: String, replacing old: String, for kind: AccountKind) async
 }
 
+/// 多账号：本次请求使用同平台的第几个账号（0 为主账号）。凭证源据此返回对应账号的凭据，
+/// 多账号下载时按文件轮换，让每个账号各自承担一部分取链 / 临时转存。
+public enum AccountSlot {
+    @TaskLocal public static var current: Int = 0
+}
+
 /// 单个网盘平台的分享解析流程：会话 → 列目录 → 取直链。
 public protocol ShareResolver: Sendable {
     var platform: SharePlatform { get }
@@ -81,4 +87,7 @@ public final class ShareResolvers: Sendable {
 
     /// 支持转存到自己网盘的平台才返回
     public func saver(for platform: SharePlatform) -> ShareSaver? { resolvers[platform] as? ShareSaver }
+
+    /// 支持「我的网盘」文件管理的平台才返回
+    public func manager(for platform: SharePlatform) -> DriveManager? { resolvers[platform] as? DriveManager }
 }

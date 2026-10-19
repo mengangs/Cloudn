@@ -2,6 +2,8 @@
 // 115 网盘分享解析：share/snap 列目录 → share/downurl 取直链；大文件网页端被拒（50029）时，
 // 登录态下转存到临时目录，再走「电脑端」加密接口 proapi.115.com/app/chrome/downurl 取链，下载完成后清理。
 // 协议细节参考 YunX（AGPL-3.0）的 Pan115Api / Pan115Crypto / Pan115ResolveRepository。
+// 我的网盘管理参考 YunX（AGPL-3.0）：files 列目录、files/add / batch_rename / move、rb/delete、
+// share/send + updateshare 创建分享、files/index_info 容量；直链先走电脑端接口，失败退回 files/download。
 import Foundation
 
 public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
@@ -24,7 +26,13 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
     private actor State {
         var clientVersion = "36.0.1"
         var versionFetched = false
+        /// 已确认过「公开分享」协议（user/allow_protocol）
+        var protocolAllowed = false
         func setVersion(_ v: String) { clientVersion = v }
+        func markProtocolAllowed() -> Bool {
+            defer { protocolAllowed = true }
+            return protocolAllowed
+        }
         func markFetched() -> Bool {
             defer { versionFetched = true }
             return versionFetched
@@ -174,18 +182,17 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
     }
 
     private func listPersonal(cid: String, cookie: String) async throws -> [ShareFile] {
-        let url = apiBase + "/files?aid=1&cid=\(cid.formEncoded)&o=user_ptime&asc=0&offset=0&show_dir=1&limit=\(Self.pageLimit)" +
+        try await personalPage(cid: cid, offset: 0, cookie: cookie).files
+    }
+
+    /// 个人盘一页（按上传时间倒序）：files 为解析后的条目，items 为原始条数（翻页用），total 为目录总数
+    private func personalPage(cid: String, offset: Int, cookie: String) async throws -> (files: [ShareFile], items: Int, total: Int) {
+        let url = apiBase + "/files?aid=1&cid=\(cid.formEncoded)&o=user_ptime&asc=0&offset=\(offset)&show_dir=1&limit=\(Self.pageLimit)" +
             "&snap=0&natsort=1&record_open_time=1&count_folders=1&format=json"
         let json = try await get(url, cookie: cookie)
         try Self.check(json, fallback: "获取文件列表失败")
-        // 文件夹没有 fid（自身 id 在 cid）；文件的 pc 是 pickcode
-        return json["data"].array.compactMap { item in
-            let fid = item["fid"].string
-            let isDir = fid.isEmpty
-            let id = isDir ? item["cid"].string : fid
-            guard !id.isEmpty else { return nil }
-            return ShareFile(fid: id, name: item["n"].string, size: isDir ? 0 : item["s"].int64, isDirectory: isDir, token: item["pc"].string)
-        }
+        let items = json["data"].array
+        return (Self.parsePersonalFiles(items), items.count, json["count"].int)
     }
 
     /// 个人网盘某目录下的子文件夹（offset 分页，文件夹排在前面，遇到文件即可停止）
@@ -206,11 +213,11 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
         return all
     }
 
-    private func createDir(_ name: String, parent: String, cookie: String) async throws -> String {
+    private func createDir(_ name: String, parent: String, cookie: String, fallback: String = "创建临时目录失败") async throws -> String {
         let json = try await post(apiBase + "/files/add", [("pid", parent), ("cname", name)], cookie: cookie)
-        try Self.check(json, fallback: "创建临时目录失败")
+        try Self.check(json, fallback: fallback)
         let cid = json["cid"].string.nilIfBlank ?? json["data"]["cid"].string
-        guard !cid.isEmpty else { throw CloudnError("创建临时目录失败") }
+        guard !cid.isEmpty else { throw CloudnError(fallback) }
         return cid
     }
 
@@ -285,6 +292,19 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
     static func decodeToken(_ token: String) -> (code: String, uid: String) {
         guard let i = token.firstIndex(of: "|") else { return (token, "") }
         return (String(token[..<i]), String(token[token.index(after: i)...]))
+    }
+
+    /// 个人盘列表：文件夹没有 fid（自身 id 在 cid、父目录在 pid）；文件的 cid 是父目录，pc 是 pickcode
+    static func parsePersonalFiles(_ items: [JSON]) -> [ShareFile] {
+        items.compactMap { item in
+            let fid = item["fid"].string
+            let isDir = fid.isEmpty
+            let id = isDir ? item["cid"].string : fid
+            guard !id.isEmpty else { return nil }
+            return ShareFile(fid: id, name: item["n"].string, size: isDir ? 0 : item["s"].int64, isDirectory: isDir,
+                             parentId: isDir ? item["pid"].string : item["cid"].string, token: item["pc"].string,
+                             modified: item["t"].string)
+        }
     }
 
     /// 分享列表：fc == 0 为目录（id 取 cid），否则为文件（id 取 fid）
@@ -449,5 +469,172 @@ extension Pan115Resolver: ShareSaver {
                                       cookie: cookie)
             try Self.check(json, fallback: "转存失败")
         }
+    }
+}
+
+// MARK: - 我的网盘
+
+extension Pan115Resolver: DriveManager {
+    public var driveRootId: String { "0" }
+
+    /// GET /files：offset 分页取全量（limit 有上限，必须循环拉）
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        let cookie = try await driveCookie()
+        let cid = folderId.nilIfBlank ?? "0"
+        var all: [ShareFile] = []
+        var offset = 0
+        while offset < 100_000 {
+            let page = try await personalPage(cid: cid, offset: offset, cookie: cookie)
+            all += page.files
+            offset += page.items
+            if page.items == 0 || page.items < Self.pageLimit || (page.total > 0 && offset >= page.total) { break }
+        }
+        return all
+    }
+
+    /// 先走电脑端加密接口（网页端对大文件一律 50028），失败再退回网页端 files/download
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹不能直接下载") }
+        let cookie = try await driveCookie()
+        guard !file.token.isEmpty else { throw CloudnError("缺少 pickcode，无法获取下载链接") }
+        await refreshClientVersion()
+        if let link = try? await appDownloadLink(pickCode: file.token, cookie: cookie) {
+            return DownloadLink(fileName: file.name, url: link.url, size: link.size > 0 ? link.size : file.size, headers: link.headers)
+        }
+        return try await webDownloadLink(file, cookie: cookie)
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        let cookie = try await driveCookie()
+        _ = try await createDir(name, parent: parentId.nilIfBlank ?? "0", cookie: cookie, fallback: "新建文件夹失败")
+    }
+
+    /// POST /files/batch_rename
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        let cookie = try await driveCookie()
+        let json = try await post(apiBase + "/files/batch_rename", Self.renameFields(id: file.fid, name: name), cookie: cookie)
+        try Self.check(json, fallback: "重命名失败")
+    }
+
+    /// POST /files/move（异步：响应含 move_proid 时轮询 files/move_progress）
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        let ids = files.map(\.fid).filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return }
+        let cookie = try await driveCookie()
+        let json = try await post(apiBase + "/files/move", Self.moveFields(ids: ids, to: folderId), cookie: cookie)
+        try Self.check(json, fallback: "移动失败")
+        let moveId = json["move_proid"].string.nilIfBlank ?? json["data"]["move_proid"].string
+        guard !moveId.isEmpty else { return }
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let progress = try? await get(apiBase + "/files/move_progress?move_proid=\(moveId.formEncoded)", cookie: cookie),
+                  Self.ok(progress), progress["data"].isObject else { return }
+            let data = progress["data"]
+            if data["percent"].double >= 100 || data["count"].int <= 0 { return }
+        }
+    }
+
+    /// POST /rb/delete（进回收站）：按父目录分组；errno=800007 需再确认一次
+    public func delete(_ files: [ShareFile]) async throws {
+        let cookie = try await driveCookie()
+        let groups = Dictionary(grouping: files.filter { !$0.fid.isEmpty }, by: { $0.parentId.nilIfBlank ?? "0" })
+        for (pid, items) in groups {
+            let fields = Self.deleteFields(ids: items.map(\.fid), pid: pid)
+            var json = try await post(apiBase + "/rb/delete", fields, cookie: cookie)
+            if Self.errorNo(json) == 800007 { json = try await post(apiBase + "/rb/delete", fields, cookie: cookie) }
+            try Self.check(json, fallback: "删除失败")
+        }
+    }
+
+    /// share/send 建分享（先确认分享协议、ignore_warn=0 预检）→ updateshare 设为长期（创建接口没有有效期字段，默认 15 天）
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        let cookie = try await driveCookie()
+        guard let userId = Self.userId(fromCookie: cookie) else { throw CloudnError("登录态缺少用户标识，请重新登录 115 网盘") }
+        let ids = files.map(\.fid).filter { !$0.isEmpty }
+        guard !ids.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        if !(await state.markProtocolAllowed()) {
+            _ = try? await post(apiBase + "/user/allow_protocol", [("action", "pubshare")], cookie: cookie)
+        }
+        let idText = ids.joined(separator: ",")
+        _ = try? await post(apiBase + "/share/send", [("user_id", userId), ("file_ids", idText), ("ignore_warn", "0")], cookie: cookie)
+        let json = try await post(apiBase + "/share/send", [("user_id", userId), ("file_ids", idText), ("ignore_warn", "1")], cookie: cookie)
+        try Self.check(json, fallback: "创建分享失败")
+        guard let link = Self.parseShareLink(json) else { throw CloudnError("创建分享失败：响应缺少分享编号") }
+        // 有效期改失败不影响已建好的分享（按服务端默认档位）
+        _ = try? await post(apiBase + "/share/updateshare", [("share_code", link.code), ("share_duration", "-1")], cookie: cookie)
+        return link.link
+    }
+
+    /// GET /files/index_info：data.space_info.all_total / all_use
+    public func quota() async -> DriveQuota? {
+        guard let cookie = await loginCookie(),
+              let json = try? await get(apiBase + "/files/index_info?count_space_nums=1", cookie: cookie), Self.ok(json) else { return nil }
+        return Self.parseQuota(json)
+    }
+
+    private func driveCookie() async throws -> String {
+        guard let cookie = await loginCookie() else { throw SharePlatform.pan115.loginRequired }
+        return cookie
+    }
+
+    /// 网页端直链 GET /files/download?pickcode=（大文件会 50028）；响应头下发的 CDN Cookie 下载时要带上
+    private func webDownloadLink(_ file: ShareFile, cookie: String) async throws -> DownloadLink {
+        let ua = await clientUA()
+        let url = apiBase + "/files/download?pickcode=\(file.token.formEncoded)"
+        let r = try await client.send(.get(url, headers: headers(cookie: cookie, referer: Self.referer, ua: ua)))
+        guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
+        try Self.check(json, fallback: "获取下载链接失败")
+        let data = json["data"]
+        let link = data["file_url"].string
+        guard !link.isEmpty else { throw CloudnError("115 未返回下载链接") }
+        let size = data["file_size"].int64
+        return DownloadLink(fileName: file.name, url: link, size: size > 0 ? size : file.size,
+                            headers: downloadHeaders(login: cookie, cdn: Self.cdnCookie(r.header("Set-Cookie")), ua: ua))
+    }
+
+    // MARK: 请求体 / 解析
+
+    static func errorNo(_ json: JSON) -> Int { json.has("errno") ? json["errno"].int : json["errNo"].int }
+
+    /// Cookie 里 UID 形如 "<user_id>_<…>"
+    static func userId(fromCookie cookie: String) -> String? {
+        CookieUtil.value(of: "UID", in: cookie)?.substringBefore("_").nilIfBlank
+    }
+
+    static func renameFields(id: String, name: String) -> [(String, String)] {
+        [("fid", id), ("file_name", name), ("files_new_name[\(id)]", name)]
+    }
+
+    static func moveFields(ids: [String], to pid: String) -> [(String, String)] {
+        var fields: [(String, String)] = [("pid", pid.nilIfBlank ?? "0")]
+        for (i, id) in ids.enumerated() { fields.append(("fid[\(i)]", id)) }
+        return fields
+    }
+
+    static func deleteFields(ids: [String], pid: String) -> [(String, String)] {
+        var fields: [(String, String)] = [("pid", pid.nilIfBlank ?? "0")]
+        for (i, id) in ids.enumerated() { fields.append(("fid[\(i)]", id)) }
+        fields.append(("ignore_warn", "1"))
+        return fields
+    }
+
+    /// share/send 的分享信息在 data 内层（顶层只有 state/errno），两层都读
+    static func parseShareLink(_ json: JSON) -> (code: String, link: DriveShareLink)? {
+        let data = json["data"]
+        func field(_ name: String) -> String { data[name].string.nilIfBlank ?? json[name].string }
+        let code = field("share_code")
+        guard !code.isEmpty else { return nil }
+        let url = field("share_url").nilIfBlank ?? "https://115cdn.com/s/\(code)"
+        let pwd = field("receive_code").nilIfBlank ?? field("sys_receive_code")
+        return (code, DriveShareLink(url: url, pwd: pwd))
+    }
+
+    static func parseQuota(_ json: JSON) -> DriveQuota? {
+        let space = json["data"]["space_info"]
+        guard space.isObject else { return nil }
+        let total = space["all_total"]["size"].int64
+        let used = space["all_use"]["size"].int64
+        guard total > 0 || used > 0 else { return nil }
+        return DriveQuota(used: used, total: total)
     }
 }

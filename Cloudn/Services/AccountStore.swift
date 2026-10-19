@@ -9,9 +9,11 @@ struct Account: Codable, Equatable {
     var updatedAt: Date
 }
 
-/// 解析器侧的凭证源：钥匙串为唯一真源，服务端续期 Cookie 时在这里回写
+/// 解析器侧的凭证源：钥匙串为唯一真源，服务端续期 Cookie 时在这里回写。
+/// 每个平台一个主账号（钥匙串键为平台名，兼容旧数据）+ 若干附加账号（键为「平台名.extra」）。
 actor AccountVault: CredentialStore {
     private var cache: [AccountKind: Account] = [:]
+    private var extras: [AccountKind: [Account]] = [:]
     private let onChange: @Sendable () -> Void
 
     init(onChange: @escaping @Sendable () -> Void) {
@@ -20,20 +22,38 @@ actor AccountVault: CredentialStore {
             if let data = Keychain.read(kind.rawValue), let account = try? JSONDecoder().decode(Account.self, from: data) {
                 cache[kind] = account
             }
+            if let data = Keychain.read(kind.rawValue + ".extra"), let list = try? JSONDecoder().decode([Account].self, from: data), !list.isEmpty {
+                extras[kind] = list
+            }
         }
     }
 
-    func cookie(for kind: AccountKind) async -> String? { cache[kind]?.cookie }
-
-    func updateCookie(_ new: String, replacing old: String, for kind: AccountKind) async {
-        guard var account = cache[kind], account.cookie == old else { return }
-        account.cookie = new
-        account.updatedAt = Date()
-        save(account, for: kind)
+    /// 默认返回主账号；多账号下载时按 AccountSlot 轮换
+    func cookie(for kind: AccountKind) async -> String? {
+        let slot = AccountSlot.current
+        let all = list(kind)
+        guard slot > 0, all.count > 1 else { return cache[kind]?.cookie }
+        return all[slot % all.count].cookie
     }
 
-    func account(for kind: AccountKind) -> Account? { cache[kind] }
+    func updateCookie(_ new: String, replacing old: String, for kind: AccountKind) async {
+        if var account = cache[kind], account.cookie == old {
+            account.cookie = new
+            account.updatedAt = Date()
+            save(account, for: kind)
+            return
+        }
+        guard var list = extras[kind], let i = list.firstIndex(where: { $0.cookie == old }) else { return }
+        list[i].cookie = new
+        list[i].updatedAt = Date()
+        saveExtras(list, for: kind)
+    }
+
     func all() -> [AccountKind: Account] { cache }
+    func allExtras() -> [AccountKind: [Account]] { extras }
+
+    /// 主账号在前
+    func list(_ kind: AccountKind) -> [Account] { (cache[kind].map { [$0] } ?? []) + (extras[kind] ?? []) }
 
     func save(_ account: Account, for kind: AccountKind) {
         cache[kind] = account
@@ -41,9 +61,59 @@ actor AccountVault: CredentialStore {
         onChange()
     }
 
+    func saveExtras(_ list: [Account], for kind: AccountKind) {
+        extras[kind] = list.isEmpty ? nil : list
+        if list.isEmpty {
+            Keychain.delete(kind.rawValue + ".extra")
+        } else if let data = try? JSONEncoder().encode(list) {
+            Keychain.write(kind.rawValue + ".extra", data)
+        }
+        onChange()
+    }
+
+    /// 添加账号：没有主账号时成为主账号；同一凭据或同名账号直接替换
+    func add(_ account: Account, for kind: AccountKind) {
+        guard let primary = cache[kind], primary.nickname != account.nickname, primary.cookie != account.cookie else {
+            save(account, for: kind)
+            return
+        }
+        var list = extras[kind] ?? []
+        if let i = list.firstIndex(where: { $0.nickname == account.nickname || $0.cookie == account.cookie }) {
+            list[i] = account
+        } else {
+            list.append(account)
+        }
+        saveExtras(list, for: kind)
+    }
+
+    /// 把第 index 个账号（按 list 顺序）设为主账号
+    func makePrimary(_ index: Int, for kind: AccountKind) {
+        var all = list(kind)
+        guard index > 0, index < all.count else { return }
+        let chosen = all.remove(at: index)
+        save(chosen, for: kind)
+        saveExtras(all, for: kind)
+    }
+
+    /// 移除第 index 个账号；移除主账号时由下一个顶上
+    func remove(_ index: Int, for kind: AccountKind) {
+        var all = list(kind)
+        guard index >= 0, index < all.count else { return }
+        all.remove(at: index)
+        if let first = all.first {
+            save(first, for: kind)
+            saveExtras(Array(all.dropFirst()), for: kind)
+        } else {
+            remove(kind)
+        }
+    }
+
+    /// 退出该平台全部账号
     func remove(_ kind: AccountKind) {
         cache[kind] = nil
+        extras[kind] = nil
         Keychain.delete(kind.rawValue)
+        Keychain.delete(kind.rawValue + ".extra")
         onChange()
     }
 }
@@ -52,8 +122,13 @@ actor AccountVault: CredentialStore {
 @MainActor
 @Observable
 final class AccountStore {
+    /// 各平台主账号
     private(set) var accounts: [AccountKind: Account] = [:]
+    /// 各平台附加账号
+    private(set) var extras: [AccountKind: [Account]] = [:]
     @ObservationIgnored private(set) var vault: AccountVault!
+    /// 正在为该平台「添加账号」：接下来这次登录作为附加账号保存
+    @ObservationIgnored var pendingAdd: AccountKind?
 
     init() {
         vault = AccountVault { [weak self] in
@@ -64,22 +139,46 @@ final class AccountStore {
 
     func reload() async {
         accounts = await vault.all()
+        extras = await vault.allExtras()
     }
 
     func isLoggedIn(_ kind: AccountKind) -> Bool { accounts[kind] != nil }
 
-    /// 校验 Cookie 后保存；返回昵称，无效返回 nil
-    func login(_ kind: AccountKind, cookie: String) async -> String? {
+    func count(for kind: AccountKind) -> Int { (accounts[kind] == nil ? 0 : 1) + (extras[kind]?.count ?? 0) }
+
+    /// 主账号在前
+    func list(_ kind: AccountKind) -> [Account] { (accounts[kind].map { [$0] } ?? []) + (extras[kind] ?? []) }
+
+    /// 校验 Cookie 后保存；返回昵称，无效返回 nil。adding 为 true 时作为附加账号加入（不替换主账号）
+    func login(_ kind: AccountKind, cookie: String, adding: Bool = false) async -> String? {
         let normalized = AccountValidator.normalize(kind, cookie)
         guard !normalized.isEmpty, let nickname = await AccountValidator.validate(kind, cookie: normalized) else { return nil }
-        await vault.save(Account(cookie: normalized, nickname: nickname, updatedAt: Date()), for: kind)
+        let account = Account(cookie: normalized, nickname: nickname, updatedAt: Date())
+        let adding = adding || pendingAdd == kind
+        pendingAdd = nil
+        if adding {
+            await vault.add(account, for: kind)
+        } else {
+            await vault.save(account, for: kind)
+        }
         await reload()
         return nickname
     }
 
     /// 从备份恢复：覆盖同平台的现有账号
-    func restore(_ restored: [AccountKind: Account]) async {
+    func restore(_ restored: [AccountKind: Account], extras restoredExtras: [AccountKind: [Account]] = [:]) async {
         for (kind, account) in restored { await vault.save(account, for: kind) }
+        for (kind, list) in restoredExtras { await vault.saveExtras(list, for: kind) }
+        await reload()
+    }
+
+    func makePrimary(_ index: Int, for kind: AccountKind) async {
+        await vault.makePrimary(index, for: kind)
+        await reload()
+    }
+
+    func remove(_ index: Int, for kind: AccountKind) async {
+        await vault.remove(index, for: kind)
         await reload()
     }
 

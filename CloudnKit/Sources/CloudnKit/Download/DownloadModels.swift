@@ -14,10 +14,13 @@ public enum DownloadKind: Codable, Sendable, Hashable {
 public struct CleanupToken: Codable, Sendable, Hashable {
     public let platform: String
     public let token: String
+    /// 产生该令牌的账号序号（多账号下载时清理要用同一个账号）；旧数据没有该字段
+    public let slot: Int?
 
-    public init(platform: String, token: String) {
+    public init(platform: String, token: String, slot: Int? = nil) {
         self.platform = platform
         self.token = token
+        self.slot = slot
     }
 }
 

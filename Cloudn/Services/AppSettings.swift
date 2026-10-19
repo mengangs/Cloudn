@@ -46,6 +46,10 @@ final class AppSettings {
     var notifyOnFinish: Bool {
         didSet { defaults.set(notifyOnFinish, forKey: "notifyOnFinish") }
     }
+    /// 多账号下载：批量下载时按文件轮换使用同平台的多个账号
+    var multiAccountDownload: Bool {
+        didSet { defaults.set(multiAccountDownload, forKey: "multiAccountDownload") }
+    }
     /// 外观：跟随系统 / 浅色 / 深色
     var appearance: Appearance {
         didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
@@ -92,6 +96,7 @@ final class AppSettings {
         autoSaveToPhotos = defaults.bool(forKey: "autoSaveToPhotos")
         notifyOnFinish = defaults.bool(forKey: "notifyOnFinish")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
+        multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date

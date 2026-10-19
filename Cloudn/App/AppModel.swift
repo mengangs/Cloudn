@@ -62,7 +62,9 @@ final class AppModel {
         let onFinished: @Sendable (DownloadItem) async -> Void = { [weak self] item in
             // 夸克兜底转存产生的临时目录：下载完成后删除
             if let cleanup = item.request.cleanup, let platform = SharePlatform(rawValue: cleanup.platform) {
-                await resolvers.resolver(for: platform)?.cleanup(token: cleanup.token)
+                await AccountSlot.$current.withValue(cleanup.slot ?? 0) {
+                    await resolvers.resolver(for: platform)?.cleanup(token: cleanup.token)
+                }
             }
             await self?.didFinish(item)
         }
