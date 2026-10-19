@@ -15,6 +15,8 @@ struct ResolveView: View {
     @FocusState private var focused: Bool
 
     private var detected: DetectedInput? { DetectedInput.detect(input) }
+    /// 识别不出链接、但像迅雷中文口令
+    private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
 
     var body: some View {
         NavigationStack {
@@ -104,7 +106,16 @@ struct ResolveView: View {
                     .tint(.secondary)
                 }
                 Spacer()
-                if let detected { DetectionChip(detected: detected) }
+                if let detected {
+                    DetectionChip(detected: detected)
+                } else if isKouling {
+                    Label("迅雷口令", systemImage: SharePlatform.xunlei.symbol)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.tint)
+                }
             }
 
             if clipboardHasURL && input.isEmpty && app.settings.clipboardHint {
@@ -134,7 +145,7 @@ struct ResolveView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(detected == nil || parsingVideo)
+            .disabled((detected == nil && !isKouling) || parsingVideo)
         }
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -248,7 +259,10 @@ struct ResolveView: View {
 
     private func resolve() {
         focused = false
-        guard let detected else { return }
+        guard let detected else {
+            if isKouling { resolveKouling() }
+            return
+        }
         switch detected {
         case .share(let share):
             guard share.platform.isResolvable else {
@@ -290,6 +304,24 @@ struct ResolveView: View {
                                                   kind: kind, source: "直链"))
             app.show("已添加到下载")
             input = ""
+        }
+    }
+}
+
+extension ResolveView {
+    /// 迅雷中文口令：先换成带提取码的分享链接，再按普通分享打开
+    private func resolveKouling() {
+        parsingVideo = true
+        let text = input
+        Task {
+            defer { parsingVideo = false }
+            do {
+                let url = try await XunleiKouling.resolve(text)
+                guard let share = ShareLinkParser.parse(url) else { throw CloudnError("口令对应的链接无法识别") }
+                shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
         }
     }
 }
