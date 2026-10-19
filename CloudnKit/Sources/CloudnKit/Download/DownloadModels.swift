@@ -107,11 +107,33 @@ public struct DownloadItem: Codable, Identifiable, Sendable, Hashable {
     public var phase: Int
     public var segmentsDone: Int
     public var segmentsTotal: Int
+    /// 剩余分片已交给系统后台下载会话（状态仍为 running）
+    public var backgrounded: Bool = false
     /// 瞬时速度（不落盘）
     public var speed: Double = 0
 
     enum CodingKeys: String, CodingKey {
         case id, request, status, totalBytes, receivedBytes, errorMessage, createdAt, finishedAt, outputPath, chunks, phase, segmentsDone, segmentsTotal
+        case backgrounded
+    }
+
+    /// 兼容旧版任务表：新增字段缺失时取默认值
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        request = try c.decode(DownloadRequest.self, forKey: .request)
+        status = try c.decode(DownloadStatus.self, forKey: .status)
+        totalBytes = try c.decode(Int64.self, forKey: .totalBytes)
+        receivedBytes = try c.decode(Int64.self, forKey: .receivedBytes)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        finishedAt = try c.decodeIfPresent(Date.self, forKey: .finishedAt)
+        outputPath = try c.decodeIfPresent(String.self, forKey: .outputPath)
+        chunks = try c.decodeIfPresent([DownloadChunk].self, forKey: .chunks) ?? []
+        phase = try c.decodeIfPresent(Int.self, forKey: .phase) ?? 0
+        segmentsDone = try c.decodeIfPresent(Int.self, forKey: .segmentsDone) ?? 0
+        segmentsTotal = try c.decodeIfPresent(Int.self, forKey: .segmentsTotal) ?? 0
+        backgrounded = try c.decodeIfPresent(Bool.self, forKey: .backgrounded) ?? false
     }
 
     init(request: DownloadRequest) {
@@ -149,5 +171,40 @@ public struct DownloadSettings: Sendable {
         self.maxConcurrentTasks = maxConcurrentTasks
         self.connectionsPerTask = connectionsPerTask
         self.retryCount = retryCount
+    }
+}
+
+/// 交给系统后台下载会话的一个分片：从 offset 下载到 end（end = -1 表示长度未知、整文件）
+public struct BackgroundChunkJob: Codable, Sendable, Hashable {
+    public let itemId: UUID
+    public let chunkIndex: Int
+    public let url: String
+    public let headers: [String: String]
+    public let offset: Int64
+    public let end: Int64
+
+    public init(itemId: UUID, chunkIndex: Int, url: String, headers: [String: String], offset: Int64, end: Int64) {
+        self.itemId = itemId
+        self.chunkIndex = chunkIndex
+        self.url = url
+        self.headers = headers
+        self.offset = offset
+        self.end = end
+    }
+
+    /// Range 请求头的值；整文件下载返回 nil
+    public var rangeHeader: String? {
+        if end >= 0 { return "bytes=\(offset)-\(end)" }
+        return offset > 0 ? "bytes=\(offset)-" : nil
+    }
+
+    /// 写进 URLSessionTask.taskDescription，进程被系统回收后重新启动也能对上号
+    public var taskDescription: String { "\(itemId.uuidString)|\(chunkIndex)|\(offset)|\(end)" }
+
+    public static func parse(taskDescription: String?) -> (itemId: UUID, chunkIndex: Int, offset: Int64, end: Int64)? {
+        let parts = (taskDescription ?? "").components(separatedBy: "|")
+        guard parts.count == 4, let id = UUID(uuidString: parts[0]), let index = Int(parts[1]),
+              let offset = Int64(parts[2]), let end = Int64(parts[3]) else { return nil }
+        return (id, index, offset, end)
     }
 }

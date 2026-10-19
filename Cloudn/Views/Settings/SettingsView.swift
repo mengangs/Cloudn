@@ -19,10 +19,11 @@ struct SettingsView: View {
                         LabeledContent("单任务连接数", value: "\(settings.connectionsPerTask)")
                     }
                     Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
+                    Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
                 } header: {
                     Text("下载")
                 } footer: {
-                    Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
+                    Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。切到后台后普通文件由系统继续下载，m3u8 与分轨视频会在回到前台时继续。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
                 }
 
                 Section("解析") {

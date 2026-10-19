@@ -22,6 +22,10 @@ final class AppSettings {
     var autoSaveToPhotos: Bool {
         didSet { defaults.set(autoSaveToPhotos, forKey: "autoSaveToPhotos") }
     }
+    /// 应用不在前台时，下载完成 / 失败发本地通知
+    var notifyOnFinish: Bool {
+        didSet { defaults.set(notifyOnFinish, forKey: "notifyOnFinish") }
+    }
     var acceptedNotice: Bool {
         didSet { defaults.set(acceptedNotice, forKey: "acceptedNotice") }
     }
@@ -34,12 +38,14 @@ final class AppSettings {
             "maxConcurrentTasks": 3,
             "connectionsPerTask": 8,
             "clipboardHint": true,
-            "autoSaveToPhotos": false
+            "autoSaveToPhotos": false,
+            "notifyOnFinish": true
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
         connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
         clipboardHint = defaults.bool(forKey: "clipboardHint")
         autoSaveToPhotos = defaults.bool(forKey: "autoSaveToPhotos")
+        notifyOnFinish = defaults.bool(forKey: "notifyOnFinish")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         publish()
     }

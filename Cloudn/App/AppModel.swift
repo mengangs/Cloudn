@@ -16,12 +16,16 @@ struct Toast: Identifiable, Equatable {
 @MainActor
 @Observable
 final class AppModel {
+    /// 系统可能在后台拉起应用投递下载事件（此时不创建界面），所以由 AppDelegate 与界面共用同一个实例
+    static let shared = AppModel()
+
     let settings: AppSettings
     let accounts: AccountStore
     let bookmarks: BookmarkStore
     let downloads: DownloadStore
     @ObservationIgnored let resolvers: ShareResolvers
     @ObservationIgnored let videoService: VideoParseService
+    @ObservationIgnored let background: BackgroundTransfers
 
     var selectedTab: AppTab = .resolve
     var toast: Toast?
@@ -29,6 +33,9 @@ final class AppModel {
     var pendingInput: String?
 
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续
+    @ObservationIgnored private var suspendedIds: [UUID] = []
+    @ObservationIgnored private var isActive = true
 
     init() {
         let fm = FileManager.default
@@ -44,7 +51,9 @@ final class AppModel {
 
         let snapshot = settings.snapshot
         let engine = DownloadEngine(baseDirectory: support, downloadsDirectory: documents) { snapshot.get() }
-        downloads = DownloadStore(engine: engine, resolvers: resolvers)
+        background = BackgroundTransfers(engine: engine, staging: support.appendingPathComponent("background", isDirectory: true))
+        downloads = DownloadStore(engine: engine, resolvers: resolvers, background: background)
+        background.reconcile()
 
         let resolvers = self.resolvers
         let onFinished: @Sendable (DownloadItem) async -> Void = { [weak self] item in
@@ -54,10 +63,20 @@ final class AppModel {
             }
             await self?.didFinish(item)
         }
-        Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished) }
+        let onFailed: @Sendable (DownloadItem) async -> Void = { [weak self] item in
+            await self?.notify(title: "下载失败", body: "\(item.displayName)：\(item.errorMessage ?? "未知错误")")
+        }
+        Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished, onFailed: onFailed) }
+    }
+
+    /// 应用不在前台时发本地通知
+    private func notify(title: String, body: String) {
+        guard !isActive, settings.notifyOnFinish else { return }
+        Notifier.post(title: title, body: body)
     }
 
     private func didFinish(_ item: DownloadItem) async {
+        notify(title: "下载完成", body: item.displayName)
         guard settings.autoSaveToPhotos, let url = downloads.engine.fileURL(for: item), MediaTools.canSaveToPhotos(url) else { return }
         do {
             try await MediaTools.saveToPhotos(url)
@@ -79,15 +98,29 @@ final class AppModel {
         }
     }
 
-    /// 进入后台时申请一段后台执行时间，让进行中的下载尽量跑完/落盘
+    /// 进入后台：单文件任务剩余分片交给系统后台会话；其余任务借一段后台执行时间，到期前暂停、回到前台再继续
     func scenePhaseChanged(active: Bool) {
+        isActive = active
+        let engine = downloads.engine
         if active {
             endBackgroundTask()
-        } else if downloads.activeCount > 0, backgroundTask == .invalid {
-            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "downloads") { [weak self] in
-                Task { @MainActor in self?.endBackgroundTask() }
-            }
+            let ids = suspendedIds
+            suspendedIds = []
+            if !ids.isEmpty { Task { await engine.resume(ids) } }
+            return
         }
+        guard downloads.activeCount > 0, backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "downloads") { [weak self] in
+            Task { @MainActor in await self?.suspendForegroundTransfers() }
+        }
+        let transfers = self.background
+        Task { transfers.submit(await engine.handOffToBackground()) }
+    }
+
+    /// 后台执行时间用完：暂停仍在前台下载的任务，干净落盘后再交还系统
+    private func suspendForegroundTransfers() async {
+        suspendedIds += await downloads.engine.pauseForegroundForSuspension()
+        endBackgroundTask()
     }
 
     private func endBackgroundTask() {

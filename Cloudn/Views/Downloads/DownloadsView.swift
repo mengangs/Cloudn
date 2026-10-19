@@ -196,6 +196,7 @@ struct DownloadRow: View {
         switch item.status {
         case .queued: return "排队中"
         case .running:
+            if item.backgrounded { return "后台下载中 " + ByteFormat.speed(item.speed) }
             if item.segmentsTotal > 0 { return "分片 \(item.segmentsDone)/\(item.segmentsTotal)" }
             if case .dash = item.request.kind { return (item.phase == 0 ? "视频轨 " : "音轨 ") + ByteFormat.speed(item.speed) }
             return ByteFormat.speed(item.speed)

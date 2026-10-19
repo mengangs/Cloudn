@@ -15,11 +15,14 @@ public actor DownloadEngine {
     private let settings: @Sendable () -> DownloadSettings
     private var merger: TrackMerger?
     private var onFinished: (@Sendable (DownloadItem) async -> Void)?
+    private var onFailed: (@Sendable (DownloadItem) async -> Void)?
 
     private var items: [DownloadItem] = []
     private var runners: [UUID: Task<Void, Never>] = [:]
     private var progress: [UUID: TransferProgress] = [:]
     private var lastBytes: [UUID: (Int64, Date)] = [:]
+    /// 后台会话里各分片已收到、但还没写回数据文件的字节数（只用于显示进度）
+    private var backgroundBytes: [UUID: [Int: Int64]] = [:]
     private var observers: [UUID: AsyncStream<[DownloadItem]>.Continuation] = [:]
     private var ticker: Task<Void, Never>?
     private var lastSave = Date.distantPast
@@ -37,18 +40,22 @@ public actor DownloadEngine {
         try? fm.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         try? fm.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: stateFile), let saved = try? JSONDecoder().decode([DownloadItem].self, from: data) {
-            // 上次进程被杀时仍在运行的任务恢复成暂停，由用户决定是否继续（直链可能已过期）
+            // 上次进程被杀时仍在运行的任务恢复成暂停，由用户决定是否继续（直链可能已过期）；
+            // 已交给系统后台会话的任务保持运行，等会话把结果送回来（或由 reconcileBackground 退回前台）
             items = saved.map { item in
                 var copy = item
-                if copy.status == .running || copy.status == .merging { copy.status = .paused }
+                if (copy.status == .running && !copy.backgrounded) || copy.status == .merging { copy.status = .paused }
+                if copy.status != .running { copy.backgrounded = false }
                 return copy
             }
         }
     }
 
-    public func configure(merger: TrackMerger?, onFinished: (@Sendable (DownloadItem) async -> Void)?) {
+    public func configure(merger: TrackMerger?, onFinished: (@Sendable (DownloadItem) async -> Void)?,
+                          onFailed: (@Sendable (DownloadItem) async -> Void)? = nil) {
         self.merger = merger
         self.onFinished = onFinished
+        self.onFailed = onFailed
     }
 
     // MARK: 观察
@@ -88,6 +95,7 @@ public actor DownloadEngine {
         runners[id]?.cancel()
         runners[id] = nil
         syncProgress(i)
+        leaveBackground(i)
         items[i].status = .paused
         items[i].speed = 0
         changed(force: true)
@@ -108,6 +116,7 @@ public actor DownloadEngine {
         runners[id]?.cancel()
         runners[id] = nil
         try? FileManager.default.removeItem(at: workDir(id))
+        leaveBackground(i)
         items[i].request = request
         items[i].chunks = []
         items[i].receivedBytes = 0
@@ -128,6 +137,7 @@ public actor DownloadEngine {
         runners[id]?.cancel()
         runners[id] = nil
         syncProgress(i)
+        leaveBackground(i)
         items[i].request.url = url
         items[i].request.headers = headers
         items[i].status = .queued
@@ -141,6 +151,7 @@ public actor DownloadEngine {
         runners[id]?.cancel()
         runners[id] = nil
         progress[id] = nil
+        backgroundBytes[id] = nil
         try? FileManager.default.removeItem(at: workDir(id))
         if deleteFile, let path = items[i].outputPath {
             try? FileManager.default.removeItem(at: downloadsDirectory.appendingPathComponent(path))
@@ -270,6 +281,7 @@ public actor DownloadEngine {
             try fm.moveItem(at: output, to: target)
             try? fm.removeItem(at: workDir(id))
             syncProgress(i)
+            leaveBackground(i)
             items[i].status = .completed
             items[i].finishedAt = Date()
             items[i].speed = 0
@@ -292,11 +304,16 @@ public actor DownloadEngine {
     private func fail(_ id: UUID, _ error: Error) {
         guard let i = index(id) else { return }
         syncProgress(i)
+        leaveBackground(i)
         items[i].status = .failed
         items[i].speed = 0
         items[i].errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         runners[id] = nil
         changed(force: true)
+        if let onFailed {
+            let item = items[i]
+            Task { await onFailed(item) }
+        }
         schedule()
     }
 
@@ -311,6 +328,151 @@ public actor DownloadEngine {
             n += 1
         }
         return candidate
+    }
+
+    // MARK: 后台下载（系统后台会话）
+
+    /// 应用退到后台：把运行中的单文件任务里没下完的分片交给系统后台会话，前台连接随即取消。
+    /// m3u8 / 分轨任务不交出；还在探测阶段（没有分片计划）的任务留在前台。
+    public func handOffToBackground() -> [BackgroundChunkJob] {
+        var jobs: [BackgroundChunkJob] = []
+        for i in items.indices where items[i].status == .running && !items[i].backgrounded {
+            guard case .file = items[i].request.kind else { continue }
+            let id = items[i].id
+            syncProgress(i)
+            let chunks = items[i].chunks
+            let pending = chunks.indices.filter { !chunks[$0].isDone }
+            guard !pending.isEmpty else { continue }
+            runners[id]?.cancel()
+            runners[id] = nil
+            let request = items[i].request
+            for index in pending {
+                let chunk = chunks[index]
+                // 长度未知的流只能整文件重下
+                let offset = chunk.end < 0 ? 0 : chunk.start + chunk.received
+                jobs.append(BackgroundChunkJob(itemId: id, chunkIndex: index, url: request.url, headers: request.headers,
+                                               offset: offset, end: chunk.end))
+            }
+            items[i].backgrounded = true
+            items[i].speed = 0
+        }
+        if !jobs.isEmpty { changed(force: true) }
+        return jobs
+    }
+
+    /// 系统后台会话下完一个分片：按偏移写回数据文件，全部分片完成后收尾。
+    /// 返回 false 表示这份数据不可用（状态码不对、长度不足），调用方应按失败处理。
+    @discardableResult
+    public func applyBackgroundChunk(itemId: UUID, chunkIndex: Int, offset: Int64, status: Int, file: URL) async -> Bool {
+        defer { try? FileManager.default.removeItem(at: file) }
+        // 任务已被暂停 / 删除 / 退回前台：这份数据作废，但不算失败
+        guard let i = index(itemId), items[i].backgrounded, items[i].status == .running,
+              chunkIndex < items[i].chunks.count else { return true }
+        var chunk = items[i].chunks[chunkIndex]
+        let fm = FileManager.default
+        let dest = workDir(itemId).appendingPathComponent("data")
+        let size = (try? fm.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? 0
+        do {
+            try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if chunk.end < 0 {
+                guard (200..<300).contains(status), size > 0 else { return false }
+                try? fm.removeItem(at: dest)
+                try fm.moveItem(at: file, to: dest)
+                chunk = DownloadChunk(start: 0, end: size - 1, received: size)
+                items[i].totalBytes = size
+            } else {
+                // 服务端忽略 Range 返回了整文件：只有从 0 开始的分片还能用
+                guard status == 206 || (status == 200 && offset == 0) else { return false }
+                let expected = chunk.end - offset + 1
+                guard expected > 0, size >= expected else { return false }
+                try Self.copy(file, into: dest, at: offset, length: expected)
+                chunk.received = chunk.end - chunk.start + 1
+            }
+        } catch {
+            return false
+        }
+        items[i].chunks[chunkIndex] = chunk
+        backgroundBytes[itemId]?[chunkIndex] = nil
+        progress[itemId] = TransferProgress(chunks: items[i].chunks, total: items[i].totalBytes)
+        syncProgress(i)
+        if items[i].chunks.allSatisfy(\.isDone) {
+            await finish(itemId, output: dest)
+        } else {
+            changed(force: true)
+        }
+        return true
+    }
+
+    /// 后台会话的下载进度（只用于显示；数据写回前不改分片计划，失败时前台才能从正确位置续传）
+    public func backgroundProgress(itemId: UUID, chunkIndex: Int, offset: Int64, written: Int64) {
+        guard let i = index(itemId), items[i].backgrounded, chunkIndex < items[i].chunks.count else { return }
+        let chunk = items[i].chunks[chunkIndex]
+        // 偏移之前已落盘的部分已计入 chunk.received，这里只记新增
+        let alreadyOnDisk = chunk.end < 0 ? 0 : offset - chunk.start - chunk.received
+        backgroundBytes[itemId, default: [:]][chunkIndex] = max(0, written + alreadyOnDisk)
+        syncProgress(i)
+        changed()
+    }
+
+    /// 后台分片失败：任务退回前台引擎，从已写回数据文件的位置续传
+    public func backgroundChunkFailed(itemId: UUID) {
+        guard let i = index(itemId), items[i].backgrounded else { return }
+        leaveBackground(i)
+        items[i].status = .queued
+        changed(force: true)
+        schedule()
+    }
+
+    /// 启动时核对：标记为后台下载、但系统会话里已没有对应任务的（例如被用户强制退出），退回前台
+    public func reconcileBackground(activeItemIds: Set<UUID>) {
+        for item in items where item.backgrounded && !activeItemIds.contains(item.id) {
+            backgroundChunkFailed(itemId: item.id)
+        }
+    }
+
+    /// 应用即将被挂起：暂停仍在前台下载的任务（m3u8 / 分轨等无法交给后台会话的），返回它们的 id 供回到前台时继续
+    public func pauseForegroundForSuspension() -> [UUID] {
+        let ids = items.filter { $0.status == .running && !$0.backgrounded }.map(\.id)
+        for id in ids { pause(id) }
+        return ids
+    }
+
+    public func resume(_ ids: [UUID]) {
+        for id in ids { resume(id) }
+    }
+
+    /// 当前仍由后台会话负责的任务
+    public func backgroundedItemIds() -> Set<UUID> {
+        Set(items.filter(\.backgrounded).map(\.id))
+    }
+
+    /// 结束后台状态：丢弃在途进度，进度盒按已落盘的分片计划重建
+    private func leaveBackground(_ i: Int) {
+        guard items[i].backgrounded else { return }
+        let id = items[i].id
+        items[i].backgrounded = false
+        backgroundBytes[id] = nil
+        progress[id] = TransferProgress(chunks: items[i].chunks, total: items[i].totalBytes)
+        items[i].receivedBytes = items[i].chunks.reduce(0) { $0 + $1.received }
+    }
+
+    /// 把 source 的前 length 字节写入 dest 的 offset 处（1MB 一块，不整体读入内存）
+    static func copy(_ source: URL, into dest: URL, at offset: Int64, length: Int64) throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: dest.path) { _ = fm.createFile(atPath: dest.path, contents: nil) }
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        let output = try FileHandle(forWritingTo: dest)
+        defer { try? output.close() }
+        try output.seek(toOffset: UInt64(offset))
+        var remaining = length
+        while remaining > 0 {
+            guard let data = try input.read(upToCount: Int(min(remaining, 1 << 20))), !data.isEmpty else {
+                throw TransferError("后台分片数据不完整")
+            }
+            try output.write(contentsOf: data)
+            remaining -= Int64(data.count)
+        }
     }
 
     // MARK: 进度
@@ -352,6 +514,12 @@ public actor DownloadEngine {
     }
 
     private func syncProgress(_ i: Int) {
+        if items[i].backgrounded {
+            // 后台下载中：分片计划以已写回数据文件的为准，进度另加上会话里在途的字节
+            let extra = backgroundBytes[items[i].id]?.values.reduce(0, +) ?? 0
+            items[i].receivedBytes = items[i].chunks.reduce(0) { $0 + $1.received } + extra
+            return
+        }
         guard let box = progress[items[i].id] else { return }
         items[i].chunks = box.chunks
         items[i].receivedBytes = box.received
