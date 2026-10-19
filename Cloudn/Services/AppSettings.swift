@@ -58,6 +58,10 @@ final class AppSettings {
     var autoCheckUpdates: Bool {
         didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") }
     }
+    /// 检查更新时包含预发布版（测试版）
+    var acceptPrerelease: Bool {
+        didSet { defaults.set(acceptPrerelease, forKey: "acceptPrerelease"); lastUpdateCheck = nil }
+    }
     var lastUpdateCheck: Date? {
         didSet { defaults.set(lastUpdateCheck, forKey: "lastUpdateCheck") }
     }
@@ -99,6 +103,7 @@ final class AppSettings {
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
+        acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")
         lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date
         skippedVersion = defaults.string(forKey: "skippedVersion") ?? ""
         resolverOptions.directFirst = directFirst

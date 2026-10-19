@@ -129,7 +129,7 @@ final class AppModel {
         if let last = settings.lastUpdateCheck, Date().timeIntervalSince(last) < 86_400 { return }
         settings.lastUpdateCheck = Date()
         Task {
-            guard let release = try? await UpdateChecker.check(current: Self.currentVersion),
+            guard let release = try? await UpdateChecker.check(current: Self.currentVersion, includePrerelease: settings.acceptPrerelease),
                   release.version != settings.skippedVersion else { return }
             availableUpdate = release
         }

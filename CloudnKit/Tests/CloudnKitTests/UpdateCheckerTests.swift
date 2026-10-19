@@ -19,5 +19,16 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertEqual(r.name, "v1.2.0")
         XCTAssertEqual(r.ipaURL, "https://e/Cloudn.ipa")
         XCTAssertEqual(r.notes, "修复若干问题")
+        XCTAssertFalse(r.isPrerelease)
+    }
+
+    func testNewestRespectsPrerelease() {
+        let list = [
+            UpdateChecker.parse(JSON(["tag_name": "v1.3.0-beta.1", "prerelease": true])),
+            UpdateChecker.parse(JSON(["tag_name": "v1.2.1", "prerelease": false])),
+            UpdateChecker.parse(JSON(["tag_name": "v1.10.0", "prerelease": true]))
+        ]
+        XCTAssertEqual(UpdateChecker.newest(list, includePrerelease: false)?.version, "1.2.1")
+        XCTAssertEqual(UpdateChecker.newest(list, includePrerelease: true)?.version, "1.10.0")
     }
 }

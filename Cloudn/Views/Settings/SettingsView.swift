@@ -77,6 +77,7 @@ struct SettingsView: View {
                     }
                     .disabled(checking)
                     Toggle("自动检查更新", isOn: $settings.autoCheckUpdates)
+                    Toggle("接受预发布版更新", isOn: $settings.acceptPrerelease)
                 } header: {
                     Text("更新")
                 } footer: {
@@ -127,7 +128,7 @@ extension SettingsView {
             defer { checking = false }
             do {
                 app.settings.lastUpdateCheck = Date()
-                if let release = try await UpdateChecker.check(current: AppModel.currentVersion) {
+                if let release = try await UpdateChecker.check(current: AppModel.currentVersion, includePrerelease: app.settings.acceptPrerelease) {
                     app.availableUpdate = release
                 } else {
                     app.show("已是最新版本")
@@ -150,7 +151,7 @@ struct UpdateSheet: View {
         NavigationStack {
             List {
                 Section {
-                    LabeledContent("新版本", value: release.version)
+                    LabeledContent("新版本", value: release.isPrerelease ? "\(release.version)（预发布）" : release.version)
                     LabeledContent("当前版本", value: AppModel.currentVersion)
                 }
                 if !release.notes.isEmpty {

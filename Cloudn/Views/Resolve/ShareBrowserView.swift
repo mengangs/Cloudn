@@ -11,6 +11,13 @@ struct ShareBrowserView: View {
     @State private var retryPwd = ""
     @State private var saveItems: SaveItems?
     @State private var textPreview: TextPreviewItem?
+    @State private var query = ""
+
+    /// 当前目录按文件名过滤（不区分大小写）
+    private var visibleFiles: [ShareFile] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? model.files : model.files.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
 
     var body: some View {
         List {
@@ -37,9 +44,13 @@ struct ShareBrowserView: View {
                 Section {
                     ContentUnavailableView("空文件夹", systemImage: "folder", description: Text("这里没有文件"))
                 }
+            } else if visibleFiles.isEmpty && !query.isEmpty {
+                Section {
+                    ContentUnavailableView.search(text: query)
+                }
             } else {
                 Section {
-                    ForEach(model.files) { file in
+                    ForEach(visibleFiles) { file in
                         HStack(spacing: 12) {
                             if model.selecting {
                                 Image(systemName: model.selection.contains(file.fid) ? "checkmark.circle.fill" : "circle")
@@ -65,6 +76,8 @@ struct ShareBrowserView: View {
         }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "在当前文件夹中搜索")
+        .onChange(of: model.currentDir) { query = "" }
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { bottomBar }
         .refreshable { await model.reloadCurrent(force: true) }

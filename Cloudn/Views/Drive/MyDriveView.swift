@@ -36,6 +36,12 @@ struct DriveFolderView: View {
     @State private var moving: ShareFile?
     @State private var deleting: ShareFile?
     @State private var busy = false
+    @State private var query = ""
+
+    private var visibleItems: [ShareFile] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
 
     enum NamingTarget: Identifiable {
         case newFolder
@@ -69,12 +75,13 @@ struct DriveFolderView: View {
             } else if items.isEmpty && !loading {
                 ContentUnavailableView("空文件夹", systemImage: "folder").listRowBackground(Color.clear)
             }
-            ForEach(items) { item in
+            ForEach(visibleItems) { item in
                 row(item)
             }
         }
         .overlay { if loading && items.isEmpty { ProgressView() } }
         .refreshable { await load() }
+        .searchable(text: $query, prompt: "在当前文件夹中搜索")
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
