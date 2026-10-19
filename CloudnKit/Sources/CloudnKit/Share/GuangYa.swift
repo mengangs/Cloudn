@@ -1,7 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 // 光鸭云盘分享解析：提取码换分享访问令牌 → 游标翻页列目录 → get_share_download_url 取直链；
 // 分享者关闭免登录下载时，已登录则转存到个人盘临时目录再取个人盘直链。转存到我的网盘走 restore_share。
-// 协议细节参考 YunX（AGPL-3.0）的 GuangYaApi / GuangYaResolveRepository。
+// 协议细节参考 YunX（AGPL-3.0）的 GuangYaApi / GuangYaResolveRepository；我的网盘管理参考 YunX（AGPL-3.0）的 GuangYaCloudViewModel。
 import Foundation
 
 public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
@@ -89,11 +89,7 @@ public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
             try await restore(session, ids: [file.fid], to: folder, cred: cred)
             let target = try await pollCopied(folder: folder, source: file, cred: cred)
             let data = try await call("get_res_download_url", .object([("fileId", .string(target.fid))]), fallback: "获取下载地址失败", cred: cred)
-            let url = data.string("signedURL", "signedUrl", "downloadUrl", "download_url", "url", "cdnUrl")
-            guard !url.isEmpty else { throw CloudnError("光鸭未返回有效下载地址，请确认下载权限") }
-            let size = data["size"].int64 > 0 ? data["size"].int64 : file.size
-            return DownloadLink(fileName: file.name, url: url, size: size, headers: ["User-Agent": Self.ua, "Referer": Self.webSite + "/"],
-                                cleanupToken: folder)
+            return try Self.personalLink(data, file: file, cleanupToken: folder)
         } catch {
             await cleanup(token: folder)
             throw error
@@ -176,14 +172,16 @@ public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
 
     // MARK: 请求
 
-    private func call(_ name: String, _ body: OrderedJSON, fallback: String, cred: GuangYaCredential? = nil) async throws -> JSON {
+    /// `prefix` 为接口路径前缀：业务接口 /userres/v1/，容量接口 /assets/v1/
+    private func call(_ name: String, _ body: OrderedJSON, fallback: String, cred: GuangYaCredential? = nil,
+                      prefix: String = "/userres/v1/") async throws -> JSON {
         var headers: [(String, String)] = [
             ("Accept", "application/json, text/plain, */*"), ("Content-Type", "application/json"), ("User-Agent", Self.ua),
             ("Origin", Self.webSite), ("Referer", Self.webSite + "/"), ("dt", "4"), ("did", cred?.deviceId ?? deviceId),
             ("traceparent", "00-\(Self.randomHex(32))-\(Self.randomHex(16))-01")
         ]
         if let cred { headers.append(("Authorization", "Bearer " + cred.accessToken)) }
-        let r = try await client.send(HTTPRequest(url: "\(apiBase)/userres/v1/\(name)", method: "POST", headers: headers, body: Data(body.text.utf8)))
+        let r = try await client.send(HTTPRequest(url: apiBase + prefix + name, method: "POST", headers: headers, body: Data(body.text.utf8)))
         guard let json = r.json, json.isObject else { throw CloudnError("光鸭响应解析失败（HTTP \(r.status)）") }
         try Self.check(json, fallback: fallback)
         return json["data"]
@@ -246,5 +244,107 @@ extension GuangYaResolver: ShareSaver {
 
     public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
         try await restore(session, ids: files.map(\.fid), to: folderId, cred: credential())
+    }
+}
+
+// MARK: 我的网盘管理
+
+extension GuangYaResolver: DriveManager {
+    public var driveRootId: String { "" }
+    public var driveCapabilities: DriveCapabilities { .all }
+
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        try await personalList(folderId, cred: credential())
+    }
+
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹无法直接下载") }
+        let cred = try await credential()
+        let data = try await call("get_res_download_url", .object([("fileId", .string(file.fid))]), fallback: "获取下载地址失败", cred: cred)
+        return try Self.personalLink(data, file: file)
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        _ = try await createDir(parent: parentId, name: name, cred: credential())
+    }
+
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        try await runTask("file/rename", .object([("fileId", .string(file.fid)), ("newName", .string(name))]), fallback: "重命名失败")
+    }
+
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        guard !files.isEmpty else { return }
+        try await runTask("file/move_file", .object([("fileIds", Self.idArray(files)), ("parentId", .string(folderId))]), fallback: "移动失败")
+    }
+
+    public func delete(_ files: [ShareFile]) async throws {
+        guard !files.isEmpty else { return }
+        try await runTask("file/delete_file", .object([("fileIds", Self.idArray(files))]), fallback: "删除失败")
+    }
+
+    /// 永久有效、无提取码的分享
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        let cred = try await credential()
+        let data = try await call("share_file", Self.shareBody(files, code: ""), fallback: "创建分享失败", cred: cred)
+        guard let link = Self.parseShare(data, code: "") else { throw CloudnError("创建分享失败") }
+        return link
+    }
+
+    public func quota() async -> DriveQuota? {
+        guard let cred = try? await credential(),
+              let data = try? await call("get_assets", .object([]), fallback: "获取容量信息失败", cred: cred, prefix: "/assets/v1/") else { return nil }
+        return Self.parseQuota(data)
+    }
+
+    /// 改名 / 移动 / 删除：返回 taskId 时轮询到完成
+    private func runTask(_ name: String, _ body: OrderedJSON, fallback: String) async throws {
+        let cred = try await credential()
+        let data = try await call(name, body, fallback: fallback, cred: cred)
+        let task = data["taskId"].string
+        if !task.isEmpty { try await waitTask(task, cred: cred) }
+    }
+
+    // MARK: 纯函数（便于单测）
+
+    static func idArray(_ files: [ShareFile]) -> OrderedJSON {
+        .array(files.map { .string($0.fid) })
+    }
+
+    /// share_file 请求体（字段顺序与网页端一致）；code 为空即无提取码
+    static func shareBody(_ files: [ShareFile], code: String, days: Int = 0) -> OrderedJSON {
+        let title = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
+        return .object([
+            ("fileIds", idArray(files)), ("title", .string(title)), ("validateDuration", .int(Int64(days))),
+            ("shareType", .int(code.trimmed.isEmpty ? 0 : 1)), ("code", .string(code)), ("autoFillCode", .bool(false)),
+            ("trafficLimit", .string("0")), ("maxRestoreCount", .int(0)), ("downloadType", .int(1))
+        ])
+    }
+
+    /// shareUrl 缺省时用 shareId 拼分享页地址
+    static func parseShare(_ data: JSON, code: String) -> DriveShareLink? {
+        let shareId = data.string("shareId", "id")
+        var url = data["shareUrl"].string.trimmed
+        if url.isEmpty {
+            guard !shareId.isEmpty else { return nil }
+            url = webSite + "/s/" + shareId
+        }
+        return DriveShareLink(url: url, pwd: data["code"].string.nilIfBlank ?? code)
+    }
+
+    /// get_assets：totalSpaceSize / usedSpaceSize（字节，可能是字符串）
+    static func parseQuota(_ data: JSON) -> DriveQuota? {
+        guard data.has("totalSpaceSize") else { return nil }
+        let total = data["totalSpaceSize"].int64
+        guard total > 0 else { return nil }
+        return DriveQuota(used: max(0, data["usedSpaceSize"].int64), total: total)
+    }
+
+    static func personalLink(_ data: JSON, file: ShareFile, cleanupToken: String? = nil) throws -> DownloadLink {
+        let url = data.string("signedURL", "signedUrl", "downloadUrl", "download_url", "url", "cdnUrl")
+        guard !url.isEmpty else { throw CloudnError("光鸭未返回有效下载地址，请确认下载权限") }
+        let size = data["size"].int64 > 0 ? data["size"].int64 : file.size
+        return DownloadLink(fileName: file.name, url: url, size: size, headers: ["User-Agent": ua, "Referer": webSite + "/"],
+                            cleanupToken: cleanupToken)
     }
 }

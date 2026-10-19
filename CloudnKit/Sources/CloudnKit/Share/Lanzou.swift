@@ -1,6 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 // 蓝奏云匿名分享解析：分享页 HTML → 文件夹分页（filemoreajax）/ 单文件 → ajaxm 取下载参数 → 探测直链。
-// 协议细节参考 YunX（AGPL-3.0）的 LanzouApi。
+// 登录后的「我的网盘」：Cookie → mydisk.php 取 uid/vei → doupload.php 各 task；个人文件下载先 task=22 取分享链接再走分享取链。
+// 协议细节参考 YunX（AGPL-3.0）的 LanzouApi；我的网盘管理参考 YunX（AGPL-3.0）的 LanzouCloudViewModel。
 import Foundation
 
 public final class LanzouResolver: ShareResolver, @unchecked Sendable {
@@ -10,11 +11,14 @@ public final class LanzouResolver: ShareResolver, @unchecked Sendable {
     static let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     static let hostRx = Rx(#"^(?:[a-z0-9-]+\.)*(?:lanzou[a-z0-9-]*|lan[zs]o[ux])\.(?:com|net|org|cn)$"#, ignoreCase: true)
 
+    private let credentials: CredentialStore
     private let client: HTTPClient
     private let cookies = CookieJar()
     private let pages = PageCache()
+    private let login = LoginCache()
 
-    public init(client: HTTPClient = .shared) {
+    public init(credentials: CredentialStore = NoCredentials(), client: HTTPClient = .shared) {
+        self.credentials = credentials
         self.client = client
     }
 
@@ -33,6 +37,16 @@ public final class LanzouResolver: ShareResolver, @unchecked Sendable {
         var pages: [String: Page] = [:]
         func get(_ k: String) -> Page? { pages[k] }
         func set(_ k: String, _ p: Page) { pages[k] = p }
+    }
+
+    /// 个人盘 doupload 参数（uid / vei）按登录 Cookie 缓存
+    private actor LoginCache {
+        var key = ""
+        var uid = ""
+        var vei = ""
+        func get(_ k: String) -> (uid: String, vei: String)? { !k.isEmpty && k == key && !uid.isEmpty ? (uid, vei) : nil }
+        func set(_ k: String, uid u: String, vei v: String) { key = k; uid = u; vei = v }
+        func clear() { key = ""; uid = ""; vei = "" }
     }
 
     /// 按 host 记录的 Cookie（acw_sc__v2 挑战与 down_ip）
@@ -420,5 +434,181 @@ public final class LanzouResolver: ShareResolver, @unchecked Sendable {
             i += 2
         }
         return out
+    }
+}
+
+// MARK: 我的网盘管理
+
+extension LanzouResolver: DriveManager {
+    static let diskOrigin = "https://pc.woozooo.com"
+    static let rootFolder = "-1"
+    static let folderPrefix = "d:"
+    static let filePrefix = "f:"
+
+    public var driveRootId: String { Self.rootFolder }
+    /// 无容量接口；文件夹不支持移动（move 里单独报错）
+    public var driveCapabilities: DriveCapabilities { .all }
+
+    /// 文件夹（task=47，一次返回全部）+ 文件（task=5，pg 翻页）
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        let folder = Self.folderArg(folderId)
+        let folderJSON = try await doupload([("task", "47"), ("folder_id", folder)], allowEnd: true)
+        var all = Self.parseFolders(folderJSON, parent: folderId)
+        var seen = Set<String>()
+        for pg in 1...1000 {
+            let json = try await doupload([("task", "5"), ("folder_id", folder), ("pg", String(pg))], allowEnd: true)
+            let files = Self.parseFiles(json, parent: folderId)
+            var added = 0
+            for f in files where seen.insert(f.fid).inserted { all.append(f); added += 1 }
+            if files.isEmpty || added == 0 { break }
+        }
+        return all
+    }
+
+    /// 蓝奏没有个人盘直链接口：先 task=22 取该文件的分享链接，再走匿名分享取链
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹无法直接下载") }
+        let json = try await doupload([("task", "22"), ("file_id", Self.rawId(file.fid))])
+        guard let info = Self.parseShareInfo(json, folder: false) else { throw CloudnError("蓝奏未返回分享链接") }
+        let page = try await resolvePage(info.url)
+        guard !page.isFolder else { throw CloudnError("蓝奏分享页异常，请稍后重试") }
+        await pages.set(page.shareURL, page)
+        let target = ShareFile(fid: page.shareURL, name: file.name, size: file.size, isDirectory: false, token: page.shareURL)
+        return try await link(for: page, file: target, pwd: page.needsPwd ? info.pwd.nilIfBlank : nil)
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        let json = try await doupload([("task", "2"), ("parent_id", Self.folderArg(parentId)), ("folder_name", name), ("folder_description", "")])
+        guard Rx(#"^\d+$"#).matches(json["text"].string) else { throw CloudnError("蓝奏未返回新文件夹信息，请刷新确认") }
+    }
+
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        if file.isDirectory {
+            _ = try await doupload([("task", "4"), ("folder_id", Self.rawId(file.fid)), ("folder_name", name), ("folder_description", "")])
+        } else {
+            _ = try await doupload([("task", "46"), ("file_id", Self.rawId(file.fid)), ("file_name", name), ("type", "2")])
+        }
+    }
+
+    /// 只能逐个移动文件
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        if files.contains(where: \.isDirectory) { throw CloudnError("蓝奏云暂不支持移动文件夹") }
+        let target = Self.folderArg(folderId)
+        for f in files { _ = try await doupload([("task", "20"), ("folder_id", target), ("file_id", Self.rawId(f.fid))]) }
+    }
+
+    public func delete(_ files: [ShareFile]) async throws {
+        for f in files {
+            if f.isDirectory {
+                _ = try await doupload([("task", "3"), ("folder_id", Self.rawId(f.fid))])
+            } else {
+                _ = try await doupload([("task", "6"), ("file_id", Self.rawId(f.fid))])
+            }
+        }
+    }
+
+    /// 文件 task=22、文件夹 task=18（参数名都是 file_id）；一次只能分享一项
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        guard let file = files.first else { throw CloudnError("请选择要分享的文件") }
+        guard files.count == 1 else { throw CloudnError("蓝奏一次只能分享一个文件或文件夹") }
+        let json = try await doupload([("task", file.isDirectory ? "18" : "22"), ("file_id", Self.rawId(file.fid))])
+        guard let info = Self.parseShareInfo(json, folder: file.isDirectory) else { throw CloudnError("蓝奏未返回分享链接") }
+        return DriveShareLink(url: info.url, pwd: info.enabled ? info.pwd : "")
+    }
+
+    // MARK: 账号与请求
+
+    /// 登录 Cookie + mydisk.php 里的 uid / vei
+    private func diskAccount() async throws -> (cookie: String, uid: String, vei: String) {
+        guard let cookie = await credentials.cookie(for: .lanzou)?.nilIfBlank else { throw SharePlatform.lanzou.loginRequired }
+        if let cached = await login.get(cookie) { return (cookie, cached.uid, cached.vei) }
+        guard let params = await LanzouAccount.loginParams(cookie: cookie, client: client) else {
+            throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录")
+        }
+        await login.set(cookie, uid: params.uid, vei: params.vei)
+        return (cookie, params.uid, params.vei)
+    }
+
+    /// doupload.php 统一请求；allowEnd 时 zt==2（列表结束）也算成功
+    private func doupload(_ fields: [(String, String)], allowEnd: Bool = false) async throws -> JSON {
+        let acc = try await diskAccount()
+        let url = "\(Self.diskOrigin)/doupload.php?uid=\(acc.uid)&vei=\(acc.vei.formEncoded)"
+        let headers: [(String, String)] = [("Cookie", acc.cookie), ("User-Agent", Self.ua), ("Referer", Self.diskOrigin + "/mydisk.php"),
+                                           ("Origin", Self.diskOrigin), ("X-Requested-With", "XMLHttpRequest")]
+        let r = try await client.send(.postForm(url, fields, headers: headers))
+        if r.status == 401 || r.status == 403 {
+            await login.clear()
+            throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录")
+        }
+        guard let json = r.json, json.isObject else { throw CloudnError("蓝奏文件操作失败，请在官网检查权限和文件类型") }
+        do {
+            try Self.checkDoupload(json, allowEnd: allowEnd)
+        } catch let e as CloudnError where e.code == 9 {
+            await login.clear()
+            throw e
+        }
+        return json
+    }
+
+    // MARK: 纯函数（便于单测）
+
+    static func rawId(_ id: String) -> String {
+        if id.hasPrefix(folderPrefix) { return String(id.dropFirst(folderPrefix.count)) }
+        if id.hasPrefix(filePrefix) { return String(id.dropFirst(filePrefix.count)) }
+        return id
+    }
+
+    /// 目录参数：去前缀，空串视为根目录 -1
+    static func folderArg(_ id: String) -> String { rawId(id).nilIfBlank ?? rootFolder }
+
+    static func checkDoupload(_ json: JSON, allowEnd: Bool) throws {
+        let zt = json.has("zt") ? json["zt"].int : -1
+        if zt == 1 || (zt == 2 && allowEnd) { return }
+        switch zt {
+        case 4: throw CloudnError("蓝奏请求频繁，请稍后重试", code: 4)
+        case 9: throw CloudnError("蓝奏登录已过期，请到「账号」页重新登录", code: 9)
+        default:
+            let info = json["info"].isObject ? "" : json["info"].string
+            throw CloudnError(info.isEmpty ? "蓝奏文件操作失败（\(zt)），请在官网检查权限和文件类型" : "蓝奏：\(info)", code: zt)
+        }
+    }
+
+    static func parseFolders(_ json: JSON, parent: String) -> [ShareFile] {
+        json["text"].array.compactMap { (item: JSON) -> ShareFile? in
+            let id = item.string("fol_id", "id")
+            guard !id.isEmpty else { return nil }
+            return ShareFile(fid: folderPrefix + id, name: item.string("name", "name_all"), size: 0, isDirectory: true,
+                             parentId: parent, modified: item["time"].string)
+        }
+    }
+
+    static func parseFiles(_ json: JSON, parent: String) -> [ShareFile] {
+        json["text"].array.compactMap { (item: JSON) -> ShareFile? in
+            let id = item["id"].string
+            guard !id.isEmpty else { return nil }
+            return ShareFile(fid: filePrefix + id, name: item.string("name_all", "name"), size: ByteFormat.parseDisplay(item["size"].string),
+                             isDirectory: false, parentId: parent, modified: item["time"].string)
+        }
+    }
+
+    /// task=22 / 18 的 info：文件取 f_id，文件夹取 new_url；is_newd 为分享域名；onof == "1" 表示开启了提取码
+    static func parseShareInfo(_ json: JSON, folder: Bool) -> (url: String, pwd: String, enabled: Bool)? {
+        let info = json["info"]
+        guard info.isObject else { return nil }
+        let raw = (folder ? info.string("new_url", "f_id") : info.string("f_id", "new_url")).trimmed
+        guard !raw.isEmpty else { return nil }
+        let pwd = info["pwd"].string
+        let enabled = info.has("onof") ? info["onof"].string == "1" : !pwd.isEmpty
+        return (shareURL(raw, domain: info["is_newd"].string.trimmed), pwd, enabled)
+    }
+
+    static func shareURL(_ raw: String, domain: String) -> String {
+        if raw.contains("://") { return raw }
+        let base = domain.isEmpty ? "https://pan.lanzoui.com" : (domain.contains("://") ? domain : "https://" + domain)
+        var origin = base
+        if let u = URL(string: base), let host = u.host { origin = (u.scheme ?? "https") + "://" + host }
+        var path = raw
+        while path.hasPrefix("/") { path.removeFirst() }
+        return origin + "/" + path
     }
 }

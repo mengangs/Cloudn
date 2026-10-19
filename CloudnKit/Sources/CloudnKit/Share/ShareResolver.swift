@@ -72,7 +72,7 @@ public final class ShareResolvers: Sendable {
         var map: [SharePlatform: ShareResolver] = [:]
         map[.quark] = QuarkFamilyResolver(config: .quark, credentials: credentials, client: client, options: options)
         map[.uc] = QuarkFamilyResolver(config: .uc, credentials: credentials, client: client, options: options)
-        map[.lanzou] = LanzouResolver(client: client)
+        map[.lanzou] = LanzouResolver(credentials: credentials, client: client)
         map[.ilanzou] = ILanzouResolver(credentials: credentials, client: client)
         map[.pan123] = Pan123Resolver(credentials: credentials, client: client)
         map[.c139] = C139Resolver(credentials: credentials, client: client)

@@ -1,7 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 // 蓝奏云优享版（ilanzou.com）匿名分享解析：设备 uuid → /unproved/share/list 列目录 → /unproved/file/redirect 取直链。
 // 登录后：取链的 downloadId 带上 userId；转存走 /proved/file/transfer。
-// 协议细节参考 YunX（AGPL-3.0）的 ILanzouApi / ILanzouResolveRepository。
+// 协议细节参考 YunX（AGPL-3.0）的 ILanzouApi / ILanzouResolveRepository；我的网盘管理参考 YunX（AGPL-3.0）的 ILanzouCloudViewModel。
 import Foundation
 
 public final class ILanzouResolver: ShareResolver, @unchecked Sendable {
@@ -260,5 +260,111 @@ extension ILanzouResolver: ShareSaver {
             if let r = try? await proved("/proved/file/transfer/num", cred, params: [("transferKey", key)]), r["map"]["num"].int == 1 { return }
         }
         throw CloudnError("蓝奏优享仍在处理转存，请稍后在网盘里查看")
+    }
+}
+
+// MARK: 我的网盘管理（优享版没有创建分享接口）
+
+extension ILanzouResolver: DriveManager {
+    public var driveRootId: String { "" }
+    public var driveCapabilities: DriveCapabilities { [.createFolder, .rename, .move, .delete] }
+
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        try await personalList(folderId, cred: requireAccount())
+    }
+
+    /// 个人盘取链：apis 主机的 /unproved/file/redirect，带 appToken、不带 extra，timestamp 与 auth 共用同一毫秒时间戳
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹无法直接下载") }
+        let cred = try await requireAccount()
+        let ts = String(Int64(Date().timeIntervalSince1970 * 1000))
+        let params = Self.personalRedirectParams(fileId: Self.rawId(file.fid), userId: cred.userId, uuid: cred.uuid, appToken: cred.appToken, ts: ts)
+        let r = try await client.send(.get(base + "/unproved/file/redirect?" + Self.query(params), headers: Self.headers, followRedirects: false))
+        let dlHeaders = ["User-Agent": Self.ua, "Referer": Self.webSite + "/", "Origin": Self.webSite]
+        if (300..<400).contains(r.status), let location = r.header("Location"), !location.isEmpty {
+            let resolved = URL(string: location, relativeTo: URL(string: base))?.absoluteString ?? location
+            return DownloadLink(fileName: file.name, url: resolved, size: file.size > 0 ? file.size : -1, headers: dlHeaders)
+        }
+        if r.status == 401 || r.status == 403 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        guard let json = r.json, json.isObject else { throw CloudnError("蓝奏优享未返回下载地址") }
+        let code = json["code"].int
+        if code == -1 || code == -2 { throw CloudnError("蓝奏优享登录已过期，请到「账号」页重新登录") }
+        let link = json["url"].string.nilIfBlank ?? json["data"]["url"].string
+        guard !link.isEmpty else {
+            throw CloudnError(json["msg"].string.nilIfBlank ?? "蓝奏优享未返回下载地址，请检查文件权限")
+        }
+        return DownloadLink(fileName: file.name, url: link, size: file.size > 0 ? file.size : -1, headers: dlHeaders)
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        _ = try await proved("/proved/file/folder/save", requireAccount(), body: Self.folderBody(id: parentId, name: name, root: true))
+    }
+
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        let cred = try await requireAccount()
+        if file.isDirectory {
+            _ = try await proved("/proved/file/folder/edit", cred, body: Self.folderBody(id: file.fid, name: name, root: false))
+        } else {
+            _ = try await proved("/proved/file/edit", cred, body: .object([("fileDesc", .string("")), ("fileId", .string(Self.rawId(file.fid))),
+                                                                            ("fileName", .string(name))]))
+        }
+    }
+
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        guard !files.isEmpty else { return }
+        let target = Self.rawId(folderId)
+        let ids = Self.splitIds(files)
+        _ = try await proved("/proved/file/folder/move", requireAccount(), body: .object([
+            ("folderIds", .string(ids.folders)), ("fileIds", .string(ids.files)), ("targetId", .string(target.nilIfBlank ?? "0"))
+        ]))
+    }
+
+    public func delete(_ files: [ShareFile]) async throws {
+        guard !files.isEmpty else { return }
+        let ids = Self.splitIds(files)
+        _ = try await proved("/proved/file/delete", requireAccount(), body: .object([
+            ("folderIds", .string(ids.folders)), ("fileIds", .string(ids.files)), ("status", .int(0))
+        ]))
+    }
+
+    public func quota() async -> DriveQuota? {
+        guard let cred = await account(), let json = try? await proved("/proved/user/account/map", cred) else { return nil }
+        return Self.parseQuota(json["map"])
+    }
+
+    // MARK: 纯函数（便于单测）
+
+    /// 去掉 d: / f: 前缀
+    static func rawId(_ id: String) -> String {
+        if id.hasPrefix(folderPrefix) { return String(id.dropFirst(folderPrefix.count)) }
+        if id.hasPrefix(filePrefix) { return String(id.dropFirst(filePrefix.count)) }
+        return id
+    }
+
+    /// 文件夹 / 文件 id 分别逗号拼接
+    static func splitIds(_ files: [ShareFile]) -> (folders: String, files: String) {
+        (files.filter(\.isDirectory).map { rawId($0.fid) }.joined(separator: ","),
+         files.filter { !$0.isDirectory }.map { rawId($0.fid) }.joined(separator: ","))
+    }
+
+    /// 新建（root: 父目录为空时用 "0"）/ 重命名文件夹的请求体
+    static func folderBody(id: String, name: String, root: Bool) -> OrderedJSON {
+        let raw = rawId(id)
+        return .object([("folderDesc", .string("")), ("folderId", .string(root ? (raw.nilIfBlank ?? "0") : raw)), ("folderName", .string(name))])
+    }
+
+    static func personalRedirectParams(fileId: String, userId: String, uuid: String, appToken: String, ts: String) -> [(String, String)] {
+        let encTs = aesHex(ts)
+        return [("uuid", uuid), ("devType", devType), ("devCode", uuid), ("devModel", "chrome"), ("devVersion", devVersion),
+                ("appVersion", ""), ("timestamp", encTs), ("appToken", appToken),
+                ("enable", "1"), ("downloadId", aesHex("\(fileId)|\(userId)")), ("auth", aesHex("\(fileId)|\(ts)")), ("timestamp", encTs)]
+    }
+
+    /// account/map：大小单位 KiB；总量 = totalSize + vipSize + rewardSize
+    static func parseQuota(_ map: JSON) -> DriveQuota? {
+        guard map.isObject else { return nil }
+        let total = (map["totalSize"].int64 + map["vipSize"].int64 + map["rewardSize"].int64) * 1024
+        guard total > 0 else { return nil }
+        return DriveQuota(used: map["usedSize"].int64 * 1024, total: total)
     }
 }
