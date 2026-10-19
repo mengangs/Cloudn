@@ -22,20 +22,20 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         }
     }
 
-    /// 当前版本已实现解析的平台；其余平台能识别链接但会提示「暂未支持」
-    public var isResolvable: Bool {
-        switch self {
-        case .quark, .uc, .lanzou: return true
-        default: return false
-        }
-    }
+    /// 已实现解析的平台（识别规则新增平台时，在实现解析器之前保持 false 会提示「暂未支持」）
+    public var isResolvable: Bool { true }
 
     /// 对应的登录账号类型（不需要登录的平台为 nil）
     public var accountKind: AccountKind? {
         switch self {
         case .quark: return .quark
         case .uc: return .uc
-        default: return nil
+        case .xunlei: return .xunlei
+        case .baidu: return .baidu
+        case .c139: return .c139
+        case .pan123: return .pan123
+        case .pan115: return .pan115
+        case .guangya, .ilanzou, .lanzou: return nil
         }
     }
 }
@@ -118,7 +118,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, bilibili
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, bilibili
 
     public var id: String { rawValue }
 
@@ -126,9 +126,17 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         switch self {
         case .quark: return "夸克网盘"
         case .uc: return "UC 网盘"
+        case .baidu: return "百度网盘"
+        case .xunlei: return "迅雷网盘"
+        case .pan123: return "123 云盘"
+        case .pan115: return "115 网盘"
+        case .c139: return "139 网盘"
         case .bilibili: return "哔哩哔哩"
         }
     }
+
+    /// 网盘账号（区别于视频平台账号）
+    public var isDrive: Bool { self != .bilibili }
 }
 
 /// 解析过程中给用户看的错误（文案即提示语）

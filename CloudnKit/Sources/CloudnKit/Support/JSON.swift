@@ -110,3 +110,46 @@ enum CFGetTypeIDCompat {
         #endif
     }
 }
+
+/// 保持键顺序的紧凑 JSON 编码（对齐 org.json 的 toString）：部分平台按「明文 body 字符串」签名，
+/// JSONSerialization 不保证键顺序，签名就会对不上。
+public indirect enum OrderedJSON: Sendable {
+    case object([(String, OrderedJSON)])
+    case array([OrderedJSON])
+    case string(String)
+    case int(Int64)
+    case bool(Bool)
+
+    public var text: String {
+        switch self {
+        case .object(let pairs): return "{" + pairs.map { OrderedJSON.quote($0.0) + ":" + $0.1.text }.joined(separator: ",") + "}"
+        case .array(let items): return "[" + items.map(\.text).joined(separator: ",") + "]"
+        case .string(let s): return OrderedJSON.quote(s)
+        case .int(let n): return String(n)
+        case .bool(let b): return b ? "true" : "false"
+        }
+    }
+
+    static func quote(_ s: String) -> String {
+        var out = "\""
+        for scalar in s.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case "\u{08}": out += "\\b"
+            case "\u{0C}": out += "\\f"
+            default:
+                if scalar.value < 0x20 {
+                    let hex = String(scalar.value, radix: 16)
+                    out += "\\u" + String(repeating: "0", count: 4 - hex.count) + hex
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out + "\""
+    }
+}

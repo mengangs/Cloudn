@@ -12,11 +12,11 @@ struct AccountsView: View {
         NavigationStack {
             List {
                 Section {
-                    ForEach([AccountKind.quark, .uc]) { row($0) }
+                    ForEach(AccountKind.allCases.filter(\.isDrive)) { row($0) }
                 } header: {
                     Text("网盘")
                 } footer: {
-                    Text("蓝奏云无需登录。夸克 / UC 未登录也能浏览与下载部分文件。")
+                    Text("蓝奏云、蓝奏云优享版、光鸭云盘无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
                 }
                 Section {
                     row(.bilibili)
@@ -26,7 +26,7 @@ struct AccountsView: View {
                     Text("抖音、快手、微博、AcFun 无需登录即可解析。")
                 }
                 Section {
-                    Label("Cookie 仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
+                    Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -69,7 +69,7 @@ struct AccountsView: View {
             if account == nil {
                 Menu {
                     Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
-                    Button { manualKind = kind } label: { Label("手动粘贴 Cookie", systemImage: "doc.on.clipboard") }
+                    Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
                 } label: {
                     Text("登录")
                 } primaryAction: {
@@ -103,19 +103,19 @@ struct ManualCookieView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("在电脑浏览器登录后复制请求头里的 Cookie", text: $cookie, axis: .vertical)
+                    TextField(kind.manualPlaceholder, text: $cookie, axis: .vertical)
                         .lineLimit(4...10)
                         .font(.system(.footnote, design: .monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } footer: {
-                    Text(kind == .bilibili ? "需包含 SESSDATA" : "需包含 __pus 与 __puus")
+                    Text(kind.manualHint)
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
-            .navigationTitle("\(kind.displayName) Cookie")
+            .navigationTitle("\(kind.displayName) 凭据")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -129,7 +129,7 @@ struct ManualCookieView: View {
                                     app.show("已登录：\(name)")
                                     dismiss()
                                 } else {
-                                    error = "Cookie 无效或已过期，请重新复制"
+                                    error = "凭据无效或已过期，请重新复制"
                                 }
                             }
                         }

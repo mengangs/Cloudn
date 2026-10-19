@@ -48,7 +48,10 @@ final class ShareBrowserModel: Hashable, Identifiable {
         switch share.platform {
         case .quark: return "未登录夸克：可直接下载约 50MB 以内的文件，登录后不限大小"
         case .uc: return "未登录 UC：也可以直接下载，登录后视频可取原画"
-        default: return nil
+        case .pan115: return "未登录 115：可直接下载小文件，大文件需要先登录"
+        default:
+            guard resolver?.supportsGuestDownload == false else { return nil }
+            return "未登录\(kind.displayName)：可以浏览分享内容，下载前请先到「账号」页登录"
         }
     }
 
@@ -68,7 +71,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
             try await load(s.rootId)
         } catch {
             let message = error.localizedDescription
-            needsPassword = message.contains("提取码") || message.contains("密码") || message.contains("passcode")
+            needsPassword = message.contains("提取码") || message.contains("密码") || message.contains("访问码") || message.contains("passcode")
             errorMessage = message
         }
     }
