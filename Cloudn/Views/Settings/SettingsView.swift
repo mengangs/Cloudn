@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var cacheCleared = false
     @State private var pickingFolder = false
     @State private var logCleared = false
+    @State private var checking = false
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -56,6 +57,31 @@ struct SettingsView: View {
                     Text("选择「文件」App 里的文件夹（如 iCloud 云盘）后，下载完成的文件会移动过去，并保留文件夹层级。")
                 }
 
+                Section("外观") {
+                    Picker("主题", selection: $settings.appearance) {
+                        ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section {
+                    Button {
+                        checkUpdate()
+                    } label: {
+                        HStack {
+                            Text("检查更新")
+                            Spacer()
+                            if checking { ProgressView() } else { Text("当前 \(AppModel.currentVersion)").foregroundStyle(.secondary) }
+                        }
+                    }
+                    .disabled(checking)
+                    Toggle("自动检查更新", isOn: $settings.autoCheckUpdates)
+                } header: {
+                    Text("更新")
+                } footer: {
+                    Text("从 GitHub Releases（\(UpdateChecker.repository)）读取最新版本，每天最多自动检查一次。")
+                }
+
                 Section("诊断") {
                     if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
                         ShareLink(item: log) { Label("导出诊断日志", systemImage: "square.and.arrow.up") }
@@ -88,6 +114,66 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .sheet(isPresented: $pickingFolder) {
                 FolderPicker { app.settings.setExportFolder($0) }
+            }
+        }
+    }
+}
+
+extension SettingsView {
+    private func checkUpdate() {
+        checking = true
+        Task {
+            defer { checking = false }
+            do {
+                app.settings.lastUpdateCheck = Date()
+                if let release = try await UpdateChecker.check(current: AppModel.currentVersion) {
+                    app.availableUpdate = release
+                } else {
+                    app.show("已是最新版本")
+                }
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
+        }
+    }
+}
+
+/// 新版本提示：更新说明 + 前往下载
+struct UpdateSheet: View {
+    let release: AppRelease
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    LabeledContent("新版本", value: release.version)
+                    LabeledContent("当前版本", value: AppModel.currentVersion)
+                }
+                if !release.notes.isEmpty {
+                    Section("更新说明") {
+                        Text(release.notes).font(.callout).textSelection(.enabled)
+                    }
+                }
+                Section {
+                    if let url = URL(string: release.pageURL) {
+                        Button { openURL(url) } label: { Label("前往发布页", systemImage: "safari") }
+                    }
+                    if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
+                        Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", systemImage: "arrow.down.app") }
+                    }
+                    Button("忽略此版本", role: .destructive) {
+                        app.settings.skippedVersion = release.version
+                        dismiss()
+                    }
+                }
+            }
+            .navigationTitle(release.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("稍后") { dismiss() } }
             }
         }
     }

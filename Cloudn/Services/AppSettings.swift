@@ -2,6 +2,7 @@
 import CloudnKit
 import Foundation
 import Observation
+import SwiftUI
 
 /// 全部偏好设置的唯一入口（UserDefaults），值域在 setter 里兜住
 @MainActor
@@ -45,6 +46,21 @@ final class AppSettings {
     var notifyOnFinish: Bool {
         didSet { defaults.set(notifyOnFinish, forKey: "notifyOnFinish") }
     }
+    /// 外观：跟随系统 / 浅色 / 深色
+    var appearance: Appearance {
+        didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
+    }
+    /// 启动时自动检查更新（每天最多一次）
+    var autoCheckUpdates: Bool {
+        didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") }
+    }
+    var lastUpdateCheck: Date? {
+        didSet { defaults.set(lastUpdateCheck, forKey: "lastUpdateCheck") }
+    }
+    /// 用户选择忽略的版本（自动检查不再提示）
+    var skippedVersion: String {
+        didSet { defaults.set(skippedVersion, forKey: "skippedVersion") }
+    }
     var acceptedNotice: Bool {
         didSet { defaults.set(acceptedNotice, forKey: "acceptedNotice") }
     }
@@ -62,7 +78,8 @@ final class AppSettings {
             "notifyOnFinish": true,
             "retryCount": 3,
             "speedLimitKB": 0,
-            "directFirst": true
+            "directFirst": true,
+            "autoCheckUpdates": true
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
         connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
@@ -75,6 +92,10 @@ final class AppSettings {
         autoSaveToPhotos = defaults.bool(forKey: "autoSaveToPhotos")
         notifyOnFinish = defaults.bool(forKey: "notifyOnFinish")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
+        appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
+        lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date
+        skippedVersion = defaults.string(forKey: "skippedVersion") ?? ""
         resolverOptions.directFirst = directFirst
         publish()
     }
@@ -109,5 +130,27 @@ extension AppSettings {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         exportFolderBookmark = try? url.bookmarkData()
+    }
+}
+
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
     }
 }

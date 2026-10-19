@@ -31,6 +31,8 @@ final class AppModel {
     var toast: Toast?
     /// 外部（URL Scheme / 分享）送进来的待解析文本
     var pendingInput: String?
+    /// 自动检查发现的新版本（弹窗提示）
+    var availableUpdate: AppRelease?
 
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续
@@ -117,6 +119,20 @@ final class AppModel {
         }
     }
 
+    static var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
+
+    /// 启动 / 回到前台时的自动检查：每天最多一次，跳过用户忽略的版本，失败静默
+    func autoCheckForUpdates() {
+        guard settings.autoCheckUpdates else { return }
+        if let last = settings.lastUpdateCheck, Date().timeIntervalSince(last) < 86_400 { return }
+        settings.lastUpdateCheck = Date()
+        Task {
+            guard let release = try? await UpdateChecker.check(current: Self.currentVersion),
+                  release.version != settings.skippedVersion else { return }
+            availableUpdate = release
+        }
+    }
+
     func show(_ message: String, error: Bool = false) {
         if error { Log.error(message) }
         toast = Toast(message: message, isError: error)
@@ -136,6 +152,7 @@ final class AppModel {
         isActive = active
         let engine = downloads.engine
         if active {
+            autoCheckForUpdates()
             endBackgroundTask()
             let ids = suspendedIds
             suspendedIds = []
