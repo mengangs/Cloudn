@@ -51,12 +51,16 @@ final class ShareViewController: UIViewController {
             .joined(separator: " ")
     }
 
-    /// 扩展不能直接调用 UIApplication.shared，沿响应链找到应用对象再打开链接
+    /// 扩展里 UIApplication 的打开接口在编译期不可用：沿响应链找到能响应
+    /// openURL:options:completionHandler: 的对象（即应用对象），按方法实现直接调用
     private func openHostApp(_ url: URL) -> Bool {
+        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
-            if let app = current as? UIApplication {
-                app.open(url, options: [:], completionHandler: nil)
+            if current.responds(to: selector), let imp = current.method(for: selector) {
+                let open = unsafeBitCast(imp, to: OpenURL.self)
+                open(current, selector, url as NSURL, NSDictionary(), nil)
                 return true
             }
             responder = current.next
