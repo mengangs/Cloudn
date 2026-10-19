@@ -7,7 +7,8 @@ struct DownloadsView: View {
     @Environment(AppModel.self) private var app
     @State private var filter: Filter = .all
     @State private var previewURL: URL?
-    @State private var deleting: DownloadItem?
+    @State private var selecting = false
+    @State private var selection = Set<UUID>()
     @State private var refreshing = Set<UUID>()
     @State private var samples: [Double] = []
     /// 展开的分组
@@ -51,30 +52,62 @@ struct DownloadsView: View {
         }
     }
 
-    private func row(_ item: DownloadItem, inset: CGFloat = 0) -> some View {
-        DownloadRow(item: item, refreshing: refreshing.contains(item.id))
-            .contentShape(Rectangle())
-            .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
-                if item.status == .completed {
-                    Button("删除任务和文件", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
-                    Button("仅删除记录") { app.downloads.remove(item, deleteFile: false) }
+    /// 一个任务一张卡片：点按打开文件 / 暂停 / 继续，长按是全部操作；多选模式下点按勾选
+    private func row(_ item: DownloadItem) -> some View {
+        let on = selection.contains(item.id)
+        return HStack(spacing: 12) {
+            if selecting {
+                SelectMark(on: on).transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            DownloadRow(item: item, refreshing: refreshing.contains(item.id), showsControl: !selecting)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(on ? Color.claySoft.opacity(0.5) : Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(on ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.hairline), lineWidth: on ? 1.5 : 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture { selecting ? toggle([item.id]) : primaryAction(item) }
+        .contextMenu { menu(item) }
+    }
+
+    /// 一组任务：标题卡片点按展开，展开后成员卡片略向内缩进；多选模式下点标题勾选整组
+    private func groupCard(_ group: DownloadGroup, _ members: [DownloadItem]) -> some View {
+        let open = expanded.contains(group.id)
+        let ids = Set(members.map(\.id))
+        let allOn = ids.isSubset(of: selection)
+        return VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                if selecting { SelectMark(on: allOn) }
+                GroupHeader(title: group.title, items: members)
+                Spacer(minLength: 0)
+                IconView(.chevronRight, size: 14)
+                    .foregroundStyle(Color.ink3)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .onTapGesture {
+                if selecting {
+                    if allOn { selection.subtract(ids) } else { selection.formUnion(ids) }
                 } else {
-                    Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+                    withAnimation(.snappy(duration: 0.25)) {
+                        if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                    }
                 }
             }
-            .onTapGesture { primaryAction(item) }
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
+            .contextMenu { groupMenu(members) }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(open ? "收起" : "展开")
+            if open {
+                ForEach(members) { row($0).padding(.leading, 14) }
             }
-            .swipeActions(edge: .leading) {
-                if item.status.isActive {
-                    Button { app.downloads.pause(item) } label: { Label("暂停", glyph: .pause) }.tint(Color.ink2)
-                } else if item.status == .paused || item.status == .failed {
-                    Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }.tint(Color.success)
-                }
-            }
-            .contextMenu { menu(item) }
-            .cardRow(inset: inset)
+        }
     }
 
     @ViewBuilder
@@ -83,82 +116,127 @@ struct DownloadsView: View {
             Label("全部继续", glyph: .play)
         }
         Button { members.filter(\.status.isActive).forEach(app.downloads.pause) } label: { Label("全部暂停", glyph: .pause) }
-        Button(role: .destructive) { members.forEach { app.downloads.remove($0, deleteFile: false) } } label: {
-            Label("删除这一组记录（保留已下载文件）", glyph: .trash)
-        }
+        Menu {
+            Button("删除任务和文件", role: .destructive) { members.forEach { app.downloads.remove($0, deleteFile: true) } }
+            Button("仅删除记录") { members.forEach { app.downloads.remove($0, deleteFile: false) } }
+        } label: { Label("删除这一组", glyph: .trash) }
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                if !app.downloads.items.isEmpty {
-                    Section {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if !app.downloads.items.isEmpty {
                         SummaryCard(items: app.downloads.items, samples: samples)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
-                            .listRowBackground(Color.clear)
-                        filterChips
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 10, trailing: 16))
-                            .listRowBackground(Color.clear)
+                        filterChips.padding(.vertical, 6)
                     }
-                    .listRowSeparator(.hidden)
-                }
-                if items.isEmpty {
-                    emptyState
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
-                Section {
+                    if items.isEmpty { emptyState }
                     ForEach(entries) { entry in
                         switch entry {
-                        case .single(let item):
-                            row(item)
-                        case .group(let group, let members):
-                            let open = expanded.contains(group.id)
-                            Button {
-                                withAnimation(.snappy(duration: 0.25)) {
-                                    if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
-                                }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    GroupHeader(title: group.title, items: members)
-                                    Spacer(minLength: 0)
-                                    IconView(.chevronRight, size: 14)
-                                        .foregroundStyle(Color.ink3)
-                                        .rotationEffect(.degrees(open ? 90 : 0))
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint(open ? "收起" : "展开")
-                            .contextMenu { groupMenu(members) }
-                            .cardRow()
-                            if open {
-                                ForEach(members) { row($0, inset: 14) }
-                            }
+                        case .single(let item): row(item)
+                        case .group(let group, let members): groupCard(group, members)
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, selecting ? 110 : 32)
+                .animation(.snappy(duration: 0.25), value: items.map(\.id))
+                .animation(.snappy(duration: 0.25), value: selecting)
             }
-            .listStyle(.plain)
-            .paperList()
+            .background(Color.paper)
             .navigationTitle("下载")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
-                        Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
-                        Button(role: .destructive) { app.downloads.clearFinished() } label: {
-                            Label("清除已完成记录", glyph: .trash)
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if selecting {
+                        Button(selection.count == items.count ? "全不选" : "全选") {
+                            selection = selection.count == items.count ? [] : Set(items.map(\.id))
                         }
-                    } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
-                    .disabled(app.downloads.items.isEmpty)
+                        Button("完成") { selecting = false; selection = [] }.fontWeight(.semibold)
+                    } else {
+                        Menu {
+                            Button { selecting = true } label: { Label("选择", glyph: .checkCircle) }
+                            Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
+                            Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
+                            Button(role: .destructive) { app.downloads.clearFinished() } label: {
+                                Label("清除已完成记录", glyph: .trash)
+                            }
+                        } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
+                        .disabled(app.downloads.items.isEmpty)
+                    }
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                if selecting { selectionBar.padding(.horizontal, 16).padding(.bottom, 8) }
+            }
+            .sensoryFeedback(.selection, trigger: selection)
             .task { await sampleSpeed() }
             .sheet(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
                 QuickLookPreview(url: item.url).ignoresSafeArea()
             }
         }
+    }
+
+    /// 多选时底部的浮动操作条
+    private var selectionBar: some View {
+        let chosen = app.downloads.items.filter { selection.contains($0.id) }
+        let canPause = chosen.contains { $0.status.isActive }
+        let canResume = chosen.contains { $0.status == .paused || $0.status == .failed }
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chosen.isEmpty ? "未选择" : "已选 \(chosen.count) 项").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                    .contentTransition(.numericText())
+                let size = chosen.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
+                if size > 0 { Text(ByteFormat.string(size)).font(.monoSmall).foregroundStyle(Color.ink3) }
+            }
+            Spacer(minLength: 0)
+            if canResume {
+                Button { chosen.filter { $0.status == .paused || $0.status == .failed }.forEach(app.downloads.resume) } label: {
+                    IconView(.play, size: 16)
+                }
+                .buttonStyle(CircleIconButtonStyle(size: 40))
+                .accessibilityLabel("继续所选")
+            }
+            if canPause {
+                Button { chosen.filter(\.status.isActive).forEach(app.downloads.pause) } label: { IconView(.pause, size: 16) }
+                    .buttonStyle(CircleIconButtonStyle(size: 40))
+                    .accessibilityLabel("暂停所选")
+            }
+            Menu {
+                Button("删除任务和文件", role: .destructive) { removeSelected(deleteFiles: true) }
+                Button("仅删除记录") { removeSelected(deleteFiles: false) }
+            } label: {
+                HStack(spacing: 6) { Image(icon: .trash); Text("删除") }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 40)
+                    .background(Color.clayInk, in: Capsule())
+            }
+            .disabled(chosen.isEmpty)
+            .opacity(chosen.isEmpty ? 0.5 : 1)
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(Color.surface, in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.hairline, lineWidth: 1) }
+        .floatingShadow()
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func toggle(_ ids: [UUID]) {
+        for id in ids {
+            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        }
+    }
+
+    private func removeSelected(deleteFiles: Bool) {
+        let chosen = app.downloads.items.filter { selection.contains($0.id) }
+        chosen.forEach { app.downloads.remove($0, deleteFile: deleteFiles) }
+        app.show("已删除 \(chosen.count) 个任务")
+        selection = []
+        selecting = false
     }
 
     private var filterChips: some View {
@@ -239,7 +317,15 @@ struct DownloadsView: View {
         Button { UIPasteboard.general.string = item.request.url; app.show("已复制下载地址") } label: {
             Label("复制下载地址", glyph: .link)
         }
-        Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
+        // 删除放在二级菜单里：选中具体方式就是确认，不再额外弹确认框
+        Menu {
+            if item.status == .completed {
+                Button("删除任务和文件", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+                Button("仅删除记录") { app.downloads.remove(item, deleteFile: false) }
+            } else {
+                Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+            }
+        } label: { Label("删除", glyph: .trash) }
     }
 
     private func refresh(_ item: DownloadItem) {
@@ -407,6 +493,7 @@ private struct IdentifiedURL: Identifiable {
 struct DownloadRow: View {
     let item: DownloadItem
     var refreshing = false
+    var showsControl = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -438,7 +525,9 @@ struct DownloadRow: View {
                     Label("已移到：\(exported)", glyph: .folder).font(.caption2).foregroundStyle(Color.ink3).lineLimit(2)
                 }
             }
-            DownloadStateControl(item: item, busy: refreshing || item.status == .merging) {}
+            if showsControl {
+                DownloadStateControl(item: item, busy: refreshing || item.status == .merging) {}
+            }
         }
         .padding(.vertical, 4)
     }
