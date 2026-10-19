@@ -15,8 +15,11 @@ struct ResolveView: View {
     @FocusState private var focused: Bool
 
     private var detected: DetectedInput? { DetectedInput.detect(input) }
+    @State private var askingCommandConsent = false
     /// 识别不出链接、但像迅雷中文口令
-    private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
+    private var isXunleiKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
+    /// 识别不出链接、但可能是网盘口令（迅雷口令，或要问第三方的夸克 / UC 口令）
+    private var isKouling: Bool { detected == nil && (isXunleiKouling || QuarkCommand.looksLikeCommand(input)) }
 
     var body: some View {
         NavigationStack {
@@ -44,6 +47,16 @@ struct ResolveView: View {
             }
             .navigationDestination(item: $videoResult) { result in
                 VideoResultView(result: result)
+            }
+            .alert("使用第三方服务解析口令？", isPresented: $askingCommandConsent) {
+                Button("取消", role: .cancel) {}
+                Button("仅这一次") { resolveKouling(consented: true) }
+                Button("总是允许") {
+                    app.settings.allowCommandService = true
+                    resolveKouling(consented: true)
+                }
+            } message: {
+                Text("夸克 / UC 中文口令无法在本机还原，需要把口令文字发给第三方「\(QuarkCommand.serviceName)」服务换取分享 ID。不会发送任何账号信息；可在设置中关闭。")
             }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
@@ -109,7 +122,7 @@ struct ResolveView: View {
                 if let detected {
                     DetectionChip(detected: detected)
                 } else if isKouling {
-                    Label("迅雷口令", systemImage: SharePlatform.xunlei.symbol)
+                    Label(isXunleiKouling ? "迅雷 / 夸克口令" : "夸克 / UC 口令", systemImage: "text.quote")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -309,20 +322,44 @@ struct ResolveView: View {
 }
 
 extension ResolveView {
-    /// 迅雷中文口令：先换成带提取码的分享链接，再按普通分享打开
-    private func resolveKouling() {
-        parsingVideo = true
+    /// 中文口令：迅雷口令先问迅雷；不是迅雷口令（或迅雷没有对应分享）再经第三方服务按夸克 / UC 口令解析。
+    /// 换出分享链接后按普通分享打开。
+    private func resolveKouling(consented: Bool = false) {
         let text = input
+        let tryXunlei = isXunleiKouling
+        let canAskService = QuarkCommand.looksLikeCommand(text)
+        parsingVideo = true
         Task {
             defer { parsingVideo = false }
-            do {
-                let url = try await XunleiKouling.resolve(text)
-                guard let share = ShareLinkParser.parse(url) else { throw CloudnError("口令对应的链接无法识别") }
-                shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
-            } catch {
-                app.show(error.localizedDescription, error: true)
+            var lastError: Error?
+            if tryXunlei {
+                do {
+                    return open(try await XunleiKouling.resolve(text))
+                } catch {
+                    lastError = error
+                }
             }
+            if canAskService {
+                guard app.settings.allowCommandService || consented else {
+                    askingCommandConsent = true
+                    return
+                }
+                do {
+                    return open(try await QuarkCommand.resolve(text))
+                } catch {
+                    lastError = error
+                }
+            }
+            app.show(lastError?.localizedDescription ?? "无法识别该口令", error: true)
         }
+    }
+
+    private func open(_ url: String) {
+        guard let share = ShareLinkParser.parse(url) else {
+            app.show("口令对应的链接无法识别", error: true)
+            return
+        }
+        shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
     }
 }
 

@@ -40,10 +40,11 @@ struct SettingsView: View {
                     Toggle("回到应用时提示剪贴板链接", isOn: $settings.clipboardHint)
                     Toggle("免转存下载（夸克 / UC）", isOn: $settings.directFirst)
                     Toggle("多账号下载", isOn: $settings.multiAccountDownload)
+                    Toggle("夸克 / UC 中文口令解析", isOn: $settings.allowCommandService)
                 } header: {
                     Text("解析")
                 } footer: {
-                    Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速。")
+                    Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速。中文口令：夸克 / UC 口令需发给第三方「\(QuarkCommand.serviceName)」服务换取分享 ID（不含任何账号信息），迅雷口令直接问迅雷。")
                 }
 
                 Section {
