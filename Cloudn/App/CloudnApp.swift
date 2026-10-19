@@ -3,7 +3,8 @@ import SwiftUI
 
 @main
 struct CloudnApp: App {
-    @State private var model = AppModel()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var model = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -11,6 +12,7 @@ struct CloudnApp: App {
             RootView()
                 .environment(model)
                 .onOpenURL { model.handle(url: $0) }
+                .preferredColorScheme(model.settings.appearance.colorScheme)
         }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseChanged(active: phase == .active)
@@ -43,6 +45,7 @@ struct RootView: View {
             NoticeSheet { model.settings.acceptedNotice = true }
                 .interactiveDismissDisabled()
         }
+        .sheet(item: $model.availableUpdate) { UpdateSheet(release: $0) }
     }
 }
 

@@ -30,8 +30,10 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     private var session: URLSession!
     private let lock = NSLock()
     private var handlers: [Int: Handler] = [:]
+    private let limiter: RateLimiter?
 
-    override init() {
+    init(limiter: RateLimiter? = nil) {
+        self.limiter = limiter
         super.init()
         let config = HTTPClient.makeConfiguration()
         config.timeoutIntervalForRequest = 60
@@ -87,6 +89,7 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard let h = handler(for: dataTask), h.failure == nil else { return }
+        limiter?.throttle(data.count)
         do {
             try h.onData(data)
         } catch {

@@ -45,33 +45,35 @@ struct WebLoginView: View {
             case .xunlei, .pan123: "在页面中完成登录后会自动识别；如未识别，可点「完成」"
             default: nil
             }
-            // 轮询登录态：关键 Cookie 出现即自动校验保存
+            // 轮询登录态：关键凭据出现即自动校验保存；同一份凭据校验失败过就不再重复请求
+            var tried = ""
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if verifying { continue }
                 let credential = await store.credential(for: kind)
-                if kind.looksLoggedIn(credential) {
-                    await finish(manual: false)
-                    return
-                }
+                guard kind.looksLoggedIn(credential), credential != tried else { continue }
+                tried = credential
+                if await finish(manual: false) { return }
             }
         }
     }
 
-    private func finish(manual: Bool) async {
+    @discardableResult
+    private func finish(manual: Bool) async -> Bool {
         verifying = true
         defer { verifying = false }
         let credential = await store.credential(for: kind)
         guard kind.looksLoggedIn(credential) else {
             if manual { hint = "还没有检测到登录状态，请先在页面中完成登录" }
-            return
+            return false
         }
         if let name = await app.accounts.login(kind, cookie: credential) {
             app.show("已登录：\(name)")
             dismiss()
-        } else if manual {
-            hint = "登录状态校验失败，请稍后再点「完成」"
+            return true
         }
+        if manual { hint = "登录状态校验失败，请确认已在页面中完成登录后再点「完成」" }
+        return false
     }
 }
 
@@ -116,9 +118,8 @@ struct LoginWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store.dataStore
-        if kind == .xunlei {
-            // 迅雷登录页是不做响应式的桌面布局：在手机宽度下登录框会被压扁裁掉
-            config.userContentController.addUserScript(WKUserScript(source: Self.xunleiRenderFix, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        if let script = kind.loginPageScript {
+            config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = kind.loginUserAgent
@@ -132,6 +133,17 @@ struct LoginWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    /// 强制按桌面宽度渲染
+    static func viewportScript(width: Int) -> String {
+        """
+        (function(){try{
+          var m=document.querySelector('meta[name="viewport"]');
+          if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');(document.head||document.documentElement).appendChild(m);}
+          m.setAttribute('content','width=\(width)');
+        }catch(e){}})()
+        """
+    }
 
     /// 固定较窄的桌面视口、隐藏宣传图、放宽 OAuth iframe（参考 YunX 的 DESKTOP_RENDER_FIX_JS）
     static let xunleiRenderFix = """

@@ -73,6 +73,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             files = [{"fid": "d1", "file_name": "目录", "dir": True, "pdir_fid": "0"},
                      {"fid": "f1", "file_name": "a.mp4", "size": 10, "dir": False, "pdir_fid": "0", "share_fid_token": "tok1"}]
             return self.send_json({"status": 200, "data": {"list": files}})
+        if path == "/1/clouddrive/file/sort":
+            assert "pdir_fid=0" in self.path, self.path
+            files = [{"fid": "d9", "file_name": "我的文件夹", "dir": True}, {"fid": "f9", "file_name": "a.txt", "dir": False}]
+            return self.send_json({"status": 200, "data": {"list": files}})
+        if path == "/1/clouddrive/task":
+            assert "task_id=t1" in self.path, self.path
+            return self.send_json({"status": 200, "data": {"status": 2, "finished_at": 1, "save_as": {"save_as_top_fids": ["n1"]}}})
         if path == "/forbidden":
             return self.send_bytes(403, b"no")
         self.send_bytes(404, b"not found")
@@ -94,6 +101,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                       {"Set-Cookie": "__puus=renewed; Path=/; Domain=127.0.0.1"})
             return self.send_json({"status": 200, "data": [{"fid": "f1", "file_name": "a.mp4", "download_url": "https://cdn/guest", "size": 10}]},
                                   {"Set-Cookie": "__pugs=guest123; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT; HttpOnly"})
+        if path == "/1/clouddrive/share/sharepage/save":
+            ok = (body.get("fid_list") == ["f1"] and body.get("fid_token_list") == ["tok1"] and body.get("to_pdir_fid") == "d9"
+                  and body.get("stoken") == "ST+/=" and body.get("pdir_fid") == "0")
+            if not ok:
+                return self.send_json({"status": 400, "code": 1, "message": "bad save body: %s" % json.dumps(body)})
+            return self.send_json({"status": 200, "data": {"task_id": "t1"}})
         self.send_bytes(404, b"")
 
     def send_json(self, obj, extra=None):

@@ -9,6 +9,8 @@ struct ShareBrowserView: View {
     @State private var actionFile: ShareFile?
     @State private var preview: MediaPreviewItem?
     @State private var retryPwd = ""
+    @State private var saveItems: SaveItems?
+    @State private var textPreview: TextPreviewItem?
 
     var body: some View {
         List {
@@ -74,6 +76,21 @@ struct ShareBrowserView: View {
         .sheet(item: $preview) { item in
             MediaPreviewView(item: item)
         }
+        .sheet(item: $textPreview) { TextPreviewView(item: $0) }
+        .sheet(item: $saveItems) { items in
+            SaveToDriveView(model: model, files: items.files)
+        }
+    }
+
+    /// 打开「转存到我的网盘」；没登录就引导去账号页
+    private func startSave(_ files: [ShareFile]) {
+        guard !files.isEmpty else { return }
+        if model.saveNeedsLogin {
+            app.show("转存需要先登录\(model.share.platform.displayName)", error: true)
+            app.selectedTab = .accounts
+            return
+        }
+        saveItems = SaveItems(files: files)
     }
 
     private var summary: String {
@@ -144,6 +161,9 @@ struct ShareBrowserView: View {
                 Menu {
                     Button { model.selecting = true } label: { Label("多选", systemImage: "checkmark.circle") }
                     Button { Task { await model.downloadAll() } } label: { Label("下载当前目录全部", systemImage: "arrow.down.circle") }
+                    if model.saver != nil {
+                        Button { startSave(model.files) } label: { Label("当前目录全部转存到我的网盘", systemImage: "tray.and.arrow.down") }
+                    }
                     Button { UIPasteboard.general.string = model.sourceText; app.show("已复制分享链接") } label: {
                         Label("复制分享链接", systemImage: "doc.on.doc")
                     }
@@ -165,13 +185,24 @@ struct ShareBrowserView: View {
             .padding()
             .background(.bar)
         } else if model.selecting {
-            Button {
-                Task { await model.downloadSelected() }
-            } label: {
-                Label("下载所选（\(model.selection.count)）", systemImage: "arrow.down.circle.fill")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                if model.saver != nil {
+                    Button {
+                        startSave(model.files.filter { model.selection.contains($0.fid) })
+                    } label: {
+                        Label("转存", systemImage: "tray.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Button {
+                    Task { await model.downloadSelected() }
+                } label: {
+                    Label("下载所选（\(model.selection.count)）", systemImage: "arrow.down.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(model.selection.isEmpty)
             .padding()
@@ -194,6 +225,9 @@ struct ShareBrowserView: View {
         if file.isDirectory {
             Button { Task { await model.enter(file) } } label: { Label("打开", systemImage: "folder") }
             Button { Task { await model.downloadFolder(file) } } label: { Label("下载整个文件夹", systemImage: "arrow.down.circle") }
+            if model.saver != nil {
+                Button { startSave([file]) } label: { Label("转存到我的网盘", systemImage: "tray.and.arrow.down") }
+            }
         } else {
             fileActions(file)
         }
@@ -216,6 +250,16 @@ struct ShareBrowserView: View {
                 Label(kind == .image ? "预览" : "在线播放", systemImage: kind == .image ? "eye" : "play.circle")
             }
         }
+        if kind == .text {
+            Button {
+                run {
+                    let link = try await model.link(for: file)
+                    textPreview = TextPreviewItem(url: link.url, headers: link.headers, title: file.name)
+                }
+            } label: {
+                Label("在线查看", systemImage: "doc.text.magnifyingglass")
+            }
+        }
         Button {
             run {
                 let link = try await model.link(for: file)
@@ -224,6 +268,9 @@ struct ShareBrowserView: View {
             }
         } label: {
             Label("复制直链", systemImage: "link")
+        }
+        if model.saver != nil {
+            Button { startSave([file]) } label: { Label("转存到我的网盘", systemImage: "tray.and.arrow.down") }
         }
     }
 
@@ -268,4 +315,10 @@ struct FileRow: View {
         let date = Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n)
         return date.formatted(date: .numeric, time: .shortened)
     }
+}
+
+/// 待转存的条目（sheet 用）
+struct SaveItems: Identifiable {
+    let id = UUID()
+    let files: [ShareFile]
 }

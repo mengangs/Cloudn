@@ -2,6 +2,8 @@
 // 迅雷网盘分享解析：drive/v1/share 匿名列目录（子目录走 share/detail）→ 登录态转存到临时目录 →
 // 文件详情取直链 → 删除转存。登录凭据来自网页版 localStorage（access / refresh token + 设备号）。
 // 协议细节（含 captcha_sign 十层加盐 md5）参考 YunX（AGPL-3.0）的 XunleiApi / XunleiWebCredential。
+// 我的网盘管理参考 YunX（AGPL-3.0）：drive/v1/files 列目录 / 新建 / PATCH 重命名、files:batchMove / batchTrash、
+// POST drive/v1/share 创建分享、drive/v1/about 容量。
 import Foundation
 
 /// 迅雷网页登录凭据，以 JSON 存在账号的 Cookie 槽位里
@@ -10,12 +12,15 @@ public struct XunleiCredential: Equatable, Sendable {
     public var refreshToken: String
     public var deviceId: String
     public var captchaToken: String
+    /// 令牌来源：web（网页 localStorage）或 app（应用内账号密码 / 短信登录）。两者的刷新方式不同
+    public var source: String
 
-    public init(accessToken: String, refreshToken: String, deviceId: String = "", captchaToken: String = "") {
+    public init(accessToken: String, refreshToken: String, deviceId: String = "", captchaToken: String = "", source: String = "web") {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.deviceId = deviceId
         self.captchaToken = captchaToken
+        self.source = source
     }
 
     /// 网页版 OAuth client_id：网页 token 只能用它刷新（不带 client_secret）
@@ -73,12 +78,12 @@ public struct XunleiCredential: Equatable, Sendable {
         guard !access.isEmpty || !refresh.isEmpty else { return nil }
         let captcha = obj.string("captcha_token", "captchaToken")
         return XunleiCredential(accessToken: access, refreshToken: refresh, deviceId: obj.string("device_id", "deviceId"),
-                                captchaToken: isValidToken(captcha) ? captcha : "")
+                                captchaToken: isValidToken(captcha) ? captcha : "", source: obj["source"].string == "app" ? "app" : "web")
     }
 
     public var serialized: String {
         OrderedJSON.object([("access_token", .string(accessToken)), ("refresh_token", .string(refreshToken)),
-                            ("device_id", .string(deviceId)), ("captcha_token", .string(captchaToken))]).text
+                            ("device_id", .string(deviceId)), ("captcha_token", .string(captchaToken)), ("source", .string(source))]).text
     }
 
     static let tokenRx = Rx(#"^[A-Za-z0-9._~+/=-]+$"#)
@@ -184,11 +189,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     public func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink {
         let id = try await loginIdentity()
         let dir = try await ensureTempDir(id)
-        let body = OrderedJSON.object([
-            ("share_id", .string(session.shareId)), ("pass_code_token", .string(session.stoken)), ("parent_id", .string(dir)),
-            ("ancestor_ids", .array([])), ("file_ids", .array([.string(file.fid)])), ("specify_parent_id", .bool(true))
-        ])
-        let restored = try await pan("POST:/drive/v1/share/restore", url: panBase + "/drive/v1/share/restore", body: body, identity: id)
+        let restored = try await restore(session, ids: [file.fid], to: dir, identity: id)
         // params.trace_file_ids 是 JSON 字符串：{"分享文件 id":"转存后新 id"}
         let trace = JSON(text: restored["params"]["trace_file_ids"].string)
         let savedId = trace?[file.fid].string.nilIfBlank ?? restored["file_id"].string
@@ -242,11 +243,22 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
                         userId: XunleiCredential.jwtClaim(cred.accessToken, "sub").string)
     }
 
-    /// 网页 token 只能用网页 client_id 刷新：JSON + 桌面 UA + Origin，且不能带 client_secret
+    /// 网页 token 只能用网页 client_id 刷新：JSON + 桌面 UA + Origin，且不能带 client_secret；
+    /// 应用内登录拿到的 app token 用 app client_id + client_secret 表单刷新
     private func refresh(_ cred: XunleiCredential) async -> XunleiCredential? {
         guard !cred.refreshToken.isEmpty else { return nil }
-        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": XunleiCredential.webClientId, "refresh_token": cred.refreshToken]
         let device = cred.deviceId.nilIfBlank ?? guestDevice
+        if cred.source == "app" {
+            guard let r = try? await client.send(.postForm(authBase + "/v1/auth/token", [
+                ("grant_type", "refresh_token"), ("client_id", Self.appClientId), ("client_secret", XunleiLogin.appClientSecret),
+                ("refresh_token", cred.refreshToken)
+            ], headers: [("X-Device-Id", device)])), let json = r.json, !json.string("access_token", "accessToken").isEmpty else { return nil }
+            var renewed = cred
+            renewed.accessToken = json.string("access_token", "accessToken")
+            renewed.refreshToken = json.string("refresh_token", "refreshToken").nilIfBlank ?? cred.refreshToken
+            return renewed
+        }
+        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": XunleiCredential.webClientId, "refresh_token": cred.refreshToken]
         guard let r = try? await client.send(.postJSON(authBase + "/v1/auth/token", body, headers: [
             ("X-Device-Id", device), ("X-Client-Id", XunleiCredential.webClientId), ("Origin", "https://pan.xunlei.com"),
             ("Referer", "https://pan.xunlei.com/"), ("User-Agent", XunleiCredential.desktopUA),
@@ -276,17 +288,34 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         return (data, data["next_page_token"].string)
     }
 
-    private func ensureTempDir(_ id: Identity) async throws -> String {
-        let filters = #"{"trashed":{"eq":false}}"#
+    /// share/restore：把分享里的条目转存到 parent（同步返回，trace_file_ids 里是新旧 id 映射）
+    private func restore(_ session: ShareSession, ids: [String], to parent: String, identity: Identity) async throws -> JSON {
+        let body = OrderedJSON.object([
+            ("share_id", .string(session.shareId)), ("pass_code_token", .string(session.stoken)), ("parent_id", .string(parent)),
+            ("ancestor_ids", .array([])), ("file_ids", .array(ids.map { .string($0) })), ("specify_parent_id", .bool(true))
+        ])
+        return try await pan("POST:/drive/v1/share/restore", url: panBase + "/drive/v1/share/restore", body: body, identity: identity)
+    }
+
+    /// 个人网盘某目录下的子文件夹
+    private func personalFolders(_ parent: String, identity: Identity) async throws -> [ShareFile] {
+        let filters = #"{"kind":{"eq":"drive#folder"},"trashed":{"eq":false}}"#
+        var all: [ShareFile] = []
         var pageToken = ""
-        for _ in 0..<20 {
-            let url = panBase + "/drive/v1/files?parent_id=&page_token=\(pageToken.formEncoded)&limit=100&with_audit=true&filters=\(filters.formEncoded)"
-            let data = try await pan("GET:/drive/v1/files", url: url, identity: id)
-            if let dir = data["files"].array.first(where: { $0["kind"].string == "drive#folder" && $0["name"].string == Self.tempDirName }) {
-                return dir["id"].string
-            }
+        for _ in 0..<50 {
+            let url = panBase + "/drive/v1/files?parent_id=\(parent.formEncoded)&page_token=\(pageToken.formEncoded)&limit=100" +
+                "&with_audit=true&filters=\(filters.formEncoded)"
+            let data = try await pan("GET:/drive/v1/files", url: url, identity: identity)
+            all += data["files"].array.map(Self.parseFile).filter(\.isDirectory)
             pageToken = data["next_page_token"].string
             if pageToken.isEmpty { break }
+        }
+        return all
+    }
+
+    private func ensureTempDir(_ id: Identity) async throws -> String {
+        if let dir = try await personalFolders("", identity: id).first(where: { $0.name == Self.tempDirName }) {
+            return dir.fid
         }
         let body = OrderedJSON.object([("kind", .string("drive#folder")), ("name", .string(Self.tempDirName)),
                                        ("parent_id", .string("")), ("space", .string(""))])
@@ -313,7 +342,8 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     }
 
     /// pan 请求；登录态遇到 captcha_invalid 时按本次 action 重新初始化 captcha token 后重试一次
-    private func pan(_ action: String, url: String, body: OrderedJSON? = nil, identity: Identity, anonymous: Bool = false) async throws -> JSON {
+    private func pan(_ action: String, url: String, method: String? = nil, body: OrderedJSON? = nil, identity: Identity,
+                     anonymous: Bool = false) async throws -> JSON {
         var id = identity
         for attempt in 0..<2 {
             var req = HTTPRequest(url: url, headers: panHeaders(id))
@@ -321,6 +351,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
                 req.method = "POST"
                 req.body = Data(body.text.utf8)
             }
+            if let method { req.method = method }
             let r = try await client.send(req)
             guard let json = r.json, json.isObject else { throw CloudnError("迅雷响应解析失败（HTTP \(r.status)）") }
             let err = json["error"].string
@@ -362,5 +393,163 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         var h = appClientId + appClientVersion + appPackage + deviceId + timestamp
         for salt in captchaSalts { h = Crypto.md5Hex(h + salt) }
         return "1." + h
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension XunleiResolver: ShareSaver {
+    public var rootFolderId: String { "" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        try await personalFolders(parentId, identity: try await loginIdentity())
+    }
+
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        let id = try await loginIdentity()
+        for start in stride(from: 0, to: files.count, by: 100) {
+            let ids = files[start..<min(start + 100, files.count)].map(\.fid)
+            _ = try await restore(session, ids: Array(ids), to: folderId, identity: id)
+        }
+    }
+}
+
+// MARK: - 我的网盘
+
+extension XunleiResolver: DriveManager {
+    public var driveRootId: String { "" }
+
+    /// drive/v1/files（parent_id 为空=根目录），next_page_token 翻页
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        let id = try await driveIdentity()
+        var all: [ShareFile] = []
+        var pageToken = ""
+        for _ in 0..<100 {
+            let url = Self.driveFilesURL(panBase, parent: Self.driveParent(folderId), pageToken: pageToken)
+            let data = try await pan("GET:/drive/v1/files", url: url, identity: id)
+            all += data["files"].array.map(Self.parseFile)
+            pageToken = data["next_page_token"].string
+            if pageToken.isEmpty { break }
+        }
+        return all
+    }
+
+    /// 文件详情 links.application/octet-stream.url（签名直链）；UA 必须用官方 app UA，浏览器 UA 会被 CDN 降级为整文件 200
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        guard !file.isDirectory else { throw CloudnError("文件夹不能直接下载") }
+        let id = try await driveIdentity()
+        let url = panBase + "/drive/v1/files/\(file.fid)?_magic=2021&usage=PLAY&thumbnail_size=SIZE_LARGE" +
+            "&with=hdr10&with=subtitle_files&with=task&with=public_share_tag"
+        let detail = try await pan("GET:/drive/v1/files/\(file.fid)", url: url, identity: id)
+        let link = detail["links"]["application/octet-stream"]["url"].string.nilIfBlank ?? detail["web_content_link"].string
+        guard !link.isEmpty else { throw CloudnError("迅雷未返回下载链接") }
+        let size = detail["size"].int64
+        return DownloadLink(fileName: file.name, url: link, size: size > 0 ? size : file.size, headers: ["User-Agent": Self.appUA])
+    }
+
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        let id = try await driveIdentity()
+        _ = try await pan("POST:/drive/v1/files", url: panBase + "/drive/v1/files",
+                          body: Self.createFolderBody(name: name, parent: Self.driveParent(parentId)), identity: id)
+    }
+
+    /// PATCH /drive/v1/files/{id}，body {"name"}
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        let id = try await driveIdentity()
+        let body = OrderedJSON.object([("name", .string(name))])
+        _ = try await pan("PATCH:/drive/v1/files/\(file.fid)", url: panBase + "/drive/v1/files/\(file.fid)", method: "PATCH",
+                          body: body, identity: id)
+    }
+
+    /// files:batchMove 是异步任务：返回 task_id 后稍等再让调用方刷新
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        guard !files.isEmpty else { return }
+        let id = try await driveIdentity()
+        let body = Self.moveBody(ids: files.map(\.fid), to: Self.driveParent(folderId))
+        _ = try await pan("POST:/drive/v1/files:batchMove", url: panBase + "/drive/v1/files:batchMove", body: body, identity: id)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+    }
+
+    /// files:batchTrash：移入回收站
+    public func delete(_ files: [ShareFile]) async throws {
+        guard !files.isEmpty else { return }
+        let id = try await driveIdentity()
+        _ = try await pan("POST:/drive/v1/files:batchTrash", url: panBase + "/drive/v1/files:batchTrash",
+                          body: Self.trashBody(ids: files.map(\.fid)), identity: id)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+    }
+
+    /// POST /drive/v1/share：永久有效，提取码由服务端生成并直接返回
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        let id = try await driveIdentity()
+        let title = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
+        let data = try await pan("POST:/drive/v1/share", url: panBase + "/drive/v1/share",
+                                 body: Self.shareBody(ids: files.map(\.fid), title: title), identity: id)
+        guard let link = Self.parseShareLink(data) else { throw CloudnError("迅雷创建分享失败") }
+        return link
+    }
+
+    /// GET /drive/v1/about：quota.limit / quota.usage
+    public func quota() async -> DriveQuota? {
+        guard let id = try? await driveIdentity(),
+              let data = try? await pan("GET:/drive/v1/about", url: panBase + "/drive/v1/about", identity: id) else { return nil }
+        return Self.parseQuota(data)
+    }
+
+    /// 未登录统一抛 loginRequired；已登录则沿用 loginIdentity（含过期续期）
+    private func driveIdentity() async throws -> Identity {
+        guard let raw = await credentials.cookie(for: .xunlei), XunleiCredential.parse(raw) != nil else {
+            throw SharePlatform.xunlei.loginRequired
+        }
+        return try await loginIdentity()
+    }
+
+    // MARK: 请求体 / 解析
+
+    static func driveParent(_ folderId: String) -> String { folderId == "0" ? "" : folderId }
+
+    static func driveFilesURL(_ base: String, parent: String, pageToken: String) -> String {
+        let filters = #"{"trashed":{"eq":false}}"#
+        return base + "/drive/v1/files?parent_id=\(parent.formEncoded)&page_token=\(pageToken.formEncoded)&limit=100" +
+            "&with_audit=true&filters=\(filters.formEncoded)"
+    }
+
+    /// space 必须是字符串，数字会 400
+    static func createFolderBody(name: String, parent: String) -> OrderedJSON {
+        .object([("kind", .string("drive#folder")), ("name", .string(name)), ("parent_id", .string(parent)), ("space", .string(""))])
+    }
+
+    static func moveBody(ids: [String], to parent: String) -> OrderedJSON {
+        .object([("ids", .array(ids.map { .string($0) })),
+                 ("to", .object([("parent_id", .string(parent)), ("space", .string(""))])), ("space", .string(""))])
+    }
+
+    static func trashBody(ids: [String]) -> OrderedJSON {
+        .object([("ids", .array(ids.map { .string($0) })), ("space", .string(""))])
+    }
+
+    /// expiration_days "-1" = 永久；restore_limit "-1" = 不限转存次数
+    static func shareBody(ids: [String], title: String) -> OrderedJSON {
+        let params = OrderedJSON.object([("subscribe_push", .string("false")), ("WithPassCodeInLink", .string("true")),
+                                         ("with_pass_code_in_link", .string("true"))])
+        return .object([("file_ids", .array(ids.map { .string($0) })), ("share_to", .string("copy")), ("params", params),
+                        ("title", .string(title.nilIfBlank ?? "分享文件")), ("restore_limit", .string("-1")),
+                        ("expiration_days", .string("-1"))])
+    }
+
+    static func parseShareLink(_ data: JSON) -> DriveShareLink? {
+        let url = data["share_url"].string
+        guard !url.isEmpty else { return nil }
+        return DriveShareLink(url: url, pwd: data["pass_code"].string)
+    }
+
+    static func parseQuota(_ data: JSON) -> DriveQuota? {
+        let q = data["quota"]
+        guard q.isObject else { return nil }
+        let total = q["limit"].int64
+        let used = q["usage"].int64
+        guard total > 0 || used > 0 else { return nil }
+        return DriveQuota(used: used, total: total)
     }
 }

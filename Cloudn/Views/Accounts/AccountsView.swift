@@ -6,7 +6,13 @@ struct AccountsView: View {
     @Environment(AppModel.self) private var app
     @State private var loginKind: AccountKind?
     @State private var manualKind: AccountKind?
+    @State private var passwordKind: AccountKind?
+    @State private var drivePlatform: SharePlatform?
+    @State private var listKind: AccountKind?
     @State private var logoutKind: AccountKind?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var importData: ImportData?
 
     var body: some View {
         NavigationStack {
@@ -16,14 +22,21 @@ struct AccountsView: View {
                 } header: {
                     Text("网盘")
                 } footer: {
-                    Text("蓝奏云、蓝奏云优享版、光鸭云盘无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
+                    Text("蓝奏云、蓝奏云优享版、光鸭云盘的公开分享无需登录。其余网盘未登录也能浏览分享内容，夸克 / UC / 115 还可直接下载部分文件。")
                 }
                 Section {
-                    row(.bilibili)
+                    ForEach(AccountKind.allCases.filter { !$0.isDrive }) { row($0) }
                 } header: {
                     Text("视频平台")
                 } footer: {
-                    Text("抖音、快手、微博、AcFun 无需登录即可解析。")
+                    Text("抖音、快手、微博、AcFun 无需登录即可解析；小红书需要登录；Pixiv 未登录只能解析公开作品。")
+                }
+                Section {
+                    Button { exporting = true } label: { Label("导出登录凭据（加密备份）", systemImage: "square.and.arrow.up") }
+                        .disabled(app.accounts.accounts.isEmpty)
+                    Button { importing = true } label: { Label("从备份导入", systemImage: "square.and.arrow.down") }
+                } header: {
+                    Text("备份与恢复")
                 }
                 Section {
                     Label("登录凭据仅保存在本机钥匙串，只用于向对应平台发起请求。", systemImage: "lock.shield")
@@ -32,11 +45,37 @@ struct AccountsView: View {
                 }
             }
             .navigationTitle("账号")
+            .sheet(isPresented: $exporting) { AuthExportView() }
+            .sheet(item: $importData) { AuthImportView(data: $0.data) }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
+                guard case .success(let url) = result else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                if let data = try? Data(contentsOf: url) {
+                    importData = ImportData(data: data)
+                } else {
+                    app.show("无法读取所选文件", error: true)
+                }
+            }
             .sheet(item: $loginKind) { kind in
                 WebLoginView(kind: kind)
             }
             .sheet(item: $manualKind) { kind in
                 ManualCookieView(kind: kind)
+            }
+            .sheet(item: $passwordKind) { kind in
+                PasswordLoginView(kind: kind)
+            }
+            .navigationDestination(item: $drivePlatform) { MyDriveView(platform: $0) }
+            .sheet(item: $listKind) { kind in
+                AccountListView(kind: kind) { add in
+                    listKind = nil
+                    // 等账号列表收起后再弹登录页（同一时刻只能展示一个 sheet）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        app.accounts.pendingAdd = add
+                        startLogin(add)
+                    }
+                }
             }
             .confirmationDialog("退出登录？", isPresented: Binding(get: { logoutKind != nil }, set: { if !$0 { logoutKind = nil } }),
                                 titleVisibility: .visible, presenting: logoutKind) { kind in
@@ -60,7 +99,8 @@ struct AccountsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(kind.displayName)
                 if let account {
-                    Text("已登录：\(account.nickname)").font(.caption).foregroundStyle(.green)
+                    let count = app.accounts.count(for: kind)
+                    Text("已登录：\(account.nickname)" + (count > 1 ? "（共 \(count) 个账号）" : "")).font(.caption).foregroundStyle(.green)
                 } else {
                     Text(kind.benefit).font(.caption).foregroundStyle(.secondary)
                 }
@@ -68,18 +108,22 @@ struct AccountsView: View {
             Spacer()
             if account == nil {
                 Menu {
-                    Button { loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
-                    Button { manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+                    loginOptions(kind)
                 } label: {
                     Text("登录")
                 } primaryAction: {
-                    loginKind = kind
+                    app.accounts.pendingAdd = nil
+                    startLogin(kind)
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
             } else {
                 Menu {
-                    Button { loginKind = kind } label: { Label("重新登录", systemImage: "arrow.clockwise") }
+                    if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
+                        Button { drivePlatform = platform } label: { Label("我的网盘", systemImage: "externaldrive") }
+                    }
+                    Button { listKind = kind } label: { Label("账号管理 / 添加账号", systemImage: "person.2") }
+                    Menu { loginOptions(kind) } label: { Label("重新登录", systemImage: "arrow.clockwise") }
                     Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.title3)
@@ -87,6 +131,24 @@ struct AccountsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func loginOptions(_ kind: AccountKind) -> some View {
+        if let provider = kind.passwordLogin {
+            Button { app.accounts.pendingAdd = nil; passwordKind = kind } label: {
+                Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", systemImage: "person.badge.key")
+            }
+        }
+        if kind.supportsWebLogin {
+            Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", systemImage: "globe") }
+        }
+        Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", systemImage: "doc.on.clipboard") }
+    }
+
+    /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
+    private func startLogin(_ kind: AccountKind) {
+        if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
     }
 }
 
@@ -139,4 +201,14 @@ struct ManualCookieView: View {
             }
         }
     }
+}
+
+struct ImportData: Identifiable {
+    let id = UUID()
+    let data: Data
+}
+
+extension AccountKind {
+    /// 对应的网盘平台（视频账号为 nil）
+    var drivePlatform: SharePlatform? { SharePlatform.allCases.first { $0.accountKind == self } }
 }

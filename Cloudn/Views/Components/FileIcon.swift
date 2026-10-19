@@ -54,6 +54,8 @@ extension VideoPlatform {
         case .kuaishou: return "video.fill"
         case .weibo: return "text.bubble.fill"
         case .acfun: return "a.circle.fill"
+        case .xiaohongshu: return "book.closed.fill"
+        case .pixiv: return "paintpalette.fill"
         case .bilibili: return "play.tv.fill"
         }
     }

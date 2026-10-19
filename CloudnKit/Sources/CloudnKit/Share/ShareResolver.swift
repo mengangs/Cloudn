@@ -8,6 +8,12 @@ public protocol CredentialStore: Sendable {
     func updateCookie(_ new: String, replacing old: String, for kind: AccountKind) async
 }
 
+/// 多账号：本次请求使用同平台的第几个账号（0 为主账号）。凭证源据此返回对应账号的凭据，
+/// 多账号下载时按文件轮换，让每个账号各自承担一部分取链 / 临时转存。
+public enum AccountSlot {
+    @TaskLocal public static var current: Int = 0
+}
+
 /// 单个网盘平台的分享解析流程：会话 → 列目录 → 取直链。
 public protocol ShareResolver: Sendable {
     var platform: SharePlatform { get }
@@ -25,26 +31,63 @@ public extension ShareResolver {
     func cleanup(token: String) async {}
 }
 
+/// 把分享里的文件 / 文件夹转存到自己网盘（需要登录对应平台）
+public protocol ShareSaver: Sendable {
+    /// 「我的网盘」根目录 id
+    var rootFolderId: String { get }
+    /// 个人网盘某目录下的子文件夹（只返回文件夹）
+    func listFolders(_ parentId: String) async throws -> [ShareFile]
+    /// 转存到目标文件夹；files 来自同一个分享会话
+    func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws
+}
+
+extension SharePlatform {
+    /// 未登录时给转存 / 取链的统一提示
+    var loginRequired: CloudnError { CloudnError("请先到「账号」页登录\(displayName)") }
+}
+
+/// 运行时可调的解析选项（设置页修改后即时生效）
+public final class ResolverOptions: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _directFirst = true
+
+    public init() {}
+
+    /// 免转存下载：先用分享凭证直接取链，失败再临时转存；关闭后夸克 / UC 一律先转存再取链（个别分享更稳）
+    public var directFirst: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _directFirst }
+        set { lock.lock(); _directFirst = newValue; lock.unlock() }
+    }
+}
+
 /// 平台 → 解析器
 public final class ShareResolvers: Sendable {
     public let credentials: CredentialStore
+    public let options: ResolverOptions
     private let resolvers: [SharePlatform: ShareResolver]
 
-    public init(credentials: CredentialStore, client: HTTPClient = .shared) {
+    public init(credentials: CredentialStore, client: HTTPClient = .shared, options: ResolverOptions = ResolverOptions()) {
         self.credentials = credentials
+        self.options = options
         var map: [SharePlatform: ShareResolver] = [:]
-        map[.quark] = QuarkFamilyResolver(config: .quark, credentials: credentials, client: client)
-        map[.uc] = QuarkFamilyResolver(config: .uc, credentials: credentials, client: client)
-        map[.lanzou] = LanzouResolver(client: client)
-        map[.ilanzou] = ILanzouResolver(client: client)
+        map[.quark] = QuarkFamilyResolver(config: .quark, credentials: credentials, client: client, options: options)
+        map[.uc] = QuarkFamilyResolver(config: .uc, credentials: credentials, client: client, options: options)
+        map[.lanzou] = LanzouResolver(credentials: credentials, client: client)
+        map[.ilanzou] = ILanzouResolver(credentials: credentials, client: client)
         map[.pan123] = Pan123Resolver(credentials: credentials, client: client)
         map[.c139] = C139Resolver(credentials: credentials, client: client)
         map[.baidu] = BaiduResolver(credentials: credentials, client: client)
-        map[.guangya] = GuangYaResolver(client: client)
+        map[.guangya] = GuangYaResolver(credentials: credentials, client: client)
         map[.xunlei] = XunleiResolver(credentials: credentials, client: client)
         map[.pan115] = Pan115Resolver(credentials: credentials, client: client)
         resolvers = map
     }
 
     public func resolver(for platform: SharePlatform) -> ShareResolver? { resolvers[platform] }
+
+    /// 支持转存到自己网盘的平台才返回
+    public func saver(for platform: SharePlatform) -> ShareSaver? { resolvers[platform] as? ShareSaver }
+
+    /// 支持「我的网盘」文件管理的平台才返回
+    public func manager(for platform: SharePlatform) -> DriveManager? { resolvers[platform] as? DriveManager }
 }

@@ -1,6 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 // 123 云盘分享解析：/b/api/share/get 匿名列目录 → 登录态 + 签名头 /b/api/share/download/info 取直链。
 // 协议细节（含 auth-key / auth-value 签名）参考 YunX（AGPL-3.0）的 Pan123Api / Pan123ResolveRepository。
+// 我的网盘管理参考 YunX（AGPL-3.0）的 Pan123Api / Pan123CloudViewModel：/b/api/file/* + /api/file/download_info。
 import Foundation
 
 public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
@@ -19,6 +20,14 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
     private let client: HTTPClient
     private let apiBase: String
     private let downloadBase: String
+    private let state = State()
+
+    /// 分享 key → mshare 子域的数字 id（S3KeyFlag 的前缀，转存接口要用；文件夹条目没有 S3KeyFlag，所以列目录时记下）
+    private actor State {
+        var mshare: [String: String] = [:]
+        func set(_ key: String, _ id: String) { if mshare[key] == nil { mshare[key] = id } }
+    }
+
     /// 设备标识：不参与签名，进程内固定即可
     private let loginUUID: String = (0..<32).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
 
@@ -102,6 +111,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
         let data = json["data"]
         if data["Expired"].bool { throw CloudnError("分享已失效") }
         let files = data["InfoList"].array.map { Self.parseItem($0) }
+        if let id = files.lazy.compactMap({ Self.mshareId(fromToken: $0.token) }).first { await state.set(key, id) }
         return (files, data["Next"].string != "-1")
     }
 
@@ -112,10 +122,29 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
             size: item["Size"].int64,
             isDirectory: item["Type"].int == 1,
             parentId: item["ParentFileId"].string,
-            // 取链需要 S3KeyFlag + Etag
-            token: "\(item["S3KeyFlag"].string)|\(item["Etag"].string)",
+            // 取链需要 S3KeyFlag + Etag，转存还要 StorageNode
+            token: "\(item["S3KeyFlag"].string)|\(item["Etag"].string)|\(item["StorageNode"].string)",
             modified: item["UpdateAt"].string
         )
+    }
+
+    /// S3KeyFlag 形如 "1816216065-0"，前缀即 mshare 子域
+    static func mshareId(fromToken token: String) -> String? {
+        let flag = token.components(separatedBy: "|").first ?? ""
+        let id = flag.components(separatedBy: "-").first ?? ""
+        return id.isEmpty || !id.allSatisfy(\.isNumber) ? nil : id
+    }
+
+    /// copy/save 的 fileList 条目（大小写两套字段都要带，服务端各版本取的不一样）
+    static func copySaveEntry(_ file: ShareFile, parent: Int64) -> [String: Any] {
+        let parts = file.token.components(separatedBy: "|")
+        let flag = parts.first ?? ""
+        let fileId = Int64(file.fid) ?? 0
+        return [
+            "fileID": fileId, "fileId": fileId, "size": file.size, "etag": parts.count > 1 ? parts[1] : "",
+            "type": file.isDirectory ? 1 : 0, "parentFileID": parent, "parentFileId": parent, "fileName": file.name,
+            "driveID": 0, "driveId": 0, "s3keyFlag": flag, "S3KeyFlag": flag, "StorageNode": parts.count > 2 ? parts[2] : ""
+        ]
     }
 
     // MARK: 直链解码
@@ -186,5 +215,234 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
         if code == 401 { throw CloudnError("123 云盘登录已失效，请到「账号」页重新登录", code: code) }
         let msg = json["message"].string
         throw CloudnError(msg.isEmpty ? "\(fallback)（\(code)）" : msg, code: code)
+    }
+}
+
+// MARK: - 转存到我的网盘
+
+extension Pan123Resolver: ShareSaver {
+    public var rootFolderId: String { "0" }
+
+    public func listFolders(_ parentId: String) async throws -> [ShareFile] {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
+        var all: [ShareFile] = []
+        var next = "0"
+        for page in 1...50 {
+            let path = "/b/api/file/list/new"
+            let url = apiBase + path + "?driveId=0&limit=100&next=\(next.urlQueryEncoded)&orderBy=file_name&orderDirection=asc" +
+                "&parentFileId=\(parentId.urlQueryEncoded)&trashed=false&SearchData=&Page=\(page)&OnlyLookAbnormalFile=0" +
+                "&event=homeListFile&operateType=1&inDirectSpace=false"
+            let json = try await callJSON(.get(url, headers: authHeaders(path: path, token: token)))
+            try Self.check(json, fallback: "获取文件夹失败")
+            let data = json["data"]
+            all += data["InfoList"].array.map { Self.parseItem($0) }.filter(\.isDirectory)
+            let cursor = data["Next"].string
+            if cursor == "-1" || data["InfoList"].array.isEmpty { break }
+            next = cursor.isEmpty ? "0" : cursor
+        }
+        return all
+    }
+
+    /// copy/save 走 mshare 子域：不需要签名，只带 Bearer + LoginUuid；异步任务轮询 copy/save/get
+    public func save(_ session: ShareSession, files: [ShareFile], to folderId: String) async throws {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
+        let cached = await state.mshare[session.shareId]
+        guard let mshare = cached ?? files.lazy.compactMap({ Self.mshareId(fromToken: $0.token) }).first else {
+            throw CloudnError("无法识别 123 分享的转存标识，请重新解析后再试")
+        }
+        let base = "https://\(mshare).mshare.123pan.cn/b/api/restful/goapi/v1/file/copy/save"
+        let headers: [(String, String)] = [("Authorization", "Bearer \(token)"), ("LoginUuid", loginUUID), ("platform", "web"),
+                                           ("User-Agent", Self.dartUA)]
+        let parent = Int64(folderId) ?? 0
+        for start in stride(from: 0, to: files.count, by: 100) {
+            let batch = files[start..<min(start + 100, files.count)]
+            let body: [String: Any] = ["fileList": batch.map { Self.copySaveEntry($0, parent: parent) }, "shareKey": session.shareId,
+                                       "sharePwd": session.stoken, "currentLevel": 1, "superAdmin": NSNull()]
+            let json = try await callJSON(.postJSON(base, body, headers: headers))
+            try Self.check(json, fallback: "转存失败")
+            let taskId = json["data"]["taskID"].string
+            guard !taskId.isEmpty else { throw CloudnError("123 云盘未返回转存任务") }
+            try await waitCopySave(base + "/get?taskID=\(taskId.urlQueryEncoded)", headers: headers)
+        }
+    }
+
+    private func waitCopySave(_ url: String, headers: [(String, String)]) async throws {
+        for _ in 0..<30 {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let json = try? await callJSON(.get(url, headers: headers)) else { continue }
+            if json["code"].int != 0 {
+                let msg = json["message"].string
+                if !msg.isEmpty { throw CloudnError("转存失败：\(msg)") }
+                continue
+            }
+            let data = json["data"]
+            let state = data["state"].string.lowercased()
+            let status = data["status"].int
+            if data["finished"].bool || status == 2 || status == 3 || state == "success" || state == "done" || state == "2" ||
+                data.has("fileId") || data.has("FileId") || data.has("newFileId") {
+                return
+            }
+        }
+        throw CloudnError("转存仍在进行，请稍后到 123 云盘里查看")
+    }
+}
+
+// MARK: - 我的网盘管理
+
+extension Pan123Resolver: DriveManager {
+    public var driveRootId: String { "0" }
+
+    /// 个人盘列表：GET /b/api/file/list/new，Next 游标翻页（"-1" 为末页）
+    public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        let token = try await driveToken()
+        let parent = folderId.nilIfBlank ?? "0"
+        var all: [ShareFile] = []
+        var seen = Set<String>()
+        var next = "0"
+        for _ in 0..<200 {
+            let path = "/b/api/file/list/new"
+            let url = apiBase + path + "?driveId=0&limit=100&next=\(next.urlQueryEncoded)&orderBy=update_time&orderDirection=desc" +
+                "&parentFileId=\(parent.urlQueryEncoded)&trashed=false&SearchData=&Page=1&OnlyLookAbnormalFile=0" +
+                "&event=homeListFile&operateType=1&inDirectSpace=false"
+            let json = try await callJSON(.get(url, headers: authHeaders(path: path, token: token)))
+            try Self.check(json, fallback: "获取文件列表失败")
+            let data = json["data"]
+            // 游标异常回吐同一页时按 fid 去重，没有新条目即停
+            let page = data["InfoList"].array.map { Self.parseItem($0) }.filter { seen.insert($0.fid).inserted }
+            all += page
+            let cursor = data["Next"].string
+            if cursor == "-1" || page.isEmpty { break }
+            next = cursor
+        }
+        return all
+    }
+
+    /// 个人盘直链：POST /api/file/download_info（注意没有 /b/），解 download-v2 包装并跟随 redirect_url
+    public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
+        let token = try await driveToken()
+        let path = "/api/file/download_info"
+        let json = try await callJSON(.postJSON(apiBase + path, Self.driveDownloadBody(file), headers: jsonAuthHeaders(path: path, token: token)))
+        try Self.check(json, fallback: "获取下载链接失败")
+        let raw = json["data"].string("DownloadUrl", "DownloadURL")
+        guard !raw.isEmpty else { throw CloudnError("123 云盘未返回下载链接") }
+        let real = await followRedirectURL(Self.decodeDownloadURL(raw) ?? raw)
+        return DownloadLink(fileName: file.name, url: real, size: file.size, headers: ["User-Agent": Self.webUA, "Referer": Self.referer])
+    }
+
+    /// 123 没有独立建目录端点：上传预创建 /b/api/file/upload_request 的 type=1
+    public func createFolder(_ name: String, in parentId: String) async throws {
+        try await drivePost("/b/api/file/upload_request", Self.createFolderBody(name: name, parentId: parentId), fallback: "新建文件夹失败")
+    }
+
+    public func rename(_ file: ShareFile, to name: String) async throws {
+        try await drivePost("/b/api/file/rename", Self.renameBody(fileId: file.fid, name: name), fallback: "重命名失败")
+    }
+
+    public func move(_ files: [ShareFile], to folderId: String) async throws {
+        guard !files.isEmpty else { return }
+        try await drivePost("/b/api/file/mod_pid", Self.moveBody(fileIds: files.map(\.fid), to: folderId), fallback: "移动失败")
+    }
+
+    /// 删除 = 移入回收站
+    public func delete(_ files: [ShareFile]) async throws {
+        guard !files.isEmpty else { return }
+        try await drivePost("/b/api/file/trash", Self.trashBody(files), fallback: "删除失败")
+    }
+
+    /// 永久有效、随机 4 位提取码
+    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+        guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        let token = try await driveToken()
+        let pwd = String((0..<4).map { _ in "abcdefghijkmnpqrstuvwxyz23456789".randomElement()! })
+        let name = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
+        let path = "/b/api/share/create"
+        let body = Self.shareCreateBody(fileIds: files.map(\.fid), name: name, pwd: pwd)
+        let json = try await callJSON(.postJSON(apiBase + path, body, headers: jsonAuthHeaders(path: path, token: token)))
+        try Self.check(json, fallback: "创建分享失败")
+        guard let url = Self.shareURL(from: json["data"]) else { throw CloudnError("创建分享失败：未返回 ShareKey") }
+        return DriveShareLink(url: url, pwd: pwd)
+    }
+
+    /// GET /b/api/user/info：SpaceUsed / SpacePermanent + SpaceTemp
+    public func quota() async -> DriveQuota? {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { return nil }
+        let path = "/b/api/user/info"
+        guard let json = try? await callJSON(.get(apiBase + path, headers: authHeaders(path: path, token: token))),
+              json["code"].int == 0 else { return nil }
+        return Self.parseQuota(json["data"])
+    }
+
+    // MARK: 内部
+
+    private func driveToken() async throws -> String {
+        guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
+        return token
+    }
+
+    private func jsonAuthHeaders(path: String, token: String) -> [(String, String)] {
+        authHeaders(path: path, token: token) + [("Content-Type", "application/json;charset=UTF-8")]
+    }
+
+    /// 签名 path 必须与请求 path 逐字一致
+    private func drivePost(_ path: String, _ body: [String: Any], fallback: String) async throws {
+        let token = try await driveToken()
+        let json = try await callJSON(.postJSON(apiBase + path, body, headers: jsonAuthHeaders(path: path, token: token)))
+        try Self.check(json, fallback: fallback)
+    }
+
+    static func driveDownloadBody(_ file: ShareFile) -> [String: Any] {
+        let parts = file.token.components(separatedBy: "|")
+        return ["driveId": 0, "etag": parts.count > 1 ? parts[1] : "", "fileId": Int64(file.fid) ?? 0,
+                "s3keyFlag": parts.first ?? "", "type": 0, "fileName": file.name, "size": file.size]
+    }
+
+    static func createFolderBody(name: String, parentId: String) -> [String: Any] {
+        ["driveId": 0, "parentFileId": Int64(parentId) ?? 0, "fileName": name, "size": 0, "type": 1, "etag": "",
+         "duplicate": 1, "NotReuse": true, "RequestSource": NSNull()]
+    }
+
+    static func renameBody(fileId: String, name: String) -> [String: Any] {
+        ["driveId": 0, "fileId": Int64(fileId) ?? 0, "fileName": name, "duplicate": 1, "event": "fileRename",
+         "operatePlace": "right", "RequestSource": NSNull()]
+    }
+
+    static func moveBody(fileIds: [String], to folderId: String) -> [String: Any] {
+        ["fileIdList": fileIds.map { ["FileId": Int64($0) ?? 0] as [String: Any] }, "parentFileId": Int64(folderId) ?? 0,
+         "event": "fileMove", "operatePlace": 1, "RequestSource": NSNull()]
+    }
+
+    static func trashBody(_ files: [ShareFile]) -> [String: Any] {
+        let list: [[String: Any]] = files.map { f in
+            let parts = f.token.components(separatedBy: "|")
+            return ["FileId": Int64(f.fid) ?? 0, "FileName": f.name, "Type": f.isDirectory ? 1 : 0, "Size": f.size,
+                    "S3KeyFlag": parts.first ?? "", "Etag": parts.count > 1 ? parts[1] : ""]
+        }
+        return ["driveId": 0, "fileTrashInfoList": list, "operation": true, "event": "intoRecycle", "operatePlace": 1, "safeBox": false]
+    }
+
+    /// 永久分享过期时间固定 2099-12-12T08:00:00+08:00；单文件 fileIdList 为标量，多文件为数组
+    static func shareCreateBody(fileIds: [String], name: String, pwd: String,
+                                expiration: String = "2099-12-12T08:00:00+08:00") -> [String: Any] {
+        let ids = fileIds.map { Int64($0) ?? 0 }
+        var body: [String: Any] = [
+            "driveId": 0, "expiration": expiration, "shareName": name, "event": "shareCreate", "fileNum": ids.count,
+            "shareModality": 4, "trafficLimitSwitch": 1, "trafficLimit": 0, "trafficSwitch": 1, "fillPwdSwitch": 0
+        ]
+        if ids.count == 1 { body["fileIdList"] = ids[0] } else { body["fileIdList"] = ids }
+        if !pwd.isEmpty { body["sharePwd"] = pwd }
+        return body
+    }
+
+    /// shareLinkList.list[0] → shareLinkList.standBy → https://www.123pan.com/s/<ShareKey>
+    static func shareURL(from data: JSON) -> String? {
+        let key = data["ShareKey"].string
+        guard !key.isEmpty else { return nil }
+        let links = data["shareLinkList"]
+        return links["list"][0].string.nilIfBlank ?? links["standBy"].string.nilIfBlank ?? "https://www.123pan.com/s/\(key)"
+    }
+
+    static func parseQuota(_ data: JSON) -> DriveQuota? {
+        guard data.isObject else { return nil }
+        return DriveQuota(used: data["SpaceUsed"].int64, total: data["SpacePermanent"].int64 + data["SpaceTemp"].int64)
     }
 }

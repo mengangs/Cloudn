@@ -119,9 +119,11 @@ public indirect enum OrderedJSON: Sendable {
     case string(String)
     case int(Int64)
     case bool(Bool)
+    case null
 
     public var text: String {
         switch self {
+        case .null: return "null"
         case .object(let pairs): return "{" + pairs.map { OrderedJSON.quote($0.0) + ":" + $0.1.text }.joined(separator: ",") + "}"
         case .array(let items): return "[" + items.map(\.text).joined(separator: ",") + "]"
         case .string(let s): return OrderedJSON.quote(s)
