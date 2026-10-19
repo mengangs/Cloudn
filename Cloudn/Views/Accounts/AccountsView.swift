@@ -105,14 +105,6 @@ struct AccountsView: View {
                     }
                 }
             }
-            .confirmationDialog("退出登录？", isPresented: Binding(get: { logoutKind != nil }, set: { if !$0 { logoutKind = nil } }),
-                                titleVisibility: .visible, presenting: logoutKind) { kind in
-                Button("退出 \(kind.displayName)", role: .destructive) {
-                    Task { await app.accounts.logout(kind) }
-                }
-            } message: { _ in
-                Text("将删除本机保存的登录凭证")
-            }
         }
     }
 
@@ -156,6 +148,7 @@ struct AccountsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .card()
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
         } primaryAction: {
             if account == nil {
                 app.accounts.pendingAdd = nil
@@ -167,6 +160,7 @@ struct AccountsView: View {
             }
         }
         .buttonStyle(.plain)
+        .modifier(LogoutDialog(kind: kind, logoutKind: $logoutKind))
     }
 
     /// 视频平台：一行一个，右侧是登录状态 / 登录键
@@ -199,6 +193,7 @@ struct AccountsView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .modifier(LogoutDialog(kind: kind, logoutKind: $logoutKind))
     }
 
     private func linkRow(_ icon: Icon, _ title: String) -> some View {
@@ -262,6 +257,20 @@ struct AccountsView: View {
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
         if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
+    }
+}
+
+/// 退出登录确认，挂在对应平台的卡片 / 行上
+private struct LogoutDialog: ViewModifier {
+    let kind: AccountKind
+    @Binding var logoutKind: AccountKind?
+    @Environment(AppModel.self) private var app
+
+    func body(content: Content) -> some View {
+        content.rowDialog("退出\(kind.displayName)？", isPresented: presenting($logoutKind) { $0 == kind },
+                          message: "将删除本机保存的登录凭据") {
+            Button("退出登录", role: .destructive) { Task { await app.accounts.logout(kind) } }
+        }
     }
 }
 

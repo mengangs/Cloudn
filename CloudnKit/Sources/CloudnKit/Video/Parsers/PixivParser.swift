@@ -93,3 +93,10 @@ struct PixivParser: VideoParser {
         return wall ? nil : "Pixiv 用户"
     }
 }
+
+public enum PixivSession {
+    /// 登录后的 PHPSESSID 形如「用户 ID_随机串」，游客的没有数字前缀。网页登录据此判断已经登录完成
+    public static func isLoggedIn(cookie: String) -> Bool {
+        cookie.range(of: #"(^|;\s*)PHPSESSID=\d+_"#, options: .regularExpression) != nil
+    }
+}

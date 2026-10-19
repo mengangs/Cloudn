@@ -52,6 +52,14 @@ struct DownloadsView: View {
     private func row(_ item: DownloadItem) -> some View {
         DownloadRow(item: item, refreshing: refreshing.contains(item.id))
             .contentShape(Rectangle())
+            .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
+                if item.status == .completed {
+                    Button("删除任务和文件", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+                    Button("仅删除记录") { app.downloads.remove(item, deleteFile: false) }
+                } else {
+                    Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
+                }
+            }
             .onTapGesture { primaryAction(item) }
             .swipeActions(edge: .trailing) {
                 Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
@@ -131,15 +139,6 @@ struct DownloadsView: View {
             .task { await sampleSpeed() }
             .sheet(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
                 QuickLookPreview(url: item.url).ignoresSafeArea()
-            }
-            .confirmationDialog("删除任务", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                                titleVisibility: .visible, presenting: deleting) { item in
-                if item.status == .completed {
-                    Button("删除任务和文件", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
-                    Button("仅删除记录") { app.downloads.remove(item, deleteFile: false) }
-                } else {
-                    Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
-                }
             }
         }
     }

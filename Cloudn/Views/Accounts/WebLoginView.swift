@@ -43,6 +43,7 @@ struct WebLoginView: View {
             hint = switch kind {
             case .quark: "可用手机号验证码登录；若只显示二维码，可在页面中切换登录方式"
             case .xunlei, .pan123: "在页面中完成登录后会自动识别；如未识别，可点「完成」"
+            case .pixiv: "请用 pixiv 账号密码登录，出现人机验证时在页面里完成；Google / Apple 账号登录在这里无法使用"
             default: nil
             }
             // 轮询登录态：关键凭据出现即自动校验保存；同一份凭据校验失败过就不再重复请求

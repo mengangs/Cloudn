@@ -266,7 +266,8 @@ extension AccountKind {
         case .bilibili: return credential.contains("SESSDATA=")
         // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
         case .xiaohongshu: return credential.contains("web_session=")
-        case .pixiv: return credential.contains("PHPSESSID=")
+        // 游客也有 PHPSESSID，登录后的才带「用户 ID_」前缀
+        case .pixiv: return PixivSession.isLoggedIn(cookie: credential)
         }
     }
 
@@ -284,7 +285,7 @@ extension AccountKind {
         case .lanzou: return "登录后可管理自己的蓝奏云文件"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
-        case .pixiv: return "粘贴 Cookie 后可解析 R18 与受限作品"
+        case .pixiv: return "登录后可解析 R18 与受限作品"
         }
     }
 
@@ -331,9 +332,9 @@ extension AccountKind {
         }
     }
 
-    /// Pixiv 登录页背后是 reCAPTCHA Enterprise，在 WebView 里走不完，只支持手动粘贴 Cookie
-    /// 光鸭、蓝奏优享的网页登录态存在 IndexedDB / 加密存储里不便读取，只提供应用内账号密码登录
-    var supportsWebLogin: Bool { ![.pixiv, .guangya, .ilanzou].contains(self) }
+    /// 光鸭、蓝奏优享的网页登录态存在 IndexedDB / 加密存储里不便读取，只提供应用内账号密码登录。
+    /// Pixiv 登录页带 reCAPTCHA，出现验证时在网页里完成即可；Google / Apple 账号登录会被内嵌网页拦下，需用 pixiv 账号密码
+    var supportsWebLogin: Bool { ![.guangya, .ilanzou].contains(self) }
 
     /// 应用内账号密码 / 短信登录
     var passwordLogin: PasswordLogin? { PasswordLogins.provider(for: self) }

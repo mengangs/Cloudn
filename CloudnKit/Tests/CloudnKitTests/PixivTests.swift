@@ -19,4 +19,12 @@ final class PixivTests: XCTestCase {
         XCTAssertEqual(PixivParser.mapError("restricted", hasCookie: false).kind, .unsupported)
         XCTAssertEqual(PixivParser.mapError("restricted", hasCookie: true).kind, .blocked)
     }
+
+    func testLoggedInCookie() {
+        XCTAssertTrue(PixivSession.isLoggedIn(cookie: "first_visit_datetime_pc=2024; PHPSESSID=12345678_AbCdEf0123; p_ab_id=3"))
+        XCTAssertTrue(PixivSession.isLoggedIn(cookie: "PHPSESSID=98765_x"))
+        // 游客的 PHPSESSID 没有「用户 ID_」前缀
+        XCTAssertFalse(PixivSession.isLoggedIn(cookie: "PHPSESSID=a1b2c3d4e5f6; p_ab_id=3"))
+        XCTAssertFalse(PixivSession.isLoggedIn(cookie: "XPHPSESSID=123_abc"))
+    }
 }

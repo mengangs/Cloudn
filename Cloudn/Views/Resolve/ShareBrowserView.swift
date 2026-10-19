@@ -63,10 +63,6 @@ struct ShareBrowserView: View {
             .animation(.snappy(duration: 0.25), value: model.selecting)
             .animation(.snappy(duration: 0.25), value: model.batch?.total)
         }
-        .confirmationDialog(actionFile?.name ?? "", isPresented: Binding(get: { actionFile != nil }, set: { if !$0 { actionFile = nil } }),
-                            titleVisibility: .visible, presenting: actionFile) { file in
-            fileActions(file)
-        }
         .sheet(item: $preview) { item in
             MediaPreviewView(item: item)
         }
@@ -231,6 +227,7 @@ struct ShareBrowserView: View {
         .contentShape(Rectangle())
         .onTapGesture { tap(file, proxy: proxy) }
         .contextMenu { menu(for: file, proxy: proxy) }
+        .rowDialog(file.name, isPresented: presenting($actionFile) { $0.fid == file.fid }) { fileActions(file) }
         .background {
             if model.selecting {
                 GeometryReader { geo in

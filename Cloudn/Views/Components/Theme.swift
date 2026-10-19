@@ -193,6 +193,24 @@ extension View {
     }
 }
 
+extension View {
+    /// 确认框挂在触发它的那一行 / 那张卡片上：iOS 26 起确认框是指向来源视图的气泡，挂在整页上会跑到屏幕顶部
+    func rowDialog<A: View>(_ title: String, isPresented: Binding<Bool>, message: String? = nil,
+                            @ViewBuilder actions: () -> A) -> some View {
+        let content = actions()
+        return confirmationDialog(title, isPresented: isPresented, titleVisibility: .visible) {
+            content
+        } message: {
+            if let message { Text(message) }
+        }
+    }
+}
+
+/// 可选状态「正好是这一项」时为 true；关闭时清空
+func presenting<T>(_ value: Binding<T?>, _ matches: @escaping (T) -> Bool) -> Binding<Bool> {
+    Binding(get: { value.wrappedValue.map(matches) ?? false }, set: { if !$0 { value.wrappedValue = nil } })
+}
+
 /// 卡片内行与行之间的分隔线（从图标右侧开始）
 struct RowDivider: View {
     var leading: CGFloat = 62

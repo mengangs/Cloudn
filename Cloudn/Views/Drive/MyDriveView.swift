@@ -74,7 +74,12 @@ struct DriveFolderView: View {
                 ContentUnavailableView("空文件夹", systemImage: "folder").listRowBackground(Color.clear)
             }
             ForEach(visibleItems) { item in
-                row(item).paperRow()
+                row(item)
+                .paperRow()
+                .rowDialog("删除「\(item.name)」？", isPresented: presenting($deleting) { $0.fid == item.fid },
+                           message: "删除后可在网盘的回收站中找回（以平台规则为准）") {
+                    Button("删除", role: .destructive) { perform("已删除") { try await manager.delete([item]) } }
+                }
             }
         }
         .paperList()
@@ -96,12 +101,6 @@ struct DriveFolderView: View {
             TextField("名称", text: $nameText)
             Button("取消", role: .cancel) {}
             Button("确定") { if let target = naming { commitName(target) } }
-        }
-        .confirmationDialog("删除「\(deleting?.name ?? "")」？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                            titleVisibility: .visible, presenting: deleting) { file in
-            Button("删除", role: .destructive) { perform("已删除") { try await manager.delete([file]) } }
-        } message: { _ in
-            Text("删除后可在网盘的回收站中找回（以平台规则为准）")
         }
         .sheet(item: $moving) { file in
             DriveFolderPicker(platform: platform, manager: manager, excluding: file.fid) { target in

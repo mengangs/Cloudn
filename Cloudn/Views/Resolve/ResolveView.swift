@@ -3,7 +3,7 @@ import CloudnKit
 import SwiftUI
 import UIKit
 
-/// 解析页：输入框在顶部（像浏览器地址栏），下面是剪贴板、收藏与最近记录
+/// 解析页：输入框停在底部（单手够得着，随键盘上移），上面是收藏与最近记录
 struct ResolveView: View {
     @Environment(AppModel.self) private var app
     @State private var input = ""
@@ -31,23 +31,35 @@ struct ResolveView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    VStack(spacing: 10) {
-                        composer
-                        if clipboardOffer && trimmed.isEmpty && app.settings.clipboardHint {
-                            clipboardCard.transition(.move(edge: .top).combined(with: .opacity))
-                        }
-                    }
+                    Text("解析")
+                        .font(.pageTitle)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 12)
                     if !app.bookmarks.bookmarks.isEmpty { bookmarkSection }
                     if !app.bookmarks.history.isEmpty { historySection }
                     supportFooter
                 }
                 .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollDismissesKeyboard(.immediately)
+            // 点空白处收起键盘
+            .simultaneousGesture(TapGesture().onEnded { focused = false })
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 8) {
+                    if clipboardOffer && trimmed.isEmpty && app.settings.clipboardHint {
+                        clipboardCard.transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    composer
+                }
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
-                .padding(.bottom, 32)
+                .padding(.bottom, 8)
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: clipboardOffer)
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: detectionKey)
             }
-            .scrollDismissesKeyboard(.interactively)
             .background(Color.paper)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $shareModel) { ShareBrowserView(model: $0) }
@@ -89,34 +101,39 @@ struct ResolveView: View {
     // MARK: 输入框
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            if !trimmed.isEmpty {
+                detectionRow.transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            HStack(alignment: .bottom, spacing: 10) {
                 IconView(.link, size: 18)
                     .foregroundStyle(Color.ink3)
-                    .padding(.top, 3)
+                    .frame(height: 34)
                 TextField("粘贴链接、口令或 GitHub 地址", text: $input, axis: .vertical)
-                    .lineLimit(1...5)
+                    .lineLimit(1...4)
                     .font(.body)
+                    .padding(.vertical, 6)
                     .focused($focused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.go)
-                    .onSubmit { if canSubmit { submit() } }
-                    .onChange(of: input) { _, _ in pwd = "" }
+                    .onChange(of: input) { old, new in
+                        if handleReturnKey(old: old, new: new) { return }
+                        // 只有链接本身变了才清掉手改的提取码
+                        if old.filter({ $0 != "\n" }) != new.filter({ $0 != "\n" }) { pwd = "" }
+                    }
                 trailingControl
             }
-            if !trimmed.isEmpty {
-                detectionRow.transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
-        .padding(.vertical, 10)
-        .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.leading, 14)
+        .padding(.trailing, 7)
+        .padding(.vertical, 7)
+        .background(Color.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(focused || canSubmit ? Color.ink3.opacity(0.6) : Color.hairline, lineWidth: 1)
         }
+        .floatingShadow()
     }
 
     @ViewBuilder
@@ -151,6 +168,14 @@ struct ResolveView: View {
                     .accessibilityLabel(submitLabel)
             }
         }
+    }
+
+    /// 多行输入框里回车会插入换行：只敲了一个回车时当作「前往」——能解析就解析，否则收起键盘。粘贴进来的多行文案不受影响
+    private func handleReturnKey(old: String, new: String) -> Bool {
+        guard new.count == old.count + 1, new.filter({ $0 == "\n" }).count == old.filter({ $0 == "\n" }).count + 1 else { return false }
+        input = old
+        if canSubmit { submit() } else { focused = false }
+        return true
     }
 
     private var submitLabel: String {
