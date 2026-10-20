@@ -25,6 +25,7 @@ final class AppModel {
     let bookmarks: BookmarkStore
     let downloads: DownloadStore
     let announcements: AnnouncementStore
+    let uploads: UploadStore
     @ObservationIgnored let resolvers: ShareResolvers
     @ObservationIgnored let videoService: VideoParseService
     @ObservationIgnored let background: BackgroundTransfers
@@ -58,6 +59,7 @@ final class AppModel {
         bookmarks = BookmarkStore(directory: support)
         announcements = AnnouncementStore(mirror: { [settings] in settings.githubMirror })
         resolvers = ShareResolvers(credentials: accounts.vault, options: settings.resolverOptions)
+        uploads = UploadStore(resolvers: resolvers)
         videoService = VideoParseService(credentials: accounts.vault, webExtractor: HeadlessWebExtractor())
 
         let snapshot = settings.snapshot
@@ -82,6 +84,7 @@ final class AppModel {
         Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished, onFailed: onFailed) }
         let settings = self.settings
         downloads.exportedURL = { settings.exportedFileURL($0) }
+        uploads.onMessage = { [weak self] message, isError in self?.show(message, error: isError) }
     }
 
     /// 下载失败：像是直链过期（403 / 404 / 410 / 412）且能重新取链的，自动换链继续一次；仍失败才通知

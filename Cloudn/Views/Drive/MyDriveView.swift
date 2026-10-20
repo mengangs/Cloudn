@@ -1,7 +1,9 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 import CloudnKit
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// 「我的网盘」入口：容量 + 根目录
 struct MyDriveView: View {
@@ -40,6 +42,13 @@ struct DriveFolderView: View {
     @State private var deleting: ShareFile?
     @State private var busy = false
     @State private var query = ""
+    @State private var importingFiles = false
+    @State private var pickingMedia = false
+    @State private var mediaItems: [PhotosPickerItem] = []
+    @State private var preparingMedia = false
+
+    private var uploader: DriveUploader? { app.resolvers.uploader(for: platform) }
+    private var uploads: [UploadStore.Item] { app.uploads.items(in: platform, folder: folderId) }
 
     private var visibleItems: [ShareFile] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -67,9 +76,14 @@ struct DriveFolderView: View {
                         .paperRow()
                 }
             }
+            if !uploads.isEmpty {
+                Section {
+                    ForEach(uploads) { UploadRow(item: $0).paperRow() }
+                }
+            }
             if let errorMessage {
                 EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage, actionTitle: "重试") { Task { await load() } }.inList()
-            } else if items.isEmpty && !loading {
+            } else if items.isEmpty && !loading && uploads.isEmpty {
                 EmptyStateCard(icon: .folder, title: "空文件夹").inList()
             } else if visibleItems.isEmpty && !query.isEmpty {
                 EmptyStateCard(icon: .search, title: "没有匹配的文件", detail: "当前文件夹里没有名字包含「\(query)」的文件").inList()
@@ -91,12 +105,35 @@ struct DriveFolderView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if busy { Spinner() } else if caps.contains(.createFolder) {
-                    Button { nameText = ""; naming = .newFolder } label: { Image(icon: .folderPlus) }
-                        .accessibilityLabel("新建文件夹")
+                if busy || preparingMedia {
+                    Spinner()
+                } else if caps.contains(.createFolder) || uploader != nil {
+                    Menu {
+                        if caps.contains(.createFolder) {
+                            Button { nameText = ""; naming = .newFolder } label: { Label("新建文件夹", glyph: .folderPlus) }
+                        }
+                        if uploader != nil {
+                            Button { importingFiles = true } label: { Label("上传文件", glyph: .arrowUp) }
+                            Button { pickingMedia = true } label: { Label("上传照片或视频", glyph: .image) }
+                        }
+                    } label: { Image(icon: .plus) }
+                    .accessibilityLabel("新建或上传")
                 }
             }
         }
+        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            let files: [(url: URL, temporary: Bool, scoped: Bool)] = urls.map { (url: $0, temporary: false, scoped: true) }
+            app.uploads.enqueue(files, platform: platform, folderId: folderId)
+        }
+        .photosPicker(isPresented: $pickingMedia, selection: $mediaItems, matching: .any(of: [.images, .videos]),
+                      preferredItemEncoding: .current)
+        .onChange(of: mediaItems) { _, picked in
+            guard !picked.isEmpty else { return }
+            mediaItems = []
+            exportMedia(picked)
+        }
+        .onChange(of: app.uploads.finishedRevision) { _, _ in Task { await load() } }
         .task { await load() }
         .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("名称", text: $nameText)
@@ -201,6 +238,23 @@ struct DriveFolderView: View {
             app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil,
                                   refresh: .drive(platform: platform, file: DriveFileRef(file)))
             app.show("已添加到下载")
+        }
+    }
+
+    /// 相册里的照片 / 视频先导出成临时文件（保留原文件名与格式），再加入上传队列
+    private func exportMedia(_ picked: [PhotosPickerItem]) {
+        preparingMedia = true
+        Task {
+            defer { preparingMedia = false }
+            var files: [(url: URL, temporary: Bool, scoped: Bool)] = []
+            for item in picked {
+                do {
+                    if let f = try await item.loadTransferable(type: PickedMediaFile.self) { files.append((f.url, true, false)) }
+                } catch {
+                    app.show("读取相册文件失败：\(error.localizedDescription)", error: true)
+                }
+            }
+            if !files.isEmpty { app.uploads.enqueue(files, platform: platform, folderId: folderId) }
         }
     }
 
@@ -328,6 +382,70 @@ struct QuotaBar: View {
                 Text("剩余 \(ByteFormat.string(max(0, quota.total - quota.used)))").font(.caption).foregroundStyle(Color.ink2)
             }
             ProgressLine(value: ratio, tint: ratio > 0.9 ? Color.clayInk : nil)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// 相册导出：系统给的临时文件在回调结束后就会被删，先复制到自己的临时目录
+struct PickedMediaFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .item) { received in
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("upload-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let target = dir.appendingPathComponent(received.file.lastPathComponent)
+            try FileManager.default.copyItem(at: received.file, to: target)
+            return PickedMediaFile(url: target)
+        }
+    }
+}
+
+/// 上传中的一行：阶段 + 进度，可取消；失败的可重试
+struct UploadRow: View {
+    @Environment(AppModel.self) private var app
+    let item: UploadStore.Item
+
+    private var statusText: String {
+        switch item.status {
+        case .waiting: return "等待上传"
+        case .failed(let message): return message
+        case .cancelled: return "已取消"
+        case .done: return "已完成"
+        case .running:
+            switch item.phase {
+            case .hashing: return "校验中 \(Int(item.fraction * 100))%"
+            case .uploading: return "上传中 \(Int(item.fraction * 100))% · \(ByteFormat.string(item.size))"
+            case .finishing: return "等待网盘处理"
+            }
+        }
+    }
+
+    private var failed: Bool { if case .failed = item.status { return true }; return false }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            FileIcon(name: item.name)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.name).lineLimit(1).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
+                if item.status == .running {
+                    ProgressLine(value: item.phase == .finishing ? nil : item.fraction)
+                }
+                Text(statusText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(failed ? Color.clayInk : Color.ink3)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            if failed {
+                Button { app.uploads.retry(item.id) } label: { IconView(.refresh, size: 15) }
+                    .buttonStyle(CircleIconButtonStyle(size: 32))
+                    .accessibilityLabel("重试")
+            }
+            Button { app.uploads.dismiss(item.id) } label: { IconView(.close, size: 13) }
+                .buttonStyle(CircleIconButtonStyle(size: 32))
+                .accessibilityLabel(failed ? "移除" : "取消上传")
         }
         .padding(.vertical, 4)
     }
