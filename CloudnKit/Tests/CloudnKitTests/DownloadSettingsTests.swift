@@ -48,4 +48,16 @@ final class DownloadSettingsTests: XCTestCase {
         XCTAssertNil(item.exportedTo)
         XCTAssertNil(item.request.group)
     }
+
+    func testNetworkProxyValidation() {
+        XCTAssertTrue(NetworkProxy(kind: .http, host: "127.0.0.1", port: 7890).isValid)
+        XCTAssertFalse(NetworkProxy(kind: .socks5, host: "  ", port: 1080).isValid)
+        XCTAssertFalse(NetworkProxy(kind: .http, host: "127.0.0.1", port: 0).isValid)
+        XCTAssertFalse(NetworkProxy(kind: .http, host: "127.0.0.1", port: 70000).isValid)
+        // 填写不完整的代理不生效，也不触发会话重建
+        let before = NetworkProxy.generation
+        NetworkProxy.current = NetworkProxy(kind: .http, host: "", port: 7890)
+        XCTAssertNil(NetworkProxy.current)
+        XCTAssertEqual(NetworkProxy.generation, before)
+    }
 }

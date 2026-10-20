@@ -147,7 +147,6 @@ final class DownloadStore {
     /// 下载完成的文件：在下载目录里，或已移到外部文件夹
     func fileURL(_ item: DownloadItem) -> URL? { engine.fileURL(for: item) ?? exportedURL?(item) }
 
-    /// 直链过期：按来源信息重新解析取链，保留已下载部分继续
     /// 直链过期：按来源（分享链接 / 我的网盘 / 作品页）重新取链，保留已下载部分继续
     func refreshLink(_ item: DownloadItem) async throws {
         if let origin = item.request.origin {

@@ -115,15 +115,17 @@ final class UploadSession: NSObject, URLSessionDataDelegate, @unchecked Sendable
     }
 
     private let lock = NSLock()
-    private var handlers: [Int: Handler] = [:]
-    private var session: URLSession!
+    private var handlers: [ObjectIdentifier: Handler] = [:]
+    private var sessions: ProxyAwareSession!
 
     override init() {
         super.init()
-        let config = HTTPClient.makeConfiguration()
-        config.timeoutIntervalForRequest = 600
-        config.timeoutIntervalForResource = 24 * 3600
-        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        sessions = ProxyAwareSession { [unowned self] in
+            let config = HTTPClient.makeConfiguration()
+            config.timeoutIntervalForRequest = 600
+            config.timeoutIntervalForResource = 24 * 3600
+            return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        }
     }
 
     func run(_ request: URLRequest, source: Source, progress: (@Sendable (Int64) -> Void)?) async throws -> HTTPResponse {
@@ -131,12 +133,13 @@ final class UploadSession: NSObject, URLSessionDataDelegate, @unchecked Sendable
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<HTTPResponse, Error>) in
                 let task: URLSessionUploadTask
+                let session = sessions.current
                 switch source {
                 case .data(let d): task = session.uploadTask(with: request, from: d)
                 case .file(let url): task = session.uploadTask(with: request, fromFile: url)
                 }
                 let handler = Handler(progress: progress) { cont.resume(with: $0) }
-                lock.lock(); handlers[task.taskIdentifier] = handler; lock.unlock()
+                lock.lock(); handlers[ObjectIdentifier(task)] = handler; lock.unlock()
                 box.task = task
                 if Task.isCancelled { task.cancel() }
                 task.resume()
@@ -148,7 +151,7 @@ final class UploadSession: NSObject, URLSessionDataDelegate, @unchecked Sendable
 
     private func handler(_ task: URLSessionTask) -> Handler? {
         lock.lock(); defer { lock.unlock() }
-        return handlers[task.taskIdentifier]
+        return handlers[ObjectIdentifier(task)]
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
@@ -157,12 +160,12 @@ final class UploadSession: NSObject, URLSessionDataDelegate, @unchecked Sendable
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        lock.lock(); handlers[dataTask.taskIdentifier]?.data.append(data); lock.unlock()
+        lock.lock(); handlers[ObjectIdentifier(dataTask)]?.data.append(data); lock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
-        let h = handlers.removeValue(forKey: task.taskIdentifier)
+        let h = handlers.removeValue(forKey: ObjectIdentifier(task))
         lock.unlock()
         guard let h else { return }
         if let error {

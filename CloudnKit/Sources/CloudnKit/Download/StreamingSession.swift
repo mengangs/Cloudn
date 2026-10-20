@@ -27,23 +27,26 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 
     struct Rejected: Error {}
 
-    private var session: URLSession!
+    private var sessions: ProxyAwareSession!
     private let lock = NSLock()
-    private var handlers: [Int: Handler] = [:]
+    /// 按任务对象区分：改代理后新旧两个会话的任务编号会重复
+    private var handlers: [ObjectIdentifier: Handler] = [:]
     /// 已被取消的请求：取消后仍可能有排队的数据回调，一律丢弃，免得和下一轮重复写同一段
-    private var cancelled: Set<Int> = []
+    private var cancelled: Set<ObjectIdentifier> = []
     private let limiter: RateLimiter?
 
     init(limiter: RateLimiter? = nil) {
         self.limiter = limiter
         super.init()
-        let config = HTTPClient.makeConfiguration()
-        config.timeoutIntervalForRequest = 60
-        config.timeoutIntervalForResource = 7 * 24 * 3600
-        config.httpMaximumConnectionsPerHost = 64
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        sessions = ProxyAwareSession { [unowned self] in
+            let config = HTTPClient.makeConfiguration()
+            config.timeoutIntervalForRequest = 60
+            config.timeoutIntervalForResource = 7 * 24 * 3600
+            config.httpMaximumConnectionsPerHost = 64
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            return URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        }
     }
 
     /// 发起请求并在完成（或失败/取消）时返回
@@ -51,12 +54,12 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
         let box = TaskBox()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                let task = session.dataTask(with: request)
+                let task = sessions.current.dataTask(with: request)
                 let handler = Handler(onResponse: onResponse, onData: onData) { error in
                     if let error { cont.resume(throwing: error) } else { cont.resume() }
                 }
                 lock.lock()
-                handlers[task.taskIdentifier] = handler
+                handlers[ObjectIdentifier(task)] = handler
                 lock.unlock()
                 box.task = task
                 if Task.isCancelled { task.cancel() }
@@ -65,7 +68,7 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
         } onCancel: {
             guard let task = box.task else { return }
             self.lock.lock()
-            self.cancelled.insert(task.taskIdentifier)
+            self.cancelled.insert(ObjectIdentifier(task))
             self.lock.unlock()
             task.cancel()
         }
@@ -75,7 +78,7 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     private func handler(for task: URLSessionTask) -> Handler? {
         lock.lock()
         defer { lock.unlock() }
-        guard !cancelled.contains(task.taskIdentifier), let h = handlers[task.taskIdentifier], h.failure == nil else { return nil }
+        guard !cancelled.contains(ObjectIdentifier(task)), let h = handlers[ObjectIdentifier(task)], h.failure == nil else { return nil }
         return h
     }
 
@@ -128,8 +131,8 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
-        let h = handlers.removeValue(forKey: task.taskIdentifier)
-        cancelled.remove(task.taskIdentifier)
+        let h = handlers.removeValue(forKey: ObjectIdentifier(task))
+        cancelled.remove(ObjectIdentifier(task))
         lock.unlock()
         guard let h else { return }
         if let failure = h.failure { h.completion(failure) } else { h.completion(error) }

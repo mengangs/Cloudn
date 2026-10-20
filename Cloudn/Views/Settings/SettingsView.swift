@@ -108,10 +108,18 @@ struct SettingsView: View {
 
                     Section {
                         NavigationLink("GitHub Token 与下载镜像") { GitHubSettingsView() }
+                        NavigationLink {
+                            NetworkProxyView()
+                        } label: {
+                            LabeledContent("网络代理") {
+                                Text(settings.proxy.map { "\($0.kind.title) \($0.host):\($0.port)" } ?? "跟随系统")
+                                    .foregroundStyle(Color.ink2)
+                            }
+                        }
                     } header: {
-                        Text("GitHub")
+                        Text("网络与 GitHub")
                     } footer: {
-                        Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。")
+                        Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。GitHub 访问慢时可填镜像，或在网络代理里填本机代理工具的地址。")
                     }
 
                     Section("诊断") {

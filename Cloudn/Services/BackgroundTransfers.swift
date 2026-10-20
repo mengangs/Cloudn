@@ -31,6 +31,8 @@ final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate, @unchecke
         config.httpCookieStorage = nil
         config.urlCache = nil
         config.httpMaximumConnectionsPerHost = 16
+        // 后台会话的配置创建后改不了：代理以应用启动时的设置为准
+        NetworkProxy.apply(to: config)
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 

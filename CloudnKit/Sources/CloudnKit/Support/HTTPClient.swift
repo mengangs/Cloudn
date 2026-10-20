@@ -83,13 +83,12 @@ public enum HTTPError: Error, LocalizedError, Sendable {
 public final class HTTPClient: @unchecked Sendable {
     public static let shared = HTTPClient()
 
-    private let following: URLSession
-    private let nonFollowing: URLSession
-
-    public init() {
-        following = URLSession(configuration: HTTPClient.makeConfiguration())
-        nonFollowing = URLSession(configuration: HTTPClient.makeConfiguration(), delegate: NoRedirectDelegate(), delegateQueue: nil)
+    private let following = ProxyAwareSession { URLSession(configuration: HTTPClient.makeConfiguration()) }
+    private let nonFollowing = ProxyAwareSession {
+        URLSession(configuration: HTTPClient.makeConfiguration(), delegate: NoRedirectDelegate(), delegateQueue: nil)
     }
+
+    public init() {}
 
     static func makeConfiguration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
@@ -100,6 +99,7 @@ public final class HTTPClient: @unchecked Sendable {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 30
         config.httpMaximumConnectionsPerHost = 16
+        NetworkProxy.apply(to: config)
         return config
     }
 
@@ -110,7 +110,7 @@ public final class HTTPClient: @unchecked Sendable {
         urlRequest.httpShouldHandleCookies = false
         for (k, v) in request.headers { urlRequest.setValue(v, forHTTPHeaderField: k) }
         urlRequest.httpBody = request.body
-        let session = request.followRedirects ? following : nonFollowing
+        let session = (request.followRedirects ? following : nonFollowing).current
 
         // 调用方的 Task 被取消（离开页面、点了取消）时，把网络请求也一并取消，不再白白等到超时
         let box = TaskBox()

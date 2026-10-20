@@ -15,6 +15,8 @@ struct DownloadsView: View {
     @State private var samples: [Double] = []
     /// 展开的分组
     @State private var expanded = Set<UUID>()
+    /// 正在看调试信息的任务
+    @State private var debugging: DownloadItem?
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "全部", active = "进行中", done = "已完成"
@@ -213,6 +215,9 @@ struct DownloadsView: View {
             .fullScreenCover(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
                 FilePreviewView(url: item.url)
             }
+            .sheet(item: $debugging) { item in
+                DownloadDebugView(itemId: item.id)
+            }
         }
     }
 
@@ -362,6 +367,7 @@ struct DownloadsView: View {
         Button { UIPasteboard.general.string = item.request.url; app.show("已复制下载地址") } label: {
             Label("复制下载地址", glyph: .link)
         }
+        Button { debugging = item } label: { Label("调试信息", glyph: .doc) }
         // 删除放在二级菜单里：选中具体方式就是确认，不再额外弹确认框
         Menu {
             if item.status == .completed {

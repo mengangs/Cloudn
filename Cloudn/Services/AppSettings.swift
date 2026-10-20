@@ -110,6 +110,19 @@ final class AppSettings {
     var acceptedNotice: Bool {
         didSet { defaults.set(acceptedNotice, forKey: "acceptedNotice") }
     }
+    /// 应用内网络代理；关闭时跟随系统（含 VPN）
+    var proxyEnabled: Bool {
+        didSet { defaults.set(proxyEnabled, forKey: "proxyEnabled"); applyProxy() }
+    }
+    var proxyKind: NetworkProxy.Kind {
+        didSet { defaults.set(proxyKind.rawValue, forKey: "proxyKind"); applyProxy() }
+    }
+    var proxyHost: String {
+        didSet { defaults.set(proxyHost, forKey: "proxyHost"); applyProxy() }
+    }
+    var proxyPort: Int {
+        didSet { defaults.set(proxyPort, forKey: "proxyPort"); applyProxy() }
+    }
 
     /// 下载引擎在后台线程读取，这里维护一份线程安全快照
     @ObservationIgnored let snapshot = SettingsSnapshot()
@@ -127,7 +140,8 @@ final class AppSettings {
             "directFirst": true,
             "autoCheckUpdates": true,
             "liveActivity": true,
-            "useExtraTrackers": true
+            "useExtraTrackers": true,
+            "proxyPort": 7890
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
         connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
@@ -154,8 +168,23 @@ final class AppSettings {
         acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")
         lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date
         skippedVersion = defaults.string(forKey: "skippedVersion") ?? ""
+        proxyEnabled = defaults.bool(forKey: "proxyEnabled")
+        proxyKind = NetworkProxy.Kind(rawValue: defaults.string(forKey: "proxyKind") ?? "") ?? .http
+        proxyHost = defaults.string(forKey: "proxyHost") ?? ""
+        proxyPort = min(65535, max(1, defaults.integer(forKey: "proxyPort")))
         resolverOptions.directFirst = directFirst
         publish()
+        applyProxy()
+    }
+
+    /// 代理设置（填写完整时才生效）
+    var proxy: NetworkProxy? {
+        let p = NetworkProxy(kind: proxyKind, host: proxyHost.trimmingCharacters(in: .whitespaces), port: proxyPort)
+        return proxyEnabled && p.isValid ? p : nil
+    }
+
+    private func applyProxy() {
+        NetworkProxy.current = proxy
     }
 
     private func publish() {
