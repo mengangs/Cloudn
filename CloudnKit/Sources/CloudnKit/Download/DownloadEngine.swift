@@ -526,6 +526,11 @@ public actor DownloadEngine {
         return ids
     }
 
+    /// 当前仍由后台会话负责的任务
+    public func backgroundedItemIds() -> Set<UUID> {
+        Set(items.filter(\.backgrounded).map(\.id))
+    }
+
     /// 回到前台：恢复调度（被挂起前暂停的任务由调用方另行继续）
     public func endSuspension() {
         guard suspended else { return }
