@@ -63,14 +63,17 @@ struct DownloadLiveActivity: Widget {
                     .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 18)
+                // 紧贴胶囊圆角的左边缘会被裁到一点：往里收一些、圆环略小
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 16)
+                    .padding(.leading, 4)
             } compactTrailing: {
                 Text(state.compactText)
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.clayOnBlack)
+                    .padding(.trailing, 2)
             } minimal: {
-                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 18)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 16)
             }
             .keylineTint(Palette.clayOnBlack)
         }
