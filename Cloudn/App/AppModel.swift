@@ -191,7 +191,7 @@ final class AppModel {
             }
             return
         case .background:
-            break
+            QuickActions.refresh(self)
         default:
             return
         }
