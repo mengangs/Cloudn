@@ -70,7 +70,7 @@ enum Typeface {
 enum Icon: String {
     case link, arrowUp = "arrow-up", plus, paste, download, folder, file, video, image, music, archive, doc, text, cloud, star
     case save, user, gear, search, clock, check, checkCircle = "check-circle", chevronRight = "chevron-right", pause, play
-    case close, trash, lock, refresh, pencil, folderPlus = "folder-plus", move, share, eye, warning, filter, branch, tag
+    case close, trash, lock, refresh, pencil, folderPlus = "folder-plus", move, share, eye, warning, filter, branch, tag, more
 }
 
 extension Image {
@@ -291,14 +291,18 @@ struct OnAccentForeground: ViewModifier {
 struct CircleIconButtonStyle: ButtonStyle {
     var size: CGFloat = 36
     var filled = false
+    /// 细线样式的图标颜色（默认墨色）
+    var foreground: Color?
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(width: size, height: size)
-            .modifier(OnAccentForeground(fallback: filled ? nil : Color.ink))
+            .modifier(OnAccentForeground(fallback: filled ? nil : (foreground ?? Color.ink)))
             .background(filled ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.clear), in: Circle())
             .overlay { if !filled { Circle().strokeBorder(Color.hairline, lineWidth: 1) } }
-            .contentShape(Circle())
+            // 视觉上小一些，点按区域不小于 44pt
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.92 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }

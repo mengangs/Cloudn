@@ -156,7 +156,7 @@ struct DriveFolderView: View {
         HStack(spacing: 12) {
             FileIcon(name: item.name, isDirectory: item.isDirectory)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.name).lineLimit(2).foregroundStyle(Color.ink)
+                Text(item.name).lineLimit(2).truncationMode(.middle).foregroundStyle(Color.ink)
                 HStack(spacing: 6) {
                     if !item.isDirectory && item.size > 0 { Text(ByteFormat.string(item.size)) }
                     if !item.modified.isEmpty { Text(FileRow.dateText(item.modified)) }

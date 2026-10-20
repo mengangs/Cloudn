@@ -54,7 +54,7 @@ struct SettingsView: View {
                         LabeledContent("完成后保存到", value: app.settings.exportFolder?.lastPathComponent ?? "应用下载目录")
                         Button("选择文件夹…") { pickingFolder = true }
                         if app.settings.exportFolderBookmark != nil {
-                            Button("恢复为应用下载目录", role: .destructive) { app.settings.setExportFolder(nil) }
+                            Button("恢复为应用下载目录") { app.settings.setExportFolder(nil) }.foregroundStyle(Color.clayInk)
                         }
                     } header: {
                         Text("下载位置")
@@ -78,7 +78,7 @@ struct SettingsView: View {
                             HStack {
                                 Text("检查更新")
                                 Spacer()
-                                if checking { ProgressView() } else { Text("当前 \(AppModel.currentVersion)").foregroundStyle(.secondary) }
+                                if checking { Spinner(size: 18) } else { Text("当前 \(AppModel.currentVersion)").font(.mono).foregroundStyle(Color.ink2) }
                             }
                         }
                         .disabled(checking)
@@ -131,6 +131,7 @@ struct SettingsView: View {
         }
         .paperList()
         .navigationTitle("设置")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $pickingFolder) {
             FolderPicker { app.settings.setExportFolder($0) }
         }
@@ -183,16 +184,17 @@ struct UpdateSheet: View {
                         if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
                             Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
                         }
-                        Button("忽略此版本", role: .destructive) {
+                        Button("忽略此版本") {
                             app.settings.skippedVersion = release.tag
                             dismiss()
                         }
+                        .foregroundStyle(Color.clayInk)
                     }
                 }
                 .listRowBackground(Color.surface)
             }
             .paperList()
-            .navigationTitle(release.name)
+            .navigationTitle("发现新版本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("稍后") { dismiss() } }
@@ -216,7 +218,7 @@ struct AboutView: View {
                         .resizable()
                         .frame(width: 96, height: 96)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+                        .overlay { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
                     Text("Cloudn").font(.pageTitle).foregroundStyle(Color.ink)
                     Text("版本 \(version)").font(.mono).foregroundStyle(Color.ink3)
                     Text("粘贴分享链接，浏览并高速下载网盘文件与短视频。")
@@ -237,7 +239,7 @@ struct AboutView: View {
                 Section {
                     Text("本应用为个人独立开发，仅供学习与技术交流。请只解析你有权访问的内容，并遵守各平台的服务条款与当地法律法规。")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.ink2)
                 }
             }
             .listRowBackground(Color.surface)
@@ -253,7 +255,8 @@ struct LicenseView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Cloudn 以 GNU Affero General Public License v3.0（AGPL-3.0）发布。")
-                    .font(.headline)
+                    .font(.cardTitle)
+                    .foregroundStyle(Color.ink)
                 Text("""
                 部分网盘与视频平台的协议实现参考了开源项目 YunX（https://github.com/CYQawa/YunX，AGPL-3.0）。\
                 依照该许可，Cloudn 的完整源代码同样以 AGPL-3.0 开放。
@@ -269,10 +272,12 @@ struct LicenseView: View {
                 本程序不提供任何担保。详见源代码仓库中的 LICENSE 文件或 https://www.gnu.org/licenses/agpl-3.0.html。
                 """)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ink2)
+                .textSelection(.enabled)
             }
             .padding()
         }
+        .background(Color.paper)
         .navigationTitle("开源许可")
         .navigationBarTitleDisplayMode(.inline)
     }

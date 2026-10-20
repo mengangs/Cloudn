@@ -49,7 +49,11 @@ struct RootView: View {
             NoticeSheet { model.settings.acceptedNotice = true }
                 .interactiveDismissDisabled()
         }
-        .sheet(item: $model.availableUpdate) { UpdateSheet(release: $0) }
+        // 首次启动先看完须知，再提示更新（两个 sheet 不能同时弹）
+        .sheet(item: Binding(get: { model.settings.acceptedNotice ? model.availableUpdate : nil },
+                             set: { model.availableUpdate = $0 })) {
+            UpdateSheet(release: $0).presentationDetents([.medium, .large])
+        }
     }
 }
 

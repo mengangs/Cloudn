@@ -17,7 +17,7 @@ struct LoginVerifyView: View {
                 onFinish(ok)
                 dismiss()
             }
-            .overlay(alignment: .top) { if loading { ProgressView().padding() } }
+            .overlay(alignment: .top) { if loading { ProgressLine(value: nil) } }
             .navigationTitle("迅雷安全验证")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

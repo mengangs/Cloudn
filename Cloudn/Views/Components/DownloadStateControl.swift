@@ -22,14 +22,15 @@ struct DownloadStateControl: View {
                         .accessibilityLabel("已下载")
                 case .failed:
                     Button { app.downloads.resume(item) } label: { IconView(.refresh, size: size * 0.55) }
-                        .buttonStyle(CircleIconButtonStyle(size: size))
-                        .foregroundStyle(Color.clayInk)
+                        .buttonStyle(CircleIconButtonStyle(size: size, foreground: Color.clayInk))
                         .accessibilityLabel("下载失败，重试")
                 default:
                     Button {
                         if item.status == .paused { app.downloads.resume(item) } else { app.downloads.pause(item) }
                     } label: {
                         ProgressRing(value: item.fraction, size: size - 4, paused: item.status == .paused)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(item.status == .paused ? "继续下载" : "暂停下载")
@@ -40,7 +41,7 @@ struct DownloadStateControl: View {
                     .accessibilityLabel("下载")
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: max(size, 44), height: max(size, 44))
         .animation(.snappy(duration: 0.25), value: item?.status)
         .animation(.snappy(duration: 0.25), value: busy)
     }

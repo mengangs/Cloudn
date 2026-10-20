@@ -196,7 +196,7 @@ struct DownloadsView: View {
                                 Label("清除已完成记录", glyph: .trash)
                             }
                             .disabled(!app.downloads.items.contains { $0.status == .completed })
-                        } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
+                        } label: { Image(icon: .more).foregroundStyle(Color.ink) }
                         .accessibilityLabel("更多")
                         .disabled(app.downloads.items.isEmpty)
                         .rowDialog("清除已完成的记录？", isPresented: $confirmClear, message: "只清除列表里的记录，已下载的文件保留") {
@@ -574,6 +574,7 @@ struct DownloadRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.displayName)
                     .lineLimit(2)
+                    .truncationMode(.middle)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(Color.ink)
                 if item.status != .completed {

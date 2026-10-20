@@ -10,6 +10,8 @@ struct ShareBrowserView: View {
     @State private var preview: MediaPreviewItem?
     @State private var retryPwd = ""
     @State private var saveItems: SaveItems?
+    /// 就地弹出的登录页；登录成功回来后重新打开分享（换成登录态）
+    @State private var loginKind: AccountKind?
     @State private var textPreview: TextPreviewItem?
     @State private var query = ""
     /// 标题块滚出屏幕后，导航栏才显示标题
@@ -70,6 +72,10 @@ struct ShareBrowserView: View {
         .sheet(item: $saveItems) { items in
             SaveToDriveView(model: model, files: items.files)
         }
+        .sheet(item: $loginKind, onDismiss: {
+            guard let kind = model.share.platform.accountKind, app.accounts.isLoggedIn(kind) else { return }
+            Task { await model.retry(with: model.pwd) }
+        }) { LoginSheet(kind: $0) }
     }
 
     // MARK: 标题块
@@ -124,7 +130,7 @@ struct ShareBrowserView: View {
                 .foregroundStyle(Color.clayInk)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            Button("登录") { app.selectedTab = .me }
+            Button("登录") { loginKind = model.share.platform.accountKind }
                 .buttonStyle(PillButtonStyle(kind: .dark, height: 30))
                 .font(.footnote)
         }
@@ -212,6 +218,7 @@ struct ShareBrowserView: View {
                     .font(.body)
                     .foregroundStyle(Color.ink)
                     .lineLimit(2)
+                    .truncationMode(.middle)
                 HStack(spacing: 8) {
                     if !file.isDirectory && file.size > 0 { Text(ByteFormat.string(file.size)) }
                     if !file.modified.isEmpty { Text(FileRow.dateText(file.modified)) }
@@ -376,6 +383,7 @@ struct ShareBrowserView: View {
                 }
                 .accessibilityLabel(model.isBookmarked ? "取消收藏" : "收藏")
                 .disabled(model.session == nil)
+                .sensoryFeedback(.success, trigger: model.isBookmarked)
                 Menu {
                     Button { model.selecting = true } label: { Label { Text("多选") } icon: { Image(icon: .checkCircle) } }
                         .disabled(model.files.isEmpty)
@@ -386,7 +394,7 @@ struct ShareBrowserView: View {
                         Link(destination: url) { Label { Text("在浏览器中打开") } icon: { Image(icon: .share) } }
                     }
                 } label: {
-                    Image(systemName: "ellipsis").foregroundStyle(Color.ink)
+                    Image(icon: .more).foregroundStyle(Color.ink)
                 }
             }
         }
@@ -481,7 +489,7 @@ struct ShareBrowserView: View {
         guard !files.isEmpty else { return }
         if model.saveNeedsLogin {
             app.show("转存需要先登录\(model.share.platform.displayName)", error: true)
-            app.selectedTab = .me
+            loginKind = model.share.platform.accountKind
             return
         }
         saveItems = SaveItems(files: files)

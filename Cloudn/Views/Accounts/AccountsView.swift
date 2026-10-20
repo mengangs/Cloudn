@@ -187,8 +187,9 @@ struct AccountsView: View {
                 .font(.footnote)
             } else {
                 Menu { accountMenu(kind) } label: {
-                    Image(systemName: "ellipsis").foregroundStyle(Color.ink2).frame(width: 30, height: 30)
+                    IconView(.more, size: 20).foregroundStyle(Color.ink2).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
+                .accessibilityLabel("\(kind.displayName)账号操作")
             }
         }
         .padding(.horizontal, 14)
@@ -257,6 +258,21 @@ struct AccountsView: View {
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
         if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
+    }
+}
+
+/// 按平台选首选的登录方式：网页登录 → 应用内账号密码 → 手动粘贴。供其他页面就地弹出登录，不必跳到「我的」
+struct LoginSheet: View {
+    let kind: AccountKind
+
+    var body: some View {
+        if kind.supportsWebLogin {
+            WebLoginView(kind: kind)
+        } else if kind.passwordLogin != nil {
+            PasswordLoginView(kind: kind)
+        } else {
+            ManualCookieView(kind: kind)
+        }
     }
 }
 

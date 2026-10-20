@@ -18,11 +18,14 @@ struct AuthExportView: View {
                 Group {
                     Section {
                         SecureField("口令", text: $passphrase)
+                            .submitLabel(.next)
                         SecureField("再输一次", text: $confirm)
+                            .submitLabel(.done)
+                            .onSubmit { if passphrase.count >= 6 && passphrase == confirm && file == nil { generate() } }
                     } footer: {
                         Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
                     }
-                    if let error { Section { Text(error).foregroundStyle(Color.clayInk) } }
+                    if let error { Section { Label(error, glyph: .warning).foregroundStyle(Color.clayInk) } }
                     if let file {
                         Section {
                             ShareLink(item: file) { Label("分享 / 存储到文件", glyph: .share) }
@@ -34,7 +37,14 @@ struct AuthExportView: View {
                             Button("生成备份文件") { generate() }
                                 .disabled(passphrase.count < 6 || passphrase != confirm || app.accounts.accounts.isEmpty)
                         } footer: {
-                            Text("口令至少 6 位")
+                            // 说清楚为什么按钮不能点
+                            if !confirm.isEmpty && passphrase != confirm {
+                                Text("两次输入的口令不一致").foregroundStyle(Color.clayInk)
+                            } else if !passphrase.isEmpty && passphrase.count < 6 {
+                                Text("口令至少 6 位").foregroundStyle(Color.clayInk)
+                            } else {
+                                Text("口令至少 6 位")
+                            }
                         }
                     }
                 }
@@ -73,13 +83,20 @@ struct AuthImportView: View {
                 Group {
                     Section {
                         SecureField("备份时设置的口令", text: $passphrase)
+                            .submitLabel(.go)
+                            .onSubmit { if !passphrase.isEmpty && !working { Task { await restore() } } }
                     } footer: {
                         Text("导入后会覆盖本机同平台的已登录账号。")
                     }
-                    if let error { Section { Text(error).foregroundStyle(Color.clayInk) } }
+                    if let error { Section { Label(error, glyph: .warning).foregroundStyle(Color.clayInk) } }
                     Section {
-                        Button(working ? "正在导入…" : "导入") { Task { await restore() } }
-                            .disabled(passphrase.isEmpty || working)
+                        Button { Task { await restore() } } label: {
+                            HStack(spacing: 8) {
+                                Text(working ? "正在导入…" : "导入")
+                                if working { Spinner(size: 16) }
+                            }
+                        }
+                        .disabled(passphrase.isEmpty || working)
                     }
                 }
                 .listRowBackground(Color.surface)

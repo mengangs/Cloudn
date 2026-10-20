@@ -9,6 +9,8 @@ struct ResolveView: View {
     @State private var input = ""
     @State private var pwd = ""
     @State private var editingPwd = false
+    @FocusState private var pwdFocused: Bool
+    @State private var confirmClearHistory = false
     @State private var working = false
     @State private var workTask: Task<Void, Never>?
     @State private var shareModel: ShareBrowserModel?
@@ -159,7 +161,7 @@ struct ResolveView: View {
                     input = ""
                     focused = true
                 } label: {
-                    IconView(.close, size: 14).frame(width: 30, height: 34).foregroundStyle(Color.ink3)
+                    IconView(.close, size: 14).frame(width: 34, height: 34).contentShape(Rectangle().inset(by: -5)).foregroundStyle(Color.ink3)
                 }
                 .accessibilityLabel("清空")
                 Button(action: submit) { IconView(.arrowUp, size: 17) }
@@ -212,7 +214,11 @@ struct ResolveView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .frame(width: 90)
+                    .focused($pwdFocused)
+                    .submitLabel(.done)
                     .onSubmit { editingPwd = false }
+                    // 点了「加提取码」就直接进入输入，不用再点一次
+                    .onAppear { pwdFocused = true }
             } else {
                 Button { pwd = value; editingPwd = true } label: {
                     Text(value.isEmpty ? "加提取码" : value)
@@ -275,7 +281,7 @@ struct ResolveView: View {
             .tint(Color.ink)
             .controlSize(.small)
             Button { markClipboardHandled() } label: {
-                IconView(.close, size: 12).frame(width: 24, height: 24).foregroundStyle(Color.ink3)
+                IconView(.close, size: 12).frame(width: 36, height: 44).contentShape(Rectangle()).foregroundStyle(Color.ink3)
             }
             .accessibilityLabel("忽略")
         }
@@ -346,13 +352,11 @@ struct ResolveView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 SectionLabel(title: "最近")
-                Menu {
-                    Button(role: .destructive) { withAnimation { app.bookmarks.clearHistory() } } label: {
-                        Label { Text("清空最近记录") } icon: { Image(icon: .trash) }
+                Button("清空") { confirmClearHistory = true }
+                    .font(.subheadline)
+                    .rowDialog("清空最近记录？", isPresented: $confirmClearHistory, message: "收藏不受影响") {
+                        Button("清空", role: .destructive) { withAnimation { app.bookmarks.clearHistory() } }
                     }
-                } label: {
-                    Text("编辑").font(.subheadline)
-                }
             }
             VStack(spacing: 0) {
                 let items = Array(app.bookmarks.history.prefix(10))

@@ -34,30 +34,3 @@ struct FileIcon: View {
         }
     }
 }
-
-extension SharePlatform {
-    var symbol: String {
-        switch self {
-        case .quark: return "q.circle.fill"
-        case .uc: return "u.circle.fill"
-        case .lanzou, .ilanzou: return "l.circle.fill"
-        case .baidu: return "b.circle.fill"
-        case .xunlei: return "x.circle.fill"
-        default: return "externaldrive.fill.badge.icloud"
-        }
-    }
-}
-
-extension VideoPlatform {
-    var symbol: String {
-        switch self {
-        case .douyin: return "music.note.tv"
-        case .kuaishou: return "video.fill"
-        case .weibo: return "text.bubble.fill"
-        case .acfun: return "a.circle.fill"
-        case .xiaohongshu: return "book.closed.fill"
-        case .pixiv: return "paintpalette.fill"
-        case .bilibili: return "play.tv.fill"
-        }
-    }
-}

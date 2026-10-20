@@ -15,17 +15,22 @@ struct WebLoginView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if store.progress < 1 {
-                    ProgressView(value: store.progress).progressViewStyle(.linear)
-                }
+                ProgressLine(value: store.progress)
+                    .opacity(store.progress < 1 ? 1 : 0)
+                    .animation(.easeOut(duration: 0.3), value: store.progress < 1)
                 LoginWebView(kind: kind, store: store)
                 if let hint {
-                    Text(hint)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(10)
-                        .frame(maxWidth: .infinity)
-                        .background(.bar)
+                    VStack(spacing: 0) {
+                        Rectangle().fill(Color.hairline).frame(height: 1)
+                        Text(hint)
+                            .font(.footnote)
+                            .foregroundStyle(Color.ink2)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .background(Color.surface)
                 }
             }
             .navigationTitle("登录\(kind.displayName)")
@@ -33,7 +38,7 @@ struct WebLoginView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if verifying { ProgressView() } else {
+                    if verifying { Spinner() } else {
                         Button("完成") { Task { await finish(manual: true) } }
                     }
                 }

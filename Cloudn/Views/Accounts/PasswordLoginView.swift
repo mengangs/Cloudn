@@ -23,6 +23,9 @@ struct PasswordLoginView: View {
     @State private var working = false
     @State private var error: String?
     @State private var verification: VerificationItem?
+    @FocusState private var field: Field?
+
+    enum Field: Hashable { case account, password, phone, code }
 
     struct VerificationItem: Identifiable {
         let id = UUID()
@@ -52,20 +55,28 @@ struct PasswordLoginView: View {
                                 .textContentType(.username)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
+                                .focused($field, equals: .account)
+                                .submitLabel(.next)
+                                .onSubmit { field = .password }
                             SecureField("密码", text: $password)
                                 .textContentType(.password)
+                                .focused($field, equals: .password)
+                                .submitLabel(.go)
+                                .onSubmit { if !account.isEmpty && !password.isEmpty { submit() } }
                         } footer: {
-                            Text("账号密码只用于本次向\(kind.displayName)发起登录，不会保存；保存的是登录后得到的令牌。")
+                            Text("账号密码只用于本次向\(kind.displayName)发起登录，不会保存；保存的是登录后得到的登录凭据。")
                         }
                     case .sms:
                         Section {
                             TextField("手机号", text: $phone)
                                 .keyboardType(.phonePad)
                                 .textContentType(.telephoneNumber)
+                                .focused($field, equals: .phone)
                             HStack {
                                 TextField("验证码", text: $code)
                                     .keyboardType(.numberPad)
                                     .textContentType(.oneTimeCode)
+                                    .focused($field, equals: .code)
                                 Button(countdown > 0 ? "\(countdown) 秒" : (challenge == nil ? "获取验证码" : "重新获取")) { sendCode() }
                                     .disabled(phone.isEmpty || countdown > 0 || working)
                                     .buttonStyle(.borderless)
@@ -75,18 +86,26 @@ struct PasswordLoginView: View {
                         }
                     }
                     if let error {
-                        Section { Text(error).foregroundStyle(Color.clayInk) }
+                        Section { Label(error, glyph: .warning).foregroundStyle(Color.clayInk) }
                     }
                 }
                 .listRowBackground(Color.surface)
             }
             .paperList()
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                // 数字键盘没有回车键：给一个「完成」收起键盘
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { field = nil }
+                }
+            }
             .navigationTitle("登录\(kind.displayName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if working { ProgressView() } else {
+                    if working { Spinner() } else {
                         Button("登录") { submit() }
                             .disabled(mode == .password ? (account.isEmpty || password.isEmpty) : (challenge == nil || code.isEmpty))
                     }

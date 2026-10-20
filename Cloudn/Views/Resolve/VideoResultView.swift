@@ -55,7 +55,8 @@ struct VideoResultView: View {
                     if let url = URL(string: result.url), !result.url.isEmpty {
                         Link(destination: url) { Label { Text("在浏览器中打开") } icon: { Image(icon: .share) } }
                     }
-                } label: { Image(systemName: "ellipsis").foregroundStyle(Color.ink) }
+                } label: { Image(icon: .more).foregroundStyle(Color.ink) }
+                .accessibilityLabel("更多")
             }
         }
         .safeAreaInset(edge: .bottom) { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
@@ -151,7 +152,7 @@ struct VideoResultView: View {
                     HStack(spacing: 12) {
                         FileIcon(name: media.fileName)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(media.fileName).lineLimit(2).font(.subheadline).foregroundStyle(Color.ink)
+                            Text(media.fileName).lineLimit(2).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
                             HStack(spacing: 6) {
                                 if !media.quality.isEmpty { Text(media.quality) }
                                 if media.size > 0 { Text(ByteFormat.string(media.size)) }

@@ -193,7 +193,7 @@ struct GitHubDirectoryView: View {
         HStack(spacing: 12) {
             FileIcon(name: entry.name, isDirectory: entry.isDirectory)
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.name).lineLimit(2).foregroundStyle(Color.ink)
+                Text(entry.name).lineLimit(2).truncationMode(.middle).foregroundStyle(Color.ink)
                 if !entry.isDirectory { Text(ByteFormat.string(entry.size)).font(.caption).foregroundStyle(Color.ink3) }
             }
             Spacer(minLength: 0)
@@ -246,7 +246,7 @@ struct GitHubReleasesView: View {
                         HStack(spacing: 12) {
                             FileIcon(name: asset.name)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(asset.name).lineLimit(2).foregroundStyle(Color.ink)
+                                Text(asset.name).lineLimit(2).truncationMode(.middle).foregroundStyle(Color.ink)
                                 Text("\(ByteFormat.string(asset.size)) · 下载 \(asset.downloads) 次").font(.caption).foregroundStyle(Color.ink3)
                             }
                             Spacer(minLength: 0)
@@ -305,10 +305,11 @@ struct GitHubSettingsView: View {
                     Button(checking ? "正在校验…" : "保存并校验") { save() }
                         .disabled(checking || token == app.settings.githubToken)
                     if !app.settings.githubToken.isEmpty {
-                        Button("清除 Token", role: .destructive) {
+                        Button("清除 Token") {
                             app.settings.githubToken = ""
                             token = ""
                         }
+                        .foregroundStyle(Color.clayInk)
                     }
                 } header: {
                     Text("GitHub Token（可选）")
