@@ -17,7 +17,7 @@ public final class VideoParseService: Sendable {
             DouyinParser(extractor: webExtractor),
             XiaohongshuParser(),
             PixivParser(),
-            KuaishouParser(),
+            KuaishouParser(extractor: webExtractor),
             WeiboParser(),
             AcFunParser(),
             BilibiliParser(),
@@ -143,6 +143,8 @@ public enum AccountValidator {
             return await RedditParser.validate(cookie: cookie)
         case .facebook:
             return await FacebookParser.validate(cookie: cookie)
+        case .threads:
+            return await ThreadsParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

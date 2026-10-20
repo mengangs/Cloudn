@@ -39,6 +39,7 @@ private struct VerifyWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore.useAppProxy()
         // 验证页通过 XLJSWebViewBridge 回传结果：用消息通道接住
         let bridge = """
         window.XLJSWebViewBridge = {

@@ -32,6 +32,22 @@ struct ThreadsParser: VideoParser {
         let url: String
     }
 
+    /// 登录态：带 Cookie 打开首页（不跟随跳转），被送回登录页即失效；Threads 没有轻量的「当前用户」接口，
+    /// 能打开时按关键 Cookie 判定，显示名带上用户 ID 末尾
+    static func validate(cookie: String) async -> String? {
+        let request = HTTPRequest.get(homeURL, headers: [("User-Agent", VideoHTTP.uaChrome), ("Cookie", cookie)],
+                                      followRedirects: false)
+        return await OverseasAccount.probe(.threads, cookie: cookie, request) { r in
+            probeResult(status: r.status, location: r.header("Location") ?? "")
+        }
+    }
+
+    static func probeResult(status: Int, location: String) -> OverseasAccount.Probe {
+        if (300..<400).contains(status) && location.contains("login") { return .invalid }
+        if status == 401 { return .invalid }
+        return .unknown
+    }
+
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         let code = link.id.isEmpty ? (Self.postCode(from: link.url) ?? "") : link.id
         guard !code.isEmpty, let pk = MetaShortcode.decimal(code) else {

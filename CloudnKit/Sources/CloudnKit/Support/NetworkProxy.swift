@@ -58,14 +58,21 @@ public struct NetworkProxy: Equatable, Sendable {
 
     public func apply(to config: URLSessionConfiguration) {
         #if canImport(Network)
-        guard let p = NWEndpoint.Port(rawValue: UInt16(port)) else { return }
-        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host.trimmingCharacters(in: .whitespaces)), port: p)
-        switch kind {
-        case .http: config.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: endpoint)]
-        case .socks5: config.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
-        }
+        if let proxy = proxyConfiguration { config.proxyConfigurations = [proxy] }
         #endif
     }
+
+    #if canImport(Network)
+    /// 同一份代理配置也给 WKWebView 的数据仓库用（登录页、嗅探、隐藏网页）
+    public var proxyConfiguration: ProxyConfiguration? {
+        guard let p = NWEndpoint.Port(rawValue: UInt16(port)) else { return nil }
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host.trimmingCharacters(in: .whitespaces)), port: p)
+        switch kind {
+        case .http: return ProxyConfiguration(httpCONNECTProxy: endpoint)
+        case .socks5: return ProxyConfiguration(socksv5Proxy: endpoint)
+        }
+    }
+    #endif
 }
 
 /// 随代理设置重建的 URLSession：代理一变，下一次取会话时换新的，旧会话等手上的请求结束后释放

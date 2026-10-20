@@ -6,16 +6,17 @@ import WebKit
 /// 隐藏 WKWebView：把页面真跑一遍（过 JS 挑战、触发页面自己的数据请求），再把结果取回来。
 /// 必须挂到窗口上：不在视图层级里时 requestAnimationFrame 不触发，页面初始化脚本可能卡住。
 struct HeadlessWebExtractor: WebPageExtractor {
-    func extract(url: String, userAgent: String, documentStartScripts: [String], readyScript: String,
-                 extractScript: String, timeout: TimeInterval) async -> String? {
-        await Self.perform(url: url, userAgent: userAgent, scripts: documentStartScripts,
+    func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
+                 readyScript: String, extractScript: String, timeout: TimeInterval) async -> String? {
+        await Self.perform(url: url, userAgent: userAgent, cookie: cookie, scripts: documentStartScripts,
                            readyScript: readyScript, extractScript: extractScript, timeout: timeout)
     }
 
     @MainActor
-    private static func perform(url: String, userAgent: String, scripts: [String], readyScript: String,
+    private static func perform(url: String, userAgent: String, cookie: String, scripts: [String], readyScript: String,
                                 extractScript: String, timeout: TimeInterval) async -> String? {
         guard let session = HeadlessSession(url: url, userAgent: userAgent, scripts: scripts) else { return nil }
+        await session.start(cookie: cookie)
         return await session.run(readyScript: readyScript, extractScript: extractScript, timeout: timeout)
     }
 }
@@ -23,6 +24,7 @@ struct HeadlessWebExtractor: WebPageExtractor {
 @MainActor
 final class HeadlessSession: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
+    private let target: URL
 
     init?(url: String, userAgent: String, scripts: [String]) {
         guard let target = URL(string: url),
@@ -31,6 +33,7 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
                 .compactMap({ $0 as? UIWindowScene }).first?.windows.first else { return nil }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore.useAppProxy()
         config.mediaTypesRequiringUserActionForPlayback = .all
         let controller = WKUserContentController()
         // 桌面 UA 配套的 navigator.platform，避免页面按 UA/平台不一致判成爬虫
@@ -43,6 +46,7 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
             controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
         config.userContentController = controller
+        self.target = target
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         webView.customUserAgent = userAgent
         webView.alpha = 0.01
@@ -54,7 +58,33 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
         holder.addSubview(webView)
         window.addSubview(holder)
         webView.navigationDelegate = self
+    }
+
+    /// 先把登录 Cookie 写进这个临时数据仓库（只在本次会话有效），再开始加载页面
+    func start(cookie: String) async {
+        if let host = target.host {
+            let store = webView.configuration.websiteDataStore.httpCookieStore
+            for cookie in Self.cookies(cookie, host: host) {
+                await store.setCookie(cookie)
+            }
+        }
         webView.load(URLRequest(url: target))
+    }
+
+    /// `a=1; b=2` → 挂在站点主域（`.facebook.com`）上的 Cookie，子域名页面也带得上
+    static func cookies(_ header: String, host: String) -> [HTTPCookie] {
+        let labels = host.split(separator: ".")
+        let domain = "." + (labels.count > 2 ? labels.suffix(2).joined(separator: ".") : host)
+        return header.split(separator: ";").compactMap { pair in
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { return nil }
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return nil }
+            return HTTPCookie(properties: [
+                .name: name, .value: parts[1].trimmingCharacters(in: .whitespaces),
+                .domain: domain, .path: "/", .secure: "TRUE",
+            ])
+        }
     }
 
     func run(readyScript: String, extractScript: String, timeout: TimeInterval) async -> String? {

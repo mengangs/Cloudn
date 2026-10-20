@@ -129,7 +129,7 @@ struct FacebookParser: VideoParser {
 
         // 2. 隐藏浏览器
         if let extractor,
-           let text = await extractor.extract(url: pageURL, userAgent: VideoHTTP.uaChrome,
+           let text = await extractor.extract(url: pageURL, userAgent: VideoHTTP.uaChrome, cookie: cookie,
                                               documentStartScripts: [Self.hookJS], readyScript: Self.readyJS,
                                               extractScript: Self.extractJS, timeout: 35),
            let payload = JSON(text: text), payload["error"].string.isEmpty {

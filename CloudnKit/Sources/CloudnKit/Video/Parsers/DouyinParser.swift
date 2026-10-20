@@ -11,9 +11,10 @@ struct DouyinParser: VideoParser {
     let extractor: WebPageExtractor?
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
+        if link.kind == "user" { return try await parseUser(link, cookie: cookie) }
         let type = Rx(#"/(?:share/)?(note|slides)/"#).first(in: link.url) == nil ? "video" : "note"
         if let extractor,
-           let text = await extractor.extract(url: "https://www.douyin.com/\(type)/\(link.id)", userAgent: VideoHTTP.uaChrome,
+           let text = await extractor.extract(url: "https://www.douyin.com/\(type)/\(link.id)", userAgent: VideoHTTP.uaChrome, cookie: cookie,
                                               documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type),
                                               extractScript: Self.extractJS, timeout: 40),
            let payload = JSON(text: text), payload["error"].string.isEmpty {

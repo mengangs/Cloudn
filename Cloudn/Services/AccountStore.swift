@@ -315,7 +315,7 @@ extension AccountKind {
         case .zhihu: return URL(string: "https://www.zhihu.com/signin")!
         case .yuanbao: return URL(string: YuanbaoAccount.loginURL)!
         // 海外平台都用手机网页版登录页
-        case .twitter, .instagram, .tiktok, .reddit, .facebook:
+        case .twitter, .instagram, .threads, .tiktok, .reddit, .facebook:
             return URL(string: OverseasAccount.loginURL(self) ?? "https://x.com/i/flow/login")!
         }
     }
@@ -340,7 +340,7 @@ extension AccountKind {
         case .zhihu: return VideoHTTP.uaChrome
         case .yuanbao: return VideoHTTP.uaChrome
         // 桌面版登录页在手机宽度下要么被裁、要么叠弹窗：配合手机版登录页用手机 UA
-        case .twitter, .instagram, .tiktok, .reddit, .facebook: return VideoHTTP.uaIPhone
+        case .twitter, .instagram, .threads, .tiktok, .reddit, .facebook: return VideoHTTP.uaIPhone
         }
     }
 
@@ -360,7 +360,7 @@ extension AccountKind {
         case .pixiv: return .cookies(["pixiv.net"])
         case .zhihu: return .cookies(["zhihu.com"])
         case .yuanbao: return .cookies(["yuanbao.tencent.com", "tencent.com"])
-        case .twitter, .instagram, .tiktok, .reddit, .facebook: return .cookies(OverseasAccount.cookieDomains(self))
+        case .twitter, .instagram, .threads, .tiktok, .reddit, .facebook: return .cookies(OverseasAccount.cookieDomains(self))
         }
     }
 
@@ -384,7 +384,7 @@ extension AccountKind {
         case .zhihu: return credential.contains("z_c0=") && credential.contains("d_c0=")
         case .yuanbao: return YuanbaoAccount.looksLoggedIn(cookie: credential)
         // X：auth_token + ct0；Instagram：sessionid + ds_user_id；TikTok：sessionid；Reddit：reddit_session；Facebook：c_user + xs
-        case .twitter, .instagram, .tiktok, .reddit, .facebook: return OverseasAccount.looksLoggedIn(self, cookie: credential)
+        case .twitter, .instagram, .threads, .tiktok, .reddit, .facebook: return OverseasAccount.looksLoggedIn(self, cookie: credential)
         }
     }
 
@@ -407,6 +407,7 @@ extension AccountKind {
         case .yuanbao: return "解析微信视频号需要登录腾讯元宝"
         case .twitter: return "登录后可解析受限推文，避开游客限额"
         case .instagram: return "登录后可解析受限帖子，减少限流"
+        case .threads: return "登录后可解析登录墙内的帖子"
         case .tiktok: return "登录后可解析需登录或有年龄限制的作品"
         case .reddit: return "登录后可解析 NSFW 与受限社区的帖子"
         case .facebook: return "登录后可解析仅登录可见的视频与帖子"
@@ -430,7 +431,7 @@ extension AccountKind {
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
         case .zhihu: return "需包含 z_c0 与 d_c0"
         case .yuanbao: return "需包含 hy_user 与 hy_token"
-        case .twitter, .instagram, .tiktok, .reddit, .facebook: return OverseasAccount.manualHint(self)
+        case .twitter, .instagram, .threads, .tiktok, .reddit, .facebook: return OverseasAccount.manualHint(self)
         }
     }
 
@@ -460,6 +461,7 @@ extension AccountKind {
         case .yuanbao: return "sparkles"
         case .twitter: return "at"
         case .instagram: return "camera.fill"
+        case .threads: return "at"
         case .tiktok: return "music.note"
         case .reddit: return "bubble.left.and.bubble.right.fill"
         case .facebook: return "person.2.fill"

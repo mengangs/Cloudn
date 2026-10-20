@@ -6,13 +6,22 @@ import Foundation
 /// UA 必须是 iPhone + Referer v.kuaishou.com，桌面 UA 拿到的是没有 INIT_STATE 的 SPA 页。
 struct KuaishouParser: VideoParser {
     let platform = VideoPlatform.kuaishou
+    /// 主页批量的回退路线（GraphQL 直连被要求验证时用页面自己的请求）；单作品解析用不到
+    let extractor: WebPageExtractor?
+
+    init(extractor: WebPageExtractor? = nil) {
+        self.extractor = extractor
+    }
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
+        if link.kind == "profile" { return try await parseProfile(link.id, cookie: cookie) }
         var headers = ["User-Agent": VideoHTTP.uaIPhone, "Referer": "https://v.kuaishou.com/"]
         if !cookie.isEmpty { headers["Cookie"] = cookie }
         // 入口页（短链 / short-video / f/码）先跟随一次重定向到真正的作品页
         let first = (try? await VideoHTTP.expandRedirect(link.url, headers: headers)) ?? nil
         let pageURL = (first ?? link.url).replacingOccurrences(of: "/fw/long-video/", with: "/fw/photo/")
+        // 分享的是主页（短链展开后落到 /fw/user/ 或 /profile/）
+        if let profileID = Self.profileID(in: pageURL) { return try await parseProfile(profileID, cookie: cookie) }
         let html = try await VideoHTTP.getText(pageURL, headers: headers, what: "快手作品页")
         guard let initText = VideoHTTP.extractInlineJSON(html, key: "window.INIT_STATE"), let state = JSON(text: initText) else {
             throw VideoParseError(.unknown, "快手页面里没有作品数据（作品可能已删除或页面改版）")

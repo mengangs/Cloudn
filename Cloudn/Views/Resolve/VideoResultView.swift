@@ -407,8 +407,9 @@ struct VideoResultView: View {
         Task {
             defer { savingSubtitle = nil }
             do {
-                let url = try await app.saveSubtitle(track, title: result.title.isEmpty ? result.platform.displayName : result.title)
-                app.show("字幕已保存：\(url.lastPathComponent)")
+                let name = try await app.saveSubtitle(track, title: result.title.isEmpty ? result.platform.displayName : result.title,
+                                                      source: result.platform.displayName, page: result.url)
+                app.show("字幕已加入下载：\(name)")
             } catch {
                 app.show(error.localizedDescription, error: true)
             }

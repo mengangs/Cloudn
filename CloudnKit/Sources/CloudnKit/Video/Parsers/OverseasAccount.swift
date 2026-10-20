@@ -1,17 +1,18 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 import Foundation
 
-/// 海外平台（X、Instagram、TikTok、Reddit、Facebook）的可选登录：登录页、Cookie 域与登录态判据。
+/// 海外平台（X、Instagram、Threads、TikTok、Reddit、Facebook）的可选登录：登录页、Cookie 域与登录态判据。
 /// 网页登录在 App 内 WKWebView 里完成，读取这些域下的 Cookie 后交给 AccountValidator 校验。
 /// 登录不是必需的：没有账号时解析器照常走游客方式，有账号时用来解析受限内容、避开游客限额。
 public enum OverseasAccount {
-    public static let kinds: [AccountKind] = [.twitter, .instagram, .tiktok, .reddit, .facebook]
+    public static let kinds: [AccountKind] = [.twitter, .instagram, .threads, .tiktok, .reddit, .facebook]
 
     /// 登录页：都用手机网页版（配合手机 UA），在 WKWebView 里布局正常、键盘弹出不乱跳
     public static func loginURL(_ kind: AccountKind) -> String? {
         switch kind {
         case .twitter: return "https://x.com/i/flow/login"
         case .instagram: return "https://www.instagram.com/accounts/login/"
+        case .threads: return "https://www.threads.com/login"
         case .tiktok: return "https://www.tiktok.com/login"
         case .reddit: return "https://www.reddit.com/login/"
         case .facebook: return "https://m.facebook.com/login/"
@@ -24,6 +25,7 @@ public enum OverseasAccount {
         switch kind {
         case .twitter: return ["x.com", "twitter.com"]
         case .instagram: return ["instagram.com"]
+        case .threads: return ["threads.com", "threads.net"]
         case .tiktok: return ["tiktok.com"]
         case .reddit: return ["reddit.com"]
         case .facebook: return ["facebook.com"]
@@ -35,7 +37,7 @@ public enum OverseasAccount {
     public static func keyCookies(_ kind: AccountKind) -> [String] {
         switch kind {
         case .twitter: return ["auth_token", "ct0"]
-        case .instagram: return ["sessionid", "ds_user_id"]
+        case .instagram, .threads: return ["sessionid", "ds_user_id"]
         case .tiktok: return ["sessionid"]
         // 新版 Reddit 登录后 reddit_session 是 JWT；token_v2 游客也有，不能作判据
         case .reddit: return ["reddit_session"]
@@ -83,7 +85,7 @@ public enum OverseasAccount {
         let raw: String?
         switch kind {
         case .twitter: return xUserID(cookie: cookie)
-        case .instagram: raw = CookieUtil.value(of: "ds_user_id", in: cookie)
+        case .instagram, .threads: raw = CookieUtil.value(of: "ds_user_id", in: cookie)
         case .facebook: raw = CookieUtil.value(of: "c_user", in: cookie)
         default: raw = nil
         }

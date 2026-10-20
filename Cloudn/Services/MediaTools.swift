@@ -29,19 +29,50 @@ enum MediaTools {
         guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
             throw MergeError("视频轨读取失败")
         }
-        let duration = try await videoAsset.load(.duration)
-        let range = CMTimeRange(start: .zero, duration: duration)
+        // 按轨道自己的时间范围取：网页中途开始录制的流，时间戳不从 0 开始（如从 2:00 起），
+        // 从 0 取会在开头留一段空白、时长也算错
+        let videoRange = try await videoTrack.load(.timeRange)
         let compVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
-        try compVideo?.insertTimeRange(range, of: videoTrack, at: .zero)
+        try compVideo?.insertTimeRange(videoRange, of: videoTrack, at: .zero)
         compVideo?.preferredTransform = try await videoTrack.load(.preferredTransform)
         if let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first {
-            let audioDuration = try await audioAsset.load(.duration)
-            let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-            try compAudio?.insertTimeRange(CMTimeRange(start: .zero, duration: CMTimeMinimum(duration, audioDuration)), of: audioTrack, at: .zero)
+            // 两轨按各自的时间戳对齐，只取与画面重叠的部分
+            let audioRange = try await audioTrack.load(.timeRange)
+            let start = CMTimeMaximum(audioRange.start, videoRange.start)
+            let end = CMTimeMinimum(audioRange.end, videoRange.end)
+            if end > start {
+                let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+                try compAudio?.insertTimeRange(CMTimeRange(start: start, end: end), of: audioTrack,
+                                               at: CMTimeSubtract(start, videoRange.start))
+            }
         }
+        try await MediaTools.exportPassthrough(composition, to: output, failure: "音视频合并失败")
+    }
+
+    /// 单个 MP4 的时间戳不从 0 开始时（中途开始录制的网页视频），把所有轨道整体平移到 0 起，
+    /// 去掉开头的空白、修正时长。不需要平移时返回 false，不生成文件
+    static func rebase(_ input: URL, to output: URL) async throws -> Bool {
+        let asset = AVURLAsset(url: input)
+        let tracks = try await asset.loadTracks(withMediaType: .video) + asset.loadTracks(withMediaType: .audio)
+        guard !tracks.isEmpty else { return false }
+        var ranges: [CMTimeRange] = []
+        for track in tracks { ranges.append(try await track.load(.timeRange)) }
+        guard let origin = ranges.map(\.start).min(), origin.seconds > 0.5 else { return false }
+        let composition = AVMutableComposition()
+        for (track, range) in zip(tracks, ranges) {
+            let comp = composition.addMutableTrack(withMediaType: track.mediaType, preferredTrackID: kCMPersistentTrackID_Invalid)
+            try comp?.insertTimeRange(range, of: track, at: CMTimeSubtract(range.start, origin))
+            if track.mediaType == .video { comp?.preferredTransform = try await track.load(.preferredTransform) }
+        }
+        try await exportPassthrough(composition, to: output, failure: "视频整理失败")
+        return true
+    }
+
+    private static func exportPassthrough(_ composition: AVComposition, to output: URL, failure: String) async throws {
         guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
             throw MergeError("无法创建合并任务")
         }
+        try? FileManager.default.removeItem(at: output)
         export.outputURL = output
         export.outputFileType = .mp4
         export.shouldOptimizeForNetworkUse = true
@@ -49,7 +80,7 @@ enum MediaTools {
             export.exportAsynchronously { cont.resume() }
         }
         if export.status != .completed {
-            throw MergeError("音视频合并失败：\(export.error?.localizedDescription ?? "未知错误")")
+            throw MergeError("\(failure)：\(export.error?.localizedDescription ?? "未知错误")")
         }
     }
 

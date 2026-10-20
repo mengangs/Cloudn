@@ -108,20 +108,20 @@ extension AppModel {
         return job
     }
 
-    /// 字幕：取回、统一转成 SRT，存到下载目录（「文件」App 里与视频同一处）
-    func saveSubtitle(_ track: SubtitleTrack, title: String) async throws -> URL {
+    /// 字幕：取回、统一转成 SRT，作为一条已完成的下载加进下载列表（文件在「文件」App 里与视频同一处）
+    func saveSubtitle(_ track: SubtitleTrack, title: String, source: String, page: String) async throws -> String {
         let r = try await HTTPClient.shared.send(.get(track.url, headers: track.headers.map { ($0.key, $0.value) }))
         guard r.isSuccess else { throw CloudnError("字幕下载失败（HTTP \(r.status)）") }
         guard let srt = SubtitleConverter.toSRT(r.body, format: track.format) else { throw CloudnError("字幕格式无法识别") }
-        let dir = downloads.engine.downloadsDirectory
-        let base = FileNames.base(title, fallback: "subtitle") + "." + (track.language.isEmpty ? "sub" : track.language)
-        var target = dir.appendingPathComponent(base + ".srt")
-        var n = 1
-        while FileManager.default.fileExists(atPath: target.path) {
-            n += 1
-            target = dir.appendingPathComponent("\(base) (\(n)).srt")
+        let name = FileNames.base(title, fallback: "subtitle") + "." + (track.language.isEmpty ? "sub" : track.language) + ".srt"
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".srt")
+        try srt.write(to: temp, options: .atomic)
+        do {
+            let item = try await downloads.importLocalFile(temp, name: name, source: source, page: page)
+            return item.outputPath.map { ($0 as NSString).lastPathComponent } ?? name
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
         }
-        try srt.write(to: target, options: .atomic)
-        return target
     }
 }

@@ -122,7 +122,7 @@ public struct DownloadLink: Sendable, Equatable {
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
     /// 海外视频平台（可选登录：解析受限内容、避开游客限额）
-    case twitter, instagram, tiktok, reddit, facebook
+    case twitter, instagram, tiktok, reddit, facebook, threads
 
     public var id: String { rawValue }
 
@@ -148,12 +148,13 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .tiktok: return "TikTok"
         case .reddit: return "Reddit"
         case .facebook: return "Facebook"
+        case .threads: return "Threads"
         }
     }
 
     /// 网盘账号（区别于视频平台账号）
     public var isDrive: Bool {
-        ![.bilibili, .xiaohongshu, .pixiv, .zhihu, .yuanbao, .twitter, .instagram, .tiktok, .reddit, .facebook].contains(self)
+        ![.bilibili, .xiaohongshu, .pixiv, .zhihu, .yuanbao, .twitter, .instagram, .tiktok, .reddit, .facebook, .threads].contains(self)
     }
 }
 

@@ -19,6 +19,20 @@ struct WebLoginView: View {
                     .opacity(store.progress < 1 ? 1 : 0)
                     .animation(.easeOut(duration: 0.3), value: store.progress < 1)
                 LoginWebView(kind: kind, store: store)
+                    .overlay {
+                        if let error = store.loadError {
+                            VStack(spacing: 12) {
+                                IconView(.warning, size: 28).foregroundStyle(Color.clayInk)
+                                Text("登录页打开失败").font(.headline).foregroundStyle(Color.ink)
+                                Text(error).font(.footnote).foregroundStyle(Color.ink2).multilineTextAlignment(.center)
+                                Button("重试") { store.reload(kind.loginURL) }
+                                    .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
+                            }
+                            .padding(24)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.surface)
+                        }
+                    }
                 if let hint {
                     VStack(spacing: 0) {
                         Rectangle().fill(Color.hairline).frame(height: 1)
@@ -50,7 +64,7 @@ struct WebLoginView: View {
             case .xunlei, .pan123: "在页面中完成登录后会自动识别；如未识别，可点「完成」"
             case .pixiv: "请用 pixiv 账号密码登录，出现人机验证时在页面里完成；Google / Apple 账号登录在这里无法使用"
             case .tiktok: "选择「使用手机号 / 邮箱 / 用户名登录」；Google / Apple 账号登录在内嵌网页中无法使用"
-            case .twitter, .instagram, .reddit, .facebook: "请用账号密码登录；Google / Apple 账号登录在内嵌网页中无法使用"
+            case .twitter, .instagram, .threads, .reddit, .facebook: "请用账号密码登录；Google / Apple 账号登录在内嵌网页中无法使用"
             default: nil
             }
             // 轮询登录态：关键凭据出现即自动校验保存；同一份凭据校验失败过就不再重复请求
@@ -89,8 +103,32 @@ struct WebLoginView: View {
 @Observable
 final class WebLoginStore {
     var progress: Double = 0
-    @ObservationIgnored let dataStore = WKWebsiteDataStore.nonPersistent()
+    /// 页面加载失败的说明（内嵌网页加载失败时只会是一片空白，得自己显示出来）
+    var loadError: String?
+    @ObservationIgnored let dataStore: WKWebsiteDataStore = {
+        let store = WKWebsiteDataStore.nonPersistent()
+        store.useAppProxy()
+        return store
+    }()
     @ObservationIgnored weak var webView: WKWebView?
+
+    func reload(_ url: URL) {
+        loadError = nil
+        webView?.load(URLRequest(url: url))
+    }
+
+    func failed(_ error: Error) {
+        let e = error as NSError
+        // 主动取消、被新的跳转打断都不算失败
+        if e.domain == NSURLErrorDomain && e.code == NSURLErrorCancelled { return }
+        if e.domain == "WebKitErrorDomain" && e.code == 102 { return }
+        var message = e.localizedDescription
+        if e.domain == NSURLErrorDomain, [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
+                                          NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed].contains(e.code) {
+            message += "\n\n海外平台在国内网络下无法直接访问，请开启 VPN，或在「设置 › 网络代理」里填写代理"
+        }
+        loadError = message
+    }
 
     /// 按平台的读取方式取当前登录凭据（未登录时为空串或不完整的值）
     func credential(for kind: AccountKind) async -> String {
@@ -126,13 +164,21 @@ struct LoginWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store.dataStore
+        let mobileSafari = kind.loginUserAgent == VideoHTTP.uaIPhone
+        if mobileSafari {
+            // 用 WebKit 自带的 UA（系统版本与内核一致）再补上 Safari 标识：
+            // 写死的旧版本号与真实内核对不上时，部分站点（如 Instagram）会给出空白页
+            config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Mobile/15E148 Safari/604.1"
+        }
         if let script = kind.loginPageScript {
             config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = true
         webView.scrollView.bouncesZoom = true
-        webView.customUserAgent = kind.loginUserAgent
+        if !mobileSafari { webView.customUserAgent = kind.loginUserAgent }
+        webView.navigationDelegate = context.coordinator
+        context.coordinator.store = store
         store.webView = webView
         webView.allowsBackForwardNavigationGestures = true
         context.coordinator.observation = webView.observe(\.estimatedProgress, options: [.new]) { view, _ in
@@ -188,9 +234,27 @@ struct LoginWebView: UIViewRepresentable {
     }catch(e){}})()
     """
 
+    /// 「18.5」这样的系统主次版本号，对应同版本的 Safari
+    static var safariVersion: String {
+        UIDevice.current.systemVersion.split(separator: ".").prefix(2).joined(separator: ".")
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var observation: NSKeyValueObservation?
+        weak var store: WebLoginStore?
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            Task { @MainActor in store?.loadError = nil }
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            Task { @MainActor in store?.failed(error) }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            Task { @MainActor in store?.failed(error) }
+        }
     }
 }

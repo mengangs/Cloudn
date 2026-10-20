@@ -76,6 +76,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .tiktok: return .tiktok
         case .reddit: return .reddit
         case .facebook: return .facebook
+        case .threads: return .threads
         default: return nil
         }
     }
@@ -262,7 +263,8 @@ public struct DetectedVideoLink: Sendable, Equatable {
 /// 「把页面在真实浏览器内核里跑一遍再取数」的能力（抖音需要）。
 /// iOS 端由隐藏的 WKWebView 实现；单元测试/Linux 下不提供。
 public protocol WebPageExtractor: Sendable {
-    /// 打开 url，轮询 readyScript 直到返回 true，再执行 extractScript 并返回其 JSON 文本
-    func extract(url: String, userAgent: String, documentStartScripts: [String],
+    /// 打开 url，轮询 readyScript 直到返回 true，再执行 extractScript 并返回其 JSON 文本。
+    /// cookie（`a=1; b=2` 形式，可为空）在页面加载前写进该站点，用于登录后才能看的内容
+    func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
                  readyScript: String, extractScript: String, timeout: TimeInterval) async -> String?
 }

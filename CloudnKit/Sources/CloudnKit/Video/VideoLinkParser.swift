@@ -18,6 +18,10 @@ public enum VideoLinkParser {
         Rule(platform: .douyin, kind: "video", rx: Rx(#"m\.douyin\.com/share/(?:slides|video|note)/(\d{10,})"#, ignoreCase: true)),
         Rule(platform: .douyin, kind: "video", rx: Rx(#"jingxuan\.douyin\.com/m/(?:slides|video|note)/(\d{10,})"#, ignoreCase: true)),
         Rule(platform: .douyin, kind: "video", rx: Rx(#"douyin\.com/.*[?&]modal_id=(\d{10,})"#, ignoreCase: true)),
+        // 作者主页（打开时带 vid 的是主页上点开的某个作品）
+        Rule(platform: .douyin, kind: "video", rx: Rx(#"douyin\.com/user/[^\s?#]+\?(?:[^\s#]*?&)?vid=(\d{10,})"#, ignoreCase: true)),
+        Rule(platform: .douyin, kind: "user", rx: Rx(#"(?:www\.)?douyin\.com/user/([A-Za-z0-9_\-]{20,})"#, ignoreCase: true)),
+        Rule(platform: .douyin, kind: "user", rx: Rx(#"(?:iesdouyin|m\.douyin)\.com/share/user/([A-Za-z0-9_\-]{20,})"#, ignoreCase: true)),
 
         Rule(platform: .xiaohongshu, kind: "short", rx: Rx(#"xhslink\.(?:com|cn)/[A-Za-z0-9._?%&+=/#@\-]+"#, ignoreCase: true)),
         Rule(platform: .xiaohongshu, kind: "note", rx: Rx(#"xiaohongshu\.com/(?:explore|discovery/item)/([0-9a-zA-Z]{10,})"#, ignoreCase: true)),
@@ -26,6 +30,8 @@ public enum VideoLinkParser {
         Rule(platform: .kuaishou, kind: "photo", rx: Rx(#"(?:www\.)?kuaishou\.com/(?:short-video|fw/photo|fw/long-video)/([A-Za-z\d]+)"#, ignoreCase: true)),
         Rule(platform: .kuaishou, kind: "photo", rx: Rx(#"(?:www\.)?kuaishou\.com/f/([A-Za-z\d]+)"#, ignoreCase: true)),
         Rule(platform: .kuaishou, kind: "photo", rx: Rx(#"(?:v\.m\.)?chenzhongtech\.com/fw/(?:photo|long-video)/([A-Za-z\d]+)"#, ignoreCase: true)),
+        Rule(platform: .kuaishou, kind: "profile", rx: Rx(#"(?:www\.)?kuaishou\.com/profile/([A-Za-z\d_\-]+)"#, ignoreCase: true)),
+        Rule(platform: .kuaishou, kind: "profile", rx: Rx(#"(?:(?:v\.m\.)?chenzhongtech|(?:[a-z\d]+\.)?kuaishou|(?:[a-z\d]+\.)?gifshow)\.com/fw/user/([A-Za-z\d_\-]+)"#, ignoreCase: true)),
 
         Rule(platform: .wxchannels, kind: "sph", rx: Rx(#"weixin\.qq\.com/sph/([A-Za-z0-9_]+)"#, ignoreCase: true)),
         Rule(platform: .wxchannels, kind: "sph", rx: Rx(#"channels\.weixin\.qq\.com/finder-preview/pages/sph\?[^#\s]*?\bid=([A-Za-z0-9_]+)"#, ignoreCase: true)),

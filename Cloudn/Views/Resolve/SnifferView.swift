@@ -376,6 +376,7 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         let config = WKWebViewConfiguration()
         // 用默认数据存储：在这里登录过的网站下次还在，下载时也能带上它的 Cookie
         config.websiteDataStore = .default()
+        config.websiteDataStore.useAppProxy()
         config.allowsInlineMediaPlayback = true
         let controller = WKUserContentController()
         controller.addUserScript(WKUserScript(source: Self.sniffScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))

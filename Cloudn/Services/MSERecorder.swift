@@ -255,8 +255,14 @@ enum MSERecordingSaver {
         var firstError: Error?
         for (track, suffix) in picks {
             let ext = track.best.url.pathExtension.isEmpty ? MSERecorder.fileExtension(for: track.best.mime) : track.best.url.pathExtension
+            var file = track.best.url
+            if MSERecorder.isMP4(track.best.mime) {
+                // 中途开始录制：时间戳平移到 0 起，失败就按原样保存
+                let rebased = workDirectory.appendingPathComponent("rebased-\(saved).\(ext)")
+                if (try? await MediaTools.rebase(file, to: rebased)) == true { file = rebased }
+            }
             do {
-                try await downloads.importLocalFile(track.best.url, name: base + suffix + "." + ext, source: source, page: page)
+                try await downloads.importLocalFile(file, name: base + suffix + "." + ext, source: source, page: page)
                 saved += 1
             } catch {
                 if firstError == nil { firstError = error }

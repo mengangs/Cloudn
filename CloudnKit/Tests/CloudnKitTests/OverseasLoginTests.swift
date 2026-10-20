@@ -17,7 +17,7 @@ final class OverseasLoginTests: XCTestCase {
         XCTAssertEqual(VideoPlatform.tiktok.accountKind, .tiktok)
         XCTAssertEqual(VideoPlatform.reddit.accountKind, .reddit)
         XCTAssertEqual(VideoPlatform.facebook.accountKind, .facebook)
-        XCTAssertNil(VideoPlatform.threads.accountKind)
+        XCTAssertEqual(VideoPlatform.threads.accountKind, .threads)
         XCTAssertNil(OverseasAccount.loginURL(.quark))
         XCTAssertFalse(OverseasAccount.looksLoggedIn(.quark, cookie: "__pus=1"))
     }
@@ -40,6 +40,14 @@ final class OverseasLoginTests: XCTestCase {
         XCTAssertTrue(OverseasAccount.looksLoggedIn(.facebook, cookie: "datr=d; c_user=100012345678; xs=12%3Aabc"))
         XCTAssertFalse(OverseasAccount.looksLoggedIn(.facebook, cookie: "datr=d; c_user=100012345678"))
         XCTAssertFalse(OverseasAccount.looksLoggedIn(.facebook, cookie: "c_user=deleted; xs=1"))
+    }
+
+    func testThreadsLogin() {
+        XCTAssertTrue(OverseasAccount.looksLoggedIn(.threads, cookie: "csrftoken=c; sessionid=1%3Aabc; ds_user_id=123"))
+        XCTAssertFalse(OverseasAccount.looksLoggedIn(.threads, cookie: "csrftoken=c; mid=m"))
+        XCTAssertEqual(OverseasAccount.fallbackName(.threads, cookie: "sessionid=s; ds_user_id=55501234"), "Threads 用户 · 1234")
+        XCTAssertEqual(ThreadsParser.probeResult(status: 302, location: "https://www.threads.com/login?next=/"), .invalid)
+        XCTAssertEqual(ThreadsParser.probeResult(status: 200, location: ""), .unknown)
     }
 
     func testUserIDAndFallbackName() {
