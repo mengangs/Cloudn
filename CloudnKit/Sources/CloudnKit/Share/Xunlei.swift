@@ -561,3 +561,243 @@ extension XunleiResolver: DriveManager {
         return DriveQuota(used: used, total: total)
     }
 }
+
+// MARK: - 上传到我的网盘
+
+/// 参考 OpenList（AGPL-3.0）thunder / pikpak 驱动：算 GCID → POST drive/v1/files（同 GCID 已存在即秒传）→
+/// 用返回的 STS 临时凭证直传对象存储。阿里云 OSS 走 V1 签名，其余按 S3 SigV4（region "xunlei"）
+extension XunleiResolver: DriveUploader {
+    /// s3manager 的默认分片 5MB，最多 10000 片
+    static let s3PartSize: Int64 = 5 << 20
+
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let id = try await driveIdentity()
+        let size = FileChunks.size(of: file)
+        var gcid = GCIDHasher(size: size)
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in gcid.update(d) }
+        let hash = Crypto.hex(gcid.finalize()).uppercased()
+
+        let created = try await pan("POST:/drive/v1/files", url: panBase + "/drive/v1/files",
+                                    body: Self.uploadFileBody(name: name, parent: Self.driveParent(folderId), size: size, gcid: hash),
+                                    identity: id)
+        // 秒传：服务端已有同 GCID 的文件（phase 直接完成，或不再要求断点续传上传）
+        if Self.isRapidUpload(created) { progress(.finishing, 1); return }
+        guard let ticket = Self.parseUploadTicket(created) else { throw CloudnError("迅雷未返回上传凭证，请稍后重试") }
+        try await putObject(file, size: size, ticket: ticket, progress: progress)
+        // 对象存储收齐后由迅雷异步落库（OpenList 也不轮询），稍等再让调用方刷新
+        progress(.finishing, 1)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+
+    // MARK: GCID
+
+    /// GCID：文件按块切开，每块 SHA-1 的 20 字节摘要依次喂给外层 SHA-1；空文件即 SHA-1("")
+    struct GCIDHasher {
+        let blockSize: Int
+        private var outer = SHA1Hasher()
+        private var inner = SHA1Hasher()
+        private var filled = 0
+
+        init(size: Int64) { blockSize = Int(XunleiResolver.gcidBlockSize(size)) }
+
+        mutating func update(_ data: Data) {
+            var start = data.startIndex
+            while start < data.endIndex {
+                let end = min(data.endIndex, start + (blockSize - filled))
+                inner.update(data[start..<end])
+                filled += end - start
+                start = end
+                if filled == blockSize { flushBlock() }
+            }
+        }
+
+        mutating func finalize() -> [UInt8] {
+            if filled > 0 { flushBlock() }
+            return outer.finalize()
+        }
+
+        private mutating func flushBlock() {
+            outer.update(Data(inner.finalize()))
+            inner = SHA1Hasher()
+            filled = 0
+        }
+    }
+
+    /// 块大小从 256KB 起翻倍，直到块数不超过 512（最大 2MB）。与 OpenList 一样按「size / bs > 512」的实数比较
+    static func gcidBlockSize(_ size: Int64) -> Int64 {
+        var bs: Int64 = 0x40000
+        while size > 0x200 * bs && bs < 0x200000 { bs <<= 1 }
+        return bs
+    }
+
+    /// 内存里一段数据的 GCID（大写十六进制，网页端即大写）
+    static func gcid(_ data: Data) -> String {
+        var h = GCIDHasher(size: Int64(data.count))
+        h.update(data)
+        return Crypto.hex(h.finalize()).uppercased()
+    }
+
+    // MARK: 请求体 / 解析
+
+    /// 字段顺序与网页端一致；space 必须是字符串（见 createFolderBody）
+    static func uploadFileBody(name: String, parent: String, size: Int64, gcid: String) -> OrderedJSON {
+        .object([("kind", .string("drive#file")), ("parent_id", .string(parent)), ("name", .string(name)), ("size", .int(size)),
+                 ("hash", .string(gcid)), ("upload_type", .string("UPLOAD_TYPE_RESUMABLE")), ("space", .string(""))])
+    }
+
+    /// file.phase 已完成，或服务端给的 upload_type 不是断点续传（OpenList 视为无需上传）
+    static func isRapidUpload(_ json: JSON) -> Bool {
+        if json["file"]["phase"].string == "PHASE_TYPE_COMPLETE" { return true }
+        let type = json["upload_type"].string
+        return !type.isEmpty && type != "UPLOAD_TYPE_RESUMABLE"
+    }
+
+    /// resumable.params 里的 STS 临时凭证与对象位置
+    struct UploadTicket: Equatable {
+        let provider: String
+        let bucket: String
+        /// 去掉 scheme、路径与「bucket.」前缀后的域名
+        let endpoint: String
+        let key: String
+        let accessKeyId: String
+        let accessKeySecret: String
+        let securityToken: String
+
+        var isAliyun: Bool { provider == "PROVIDER_ALIYUN" || endpoint.hasSuffix("aliyuncs.com") }
+        /// 虚拟主机风格（AWS SDK 默认）
+        var host: String { bucket + "." + endpoint }
+        var path: String { "/" + UploadUtil.encodePath(key) }
+        var objectURL: String { "https://" + host + path }
+    }
+
+    static func parseUploadTicket(_ json: JSON) -> UploadTicket? {
+        let resumable = json["resumable"]
+        let p = resumable["params"]
+        let bucket = p["bucket"].string.trimmed
+        let ticket = UploadTicket(provider: resumable["provider"].string, bucket: bucket,
+                                  endpoint: objectEndpoint(p["endpoint"].string, bucket: bucket), key: p["key"].string,
+                                  accessKeyId: p["access_key_id"].string, accessKeySecret: p["access_key_secret"].string,
+                                  securityToken: p["security_token"].string)
+        guard !ticket.bucket.isEmpty, !ticket.endpoint.isEmpty, !ticket.key.isEmpty, !ticket.accessKeyId.isEmpty,
+              !ticket.accessKeySecret.isEmpty else { return nil }
+        return ticket
+    }
+
+    /// endpoint 可能带 scheme，也可能已经是「bucket.域名」：只留下域名本身
+    static func objectEndpoint(_ endpoint: String, bucket: String) -> String {
+        var host = endpoint.trimmed
+        for p in ["https://", "http://"] where host.hasPrefix(p) { host.removeFirst(p.count) }
+        if let slash = host.firstIndex(of: "/") { host = String(host[..<slash]) }
+        let prefix = bucket + "."
+        if !bucket.isEmpty && host.hasPrefix(prefix) { host.removeFirst(prefix.count) }
+        return host
+    }
+
+    /// 分片大小：5MB；超过 10000 片时按 size / 9999 放大（同 s3manager）
+    static func uploadPartSize(for size: Int64) -> Int64 {
+        let maxParts: Int64 = 10000
+        return size > maxParts * s3PartSize ? size / (maxParts - 1) : s3PartSize
+    }
+
+    /// URL 查询串：值为空时 OSS 写「键」、S3 写「键=」，与各自签名时的规范串一致
+    static func objectQuery(_ query: [(String, String)], oss: Bool) -> String {
+        var items: [String] = []
+        for (k, v) in query {
+            if v.isEmpty {
+                items.append(oss ? k : k + "=")
+            } else {
+                items.append(k + "=" + S3SigV4.rfc3986(v))
+            }
+        }
+        return items.joined(separator: "&")
+    }
+
+    // MARK: 对象存储
+
+    enum ObjectSigner {
+        case oss(OSSSigner)
+        case s3(S3SigV4)
+
+        var isOSS: Bool {
+            if case .oss = self { return true }
+            return false
+        }
+
+        func headers(_ ticket: UploadTicket, method: String, query: [(String, String)], contentType: String, payload: Data) -> [(String, String)] {
+            switch self {
+            case .oss(let signer):
+                return signer.headers(method: method, bucket: ticket.bucket, key: ticket.key, query: query, contentType: contentType)
+            case .s3(let signer):
+                var h = signer.headers(method: method, host: ticket.host, path: ticket.path, query: query, payload: payload)
+                h.append(("Content-Type", contentType))
+                return h
+            }
+        }
+    }
+
+    /// 不足一片时单个 PUT；否则 初始化 → 顺序传分片 → 合并
+    private func putObject(_ file: URL, size: Int64, ticket: UploadTicket, progress: UploadProgress) async throws {
+        let signer: ObjectSigner
+        if ticket.isAliyun {
+            signer = .oss(OSSSigner(accessKeyId: ticket.accessKeyId, accessKeySecret: ticket.accessKeySecret, securityToken: ticket.securityToken))
+        } else {
+            signer = .s3(S3SigV4(accessKeyId: ticket.accessKeyId, secret: ticket.accessKeySecret, sessionToken: ticket.securityToken,
+                                 region: "xunlei"))
+        }
+        let octet = "application/octet-stream"
+        let total = Double(max(1, size))
+        let parts = UploadUtil.parts(size: size, partSize: Self.uploadPartSize(for: size))
+        if parts.count <= 1 {
+            var data = Data()
+            if size > 0 { data = try FileChunks.read(file, offset: 0, length: Int(size)) }
+            _ = try await objectRequest(ticket, signer: signer, method: "PUT", query: [], contentType: octet, body: data) { done in
+                progress(.uploading, Double(done) / total)
+            }
+            return
+        }
+
+        let initiated = try await objectRequest(ticket, signer: signer, method: "POST", query: [("uploads", "")], contentType: octet, body: Data())
+        guard let uploadId = UploadUtil.xmlValue("UploadId", in: initiated.text)?.nilIfBlank else {
+            throw CloudnError("迅雷对象存储未返回分片上传 ID")
+        }
+        var etags: [String] = []
+        var sent: Int64 = 0
+        for (i, part) in parts.enumerated() {
+            // S3 要对分片内容算 SHA-256，一片（默认 5MB）读进内存
+            let data = try FileChunks.read(file, offset: part.offset, length: Int(part.length))
+            let base = sent
+            let query: [(String, String)] = [("partNumber", String(i + 1)), ("uploadId", uploadId)]
+            let r = try await objectRequest(ticket, signer: signer, method: "PUT", query: query, contentType: octet, body: data) { done in
+                progress(.uploading, Double(base + done) / total)
+            }
+            guard let etag = r.header("ETag")?.nilIfBlank else { throw CloudnError("迅雷分片上传未返回 ETag") }
+            etags.append(etag)
+            sent += part.length
+        }
+
+        progress(.finishing, 0)
+        let xml = UploadUtil.completeXML(etags, s3Namespace: !signer.isOSS)
+        let done = try await objectRequest(ticket, signer: signer, method: "POST", query: [("uploadId", uploadId)],
+                                           contentType: "application/xml", body: Data(xml.utf8))
+        // S3 合并失败时可能是 HTTP 200 + <Error>
+        if done.text.contains("<Error>") {
+            throw CloudnError("迅雷合并分片失败：\(UploadUtil.xmlValue("Code", in: done.text) ?? "未知错误")")
+        }
+    }
+
+    /// 发一个签名请求；非 2xx 时重新签名重试，共 3 次
+    private func objectRequest(_ ticket: UploadTicket, signer: ObjectSigner, method: String, query: [(String, String)], contentType: String,
+                               body: Data, onSent: (@Sendable (Int64) -> Void)? = nil) async throws -> HTTPResponse {
+        let q = Self.objectQuery(query, oss: signer.isOSS)
+        let url = ticket.objectURL + (q.isEmpty ? "" : "?" + q)
+        var last: HTTPResponse?
+        for _ in 0..<3 {
+            let headers = signer.headers(ticket, method: method, query: query, contentType: contentType, payload: body)
+            let r = try await client.upload(HTTPRequest(url: url, method: method, headers: headers), body: .data(body), progress: onSent)
+            if r.isSuccess { return r }
+            last = r
+        }
+        let code = last.flatMap { UploadUtil.xmlValue("Code", in: $0.text) } ?? ""
+        throw CloudnError("迅雷对象存储上传失败（HTTP \(last?.status ?? 0)\(code.isEmpty ? "" : " " + code)）")
+    }
+}

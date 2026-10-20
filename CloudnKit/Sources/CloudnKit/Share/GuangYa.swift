@@ -349,3 +349,221 @@ extension GuangYaResolver: DriveManager {
                             cleanupToken: cleanupToken)
     }
 }
+
+// MARK: - 上传到我的网盘
+
+/// 参考 OpenList（AGPL-3.0）guangyapan 驱动：MD5 → get_res_center_token（code 156 = 秒传）→
+/// 用 STS 临时凭证自签名直传阿里云 OSS（顺序分片，无回调）→ 轮询 get_info_by_task_id 直到落库
+extension GuangYaResolver: DriveUploader {
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let cred = try await credential()
+        let size = FileChunks.size(of: file)
+        var md5 = MD5Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in md5.update(d) }
+        let md5Hex = Crypto.hex(md5.finalize())
+
+        let json = try await callRaw("get_res_center_token",
+                                     Self.uploadTokenBody(name: name, parentId: folderId, size: size, md5: md5Hex), cred: cred)
+        let ticket = try Self.parseUploadToken(json)
+        // 秒传时没有 OSS 凭证，直接等任务完成
+        if !ticket.rapid { try await ossUpload(file, size: size, ticket: ticket, progress: progress) }
+        progress(.finishing, 0)
+        try await waitUploadTask(ticket.taskId, cred: cred)
+        progress(.finishing, 1)
+    }
+
+    /// get_res_center_token 的结果
+    struct UploadTicket: Equatable {
+        let taskId: String
+        /// code 156 或「上传已完成」：服务端已有同 MD5 的文件
+        let rapid: Bool
+        let objectPath: String
+        let bucket: String
+        /// 去掉 scheme、路径与「bucket.」前缀后的 OSS 域名
+        let host: String
+        let accessKeyId: String
+        let accessKeySecret: String
+        let sessionToken: String
+
+        var objectURL: String { "https://" + bucket + "." + host + "/" + UploadUtil.encodePath(objectPath) }
+    }
+
+    enum UploadTaskState: Equatable {
+        case done
+        case pending
+        case failed(String)
+    }
+
+    // MARK: 纯函数（便于单测）
+
+    static func uploadTokenBody(name: String, parentId: String, size: Int64, md5: String) -> OrderedJSON {
+        .object([("capacity", .int(2)), ("name", .string(name)), ("parentId", .string(parentId)),
+                 ("res", .object([("fileSize", .int(size)), ("md5", .string(md5))]))])
+    }
+
+    static func isUploadSuccessMsg(_ msg: String) -> Bool {
+        let m = msg.trimmed.lowercased()
+        return m.isEmpty || m == "success"
+    }
+
+    /// 服务端表示「已上传 / 秒传」的提示语
+    static func isUploadAlreadyDone(_ msg: String) -> Bool {
+        let m = msg.trimmed.lowercased()
+        return ["上传已完成", "upload completed", "already uploaded", "秒传成功"].contains(m)
+    }
+
+    /// 成功 = msg 为空或 success，或 code 156 / 已上传提示；taskId 必须非空。凭证缺省时退回 data.creds
+    static func parseUploadToken(_ json: JSON) throws -> UploadTicket {
+        let code = json["code"].int
+        let msg = json.string("msg", "message").trimmed
+        let rapid = code == 156 || isUploadAlreadyDone(msg)
+        guard rapid || isUploadSuccessMsg(msg) else { throw CloudnError(msg, code: code) }
+        let data = json["data"]
+        let taskId = data["taskId"].string.trimmed
+        guard !taskId.isEmpty else { throw CloudnError("光鸭未返回上传任务（code=\(code)）") }
+        let creds = data["creds"]
+        let bucket = data["bucketName"].string.trimmed
+        let ticket = UploadTicket(
+            taskId: taskId, rapid: rapid, objectPath: data["objectPath"].string, bucket: bucket,
+            host: ossHost(endPoint: data["endPoint"].string, fullEndPoint: data["fullEndPoint"].string, bucket: bucket),
+            accessKeyId: data["accessKeyID"].string.nilIfBlank ?? creds["accessKeyID"].string,
+            accessKeySecret: data["secretAccessKey"].string.nilIfBlank ?? creds["secretAccessKey"].string,
+            sessionToken: data["sessionToken"].string.nilIfBlank ?? creds["sessionToken"].string
+        )
+        if !rapid {
+            guard !ticket.objectPath.isEmpty, !ticket.bucket.isEmpty, !ticket.host.isEmpty, !ticket.accessKeyId.isEmpty,
+                  !ticket.accessKeySecret.isEmpty else { throw CloudnError("光鸭上传凭证不完整，请稍后重试") }
+        }
+        return ticket
+    }
+
+    /// endPoint 没有 scheme 时改用 fullEndPoint；再去掉 scheme、路径和开头的「bucket.」，只留 OSS 域名
+    static func ossHost(endPoint: String, fullEndPoint: String, bucket: String) -> String {
+        var ep = endPoint.trimmed
+        let full = fullEndPoint.trimmed
+        let hasScheme = ep.hasPrefix("http://") || ep.hasPrefix("https://")
+        if ep.isEmpty || (!hasScheme && !full.isEmpty) { ep = full }
+        for p in ["https://", "http://"] where ep.hasPrefix(p) { ep.removeFirst(p.count) }
+        if let slash = ep.firstIndex(of: "/") { ep = String(ep[..<slash]) }
+        let prefix = bucket + "."
+        if !bucket.isEmpty && ep.hasPrefix(prefix) { ep.removeFirst(prefix.count) }
+        return ep
+    }
+
+    /// 分片大小（calcUploadPartSize）：≤100MB 1MB；≤16GB 2MB；≤160GB 4MB；更大 8MB。
+    /// 另保证不超过 OSS 的 10000 片上限（OpenList 的档位在 20GB 以上会超）
+    static func uploadPartSize(for size: Int64) -> Int64 {
+        let mb: Int64 = 1 << 20
+        let gb: Int64 = 1 << 30
+        var part: Int64
+        if size <= 100 * mb {
+            part = mb
+        } else if size <= 16 * gb {
+            part = 2 * mb
+        } else if size <= 160 * gb {
+            part = 4 * mb
+        } else {
+            part = 8 * mb
+        }
+        let minPart: Int64 = (size + 9999) / 10000
+        if part < minPart { part = (minPart + mb - 1) / mb * mb }
+        return part
+    }
+
+    /// OSS 查询串：值为空写「键」
+    static func ossQuery(_ query: [(String, String)]) -> String {
+        var items: [String] = []
+        for (k, v) in query { items.append(v.isEmpty ? k : k + "=" + S3SigV4.rfc3986(v)) }
+        return items.joined(separator: "&")
+    }
+
+    /// get_info_by_task_id：拿到 fileId 即完成；code 0/145/146/147/155/163 为处理中；其他 code 带 msg 为失败
+    static func uploadTaskState(_ json: JSON) -> UploadTaskState {
+        if !json["data"]["fileId"].string.isEmpty { return .done }
+        let code = json["code"].int
+        let msg = json.string("msg", "message").trimmed
+        let waiting: Set<Int> = [0, 145, 146, 147, 155, 163]
+        if waiting.contains(code) || msg.isEmpty { return .pending }
+        return .failed("光鸭上传处理失败：\(msg)（code=\(code)）")
+    }
+
+    // MARK: 请求
+
+    /// 与 call 相同的请求头，但不按 code 判错、返回整个响应：上传接口用 code 156 表示秒传，145 等表示处理中
+    private func callRaw(_ name: String, _ body: OrderedJSON, cred: GuangYaCredential) async throws -> JSON {
+        let headers: [(String, String)] = [
+            ("Accept", "application/json, text/plain, */*"), ("Content-Type", "application/json"), ("User-Agent", Self.ua),
+            ("Origin", Self.webSite), ("Referer", Self.webSite + "/"), ("dt", "4"), ("did", cred.deviceId),
+            ("traceparent", "00-\(Self.randomHex(32))-\(Self.randomHex(16))-01"), ("Authorization", "Bearer " + cred.accessToken)
+        ]
+        let r = try await client.send(HTTPRequest(url: apiBase + "/userres/v1/" + name, method: "POST", headers: headers,
+                                                  body: Data(body.text.utf8)))
+        if r.status == 401 { throw SharePlatform.guangya.loginRequired }
+        guard let json = r.json, json.isObject else { throw CloudnError("光鸭响应解析失败（HTTP \(r.status)）") }
+        return json
+    }
+
+    /// 空文件单个 PUT；否则 ?sequential&uploads 初始化 → 顺序 PUT 分片 → ?uploadId 合并。每个请求都带 x-oss-security-token
+    private func ossUpload(_ file: URL, size: Int64, ticket: UploadTicket, progress: UploadProgress) async throws {
+        let signer = OSSSigner(accessKeyId: ticket.accessKeyId, accessKeySecret: ticket.accessKeySecret, securityToken: ticket.sessionToken)
+        let octet = "application/octet-stream"
+        if size == 0 {
+            _ = try await ossRequest(ticket, signer: signer, method: "PUT", query: [], contentType: octet, body: .data(Data()))
+            return
+        }
+        let initiated = try await ossRequest(ticket, signer: signer, method: "POST", query: [("sequential", ""), ("uploads", "")],
+                                             contentType: octet, body: .data(Data()))
+        guard let uploadId = UploadUtil.xmlValue("UploadId", in: initiated.text)?.nilIfBlank else {
+            throw CloudnError("光鸭 OSS 未返回分片上传 ID")
+        }
+        let parts = UploadUtil.parts(size: size, partSize: Self.uploadPartSize(for: size))
+        let total = Double(size)
+        var etags: [String] = []
+        var sent: Int64 = 0
+        for (i, part) in parts.enumerated() {
+            let base = sent
+            let query: [(String, String)] = [("partNumber", String(i + 1)), ("uploadId", uploadId)]
+            let r = try await ossRequest(ticket, signer: signer, method: "PUT", query: query, contentType: octet,
+                                         body: .file(file, offset: part.offset, length: part.length)) { done in
+                progress(.uploading, Double(base + done) / total)
+            }
+            guard let etag = r.header("ETag")?.nilIfBlank else { throw CloudnError("光鸭分片上传未返回 ETag") }
+            etags.append(etag)
+            sent += part.length
+        }
+        progress(.finishing, 0)
+        let xml = UploadUtil.completeXML(etags)
+        _ = try await ossRequest(ticket, signer: signer, method: "POST", query: [("uploadId", uploadId)], contentType: "application/xml",
+                                 body: .data(Data(xml.utf8)))
+    }
+
+    /// 发一个 OSS 签名请求；非 2xx 时重新签名重试，共 3 次
+    private func ossRequest(_ ticket: UploadTicket, signer: OSSSigner, method: String, query: [(String, String)], contentType: String,
+                            body: UploadBody, onSent: (@Sendable (Int64) -> Void)? = nil) async throws -> HTTPResponse {
+        let q = Self.ossQuery(query)
+        let url = ticket.objectURL + (q.isEmpty ? "" : "?" + q)
+        var last: HTTPResponse?
+        for _ in 0..<3 {
+            let headers = signer.headers(method: method, bucket: ticket.bucket, key: ticket.objectPath, query: query, contentType: contentType)
+            let r = try await client.upload(HTTPRequest(url: url, method: method, headers: headers), body: body, progress: onSent)
+            if r.isSuccess { return r }
+            last = r
+        }
+        let code = last.flatMap { UploadUtil.xmlValue("Code", in: $0.text) } ?? ""
+        throw CloudnError("光鸭 OSS 上传失败（HTTP \(last?.status ?? 0)\(code.isEmpty ? "" : " " + code)）")
+    }
+
+    /// 每秒查一次，最多 300 次
+    private func waitUploadTask(_ taskId: String, cred: GuangYaCredential) async throws {
+        for i in 0..<300 {
+            let json = try await callRaw("file/get_info_by_task_id", .object([("taskId", .string(taskId))]), cred: cred)
+            switch Self.uploadTaskState(json) {
+            case .done: return
+            case .failed(let msg): throw CloudnError(msg)
+            case .pending: break
+            }
+            if i < 299 { try await Task.sleep(nanoseconds: 1_000_000_000) }
+        }
+        throw CloudnError("光鸭仍在处理上传的文件，请稍后刷新确认")
+    }
+}

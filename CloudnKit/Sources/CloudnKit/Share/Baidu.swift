@@ -448,3 +448,280 @@ extension BaiduResolver: DriveManager {
         return DriveQuota(used: json["used"].int64, total: json["total"].int64)
     }
 }
+
+// MARK: - 上传到我的网盘
+
+/// 参考 OpenList（AGPL-3.0）baidu_netdisk 驱动。OpenList 用 OAuth access_token 调 xpan/file?method=precreate|create；
+/// 这里只有 BDUSS Cookie，改用网页端的 api/precreate、api/create（表单字段相同）和 Cookie 认证的 pcs superfile2。
+/// ⚠ 这几个网页端接口在 Cookie 认证下的行为来自网页客户端，尚未在真实账号上验证
+extension BaiduResolver: DriveUploader {
+    /// 普通用户固定 4MB 一片，最多 2048 片
+    static let defaultSliceSize: Int64 = 4 << 20
+    /// slice-md5 只算开头 256KB
+    static let sliceMD5Length: Int64 = 256 << 10
+    static let uploadFallbackHost = "https://d.pcs.baidu.com"
+    /// 分片上传时 uploadid 过期（内部错误码，触发重新 precreate）
+    static let uploadIdExpiredCode = -900_001
+
+    /// precreate → （return_type 2 即秒传）→ locateupload 取上传域名 → superfile2 逐片上传缺的块 → create
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        guard let cookie = await loginCookie() else { throw SharePlatform.baidu.loginRequired }
+        let size = FileChunks.size(of: file)
+        guard size > 0 else { throw CloudnError("百度网盘不支持上传空文件") }
+        let sliceSize = Self.uploadSliceSize(for: size)
+        let hashes = try Self.uploadHashes(file, sliceSize: sliceSize, progress: progress.hashing(total: size))
+        let bdstoken = try await self.bdstoken(cookie)
+        let path = Self.childPath(folderId, name)
+        let target = Self.targetPath(folderId)
+        let times = Self.fileTimes(file)
+        let blockList = Self.blockListJSON(hashes.blocks)
+        let parts = UploadUtil.parts(size: size, partSize: sliceSize)
+        let precreateURL = "https://pan.baidu.com/api/precreate?bdstoken=\(bdstoken)&app_id=\(Self.appId)&channel=chunlei&web=1&clienttype=0"
+
+        var pre = try await uploadForm(precreateURL, Self.precreateForm(path: path, size: size, blockList: blockList, contentMD5: hashes.contentMD5,
+                                                                        sliceMD5: hashes.sliceMD5, targetPath: target,
+                                                                        mtime: times.mtime, ctime: times.ctime),
+                                       cookie: cookie, fallback: "预上传失败")
+        // 秒传：服务端已有同内容文件
+        if pre["return_type"].int == 2 { progress(.finishing, 1); return }
+        var uploadId = pre["uploadid"].string
+        for round in 0..<2 {
+            guard !uploadId.isEmpty else { throw CloudnError("百度网盘未返回上传 ID") }
+            do {
+                try await uploadBlocks(file, missing: Self.missingBlocks(pre, count: parts.count), parts: parts, blocks: hashes.blocks,
+                                       path: path, uploadId: uploadId, cookie: cookie, progress: progress)
+                break
+            } catch let e as CloudnError where e.code == Self.uploadIdExpiredCode && round == 0 {
+                // uploadid 过期：不带 content-md5 / slice-md5 重新 precreate，所有分片重传
+                pre = try await uploadForm(precreateURL, Self.precreateForm(path: path, size: size, blockList: blockList, contentMD5: "",
+                                                                            sliceMD5: "", targetPath: target,
+                                                                            mtime: times.mtime, ctime: times.ctime),
+                                           cookie: cookie, fallback: "预上传失败")
+                if pre["return_type"].int == 2 { progress(.finishing, 1); return }
+                uploadId = pre["uploadid"].string
+            }
+        }
+
+        progress(.finishing, 0)
+        let createURL = "https://pan.baidu.com/api/create?isdir=0&rtype=1&bdstoken=\(bdstoken)&app_id=\(Self.appId)&channel=chunlei&web=1&clienttype=0"
+        _ = try await uploadForm(createURL, Self.createForm(path: path, size: size, uploadId: uploadId, blockList: blockList, targetPath: target,
+                                                            mtime: times.mtime, ctime: times.ctime),
+                                 cookie: cookie, fallback: "创建文件失败")
+        progress(.finishing, 1)
+    }
+
+    // MARK: 摘要
+
+    struct UploadHashes: Equatable {
+        /// 整个文件的 md5
+        let contentMD5: String
+        /// 开头 256KB 的 md5（文件更短时即整个文件）
+        let sliceMD5: String
+        /// 每片的 md5
+        let blocks: [String]
+    }
+
+    /// 读一遍文件同时算整文件 md5、每片 md5 和开头 256KB 的 md5
+    static func uploadHashes(_ file: URL, sliceSize: Int64, progress: ((Int64) -> Void)? = nil) throws -> UploadHashes {
+        var whole = MD5Hasher()
+        var head = MD5Hasher()
+        var block = MD5Hasher()
+        var headFill: Int64 = 0
+        var blockFill: Int64 = 0
+        var blocks: [String] = []
+        let headLimit = Self.sliceMD5Length
+        try FileChunks.scan(file, chunkSize: 1 << 20, progress: progress) { _, d in
+            whole.update(d)
+            if headFill < headLimit {
+                let take = Int(min(headLimit - headFill, Int64(d.count)))
+                head.update(d.prefix(take))
+                headFill += Int64(take)
+            }
+            var start = d.startIndex
+            while start < d.endIndex {
+                let room = Int(sliceSize - blockFill)
+                let end = min(d.endIndex, start + room)
+                block.update(d[start..<end])
+                blockFill += Int64(end - start)
+                start = end
+                if blockFill == sliceSize {
+                    blocks.append(Crypto.hex(block.finalize()))
+                    block = MD5Hasher()
+                    blockFill = 0
+                }
+            }
+        }
+        if blockFill > 0 { blocks.append(Crypto.hex(block.finalize())) }
+        return UploadHashes(contentMD5: Crypto.hex(whole.finalize()), sliceMD5: Crypto.hex(head.finalize()), blocks: blocks)
+    }
+
+    /// 片大小：4MB 能在 2048 片内装下就用 4MB；更大的文件只有会员能传，按 OpenList 用 16MB（VIP）/ 32MB（SVIP）
+    static func uploadSliceSize(for size: Int64) -> Int64 {
+        let maxParts: Int64 = 2048
+        let vip: Int64 = 16 << 20
+        if size <= maxParts * defaultSliceSize { return defaultSliceSize }
+        if size <= maxParts * vip { return vip }
+        return 32 << 20
+    }
+
+    // MARK: 纯函数（便于单测）
+
+    /// block_list：`["md5","md5"]`
+    static func blockListJSON(_ blocks: [String]) -> String {
+        OrderedJSON.array(blocks.map { OrderedJSON.string($0) }).text
+    }
+
+    /// target_path：目标目录，以 / 结尾
+    static func targetPath(_ folderId: String) -> String {
+        let dir = folderId.nilIfBlank ?? "/"
+        return dir.hasSuffix("/") ? dir : dir + "/"
+    }
+
+    /// rtype 1 = 同名时自动改名（OpenList 用 3 = 覆盖）；content-md5 / slice-md5 为空时不带（uploadid 过期后重来）
+    static func precreateForm(path: String, size: Int64, blockList: String, contentMD5: String, sliceMD5: String, targetPath: String,
+                              mtime: Int64, ctime: Int64) -> [(String, String)] {
+        var form: [(String, String)] = [("path", path), ("size", String(size)), ("isdir", "0"), ("autoinit", "1"), ("rtype", "1"),
+                                        ("block_list", blockList)]
+        if !contentMD5.isEmpty && !sliceMD5.isEmpty {
+            form.append(("content-md5", contentMD5))
+            form.append(("slice-md5", sliceMD5))
+        }
+        form.append(("target_path", targetPath))
+        form.append(("local_mtime", String(mtime)))
+        form.append(("local_ctime", String(ctime)))
+        return form
+    }
+
+    static func createForm(path: String, size: Int64, uploadId: String, blockList: String, targetPath: String,
+                           mtime: Int64, ctime: Int64) -> [(String, String)] {
+        var form: [(String, String)] = [("path", path), ("size", String(size)), ("isdir", "0"), ("rtype", "1")]
+        form.append(("uploadid", uploadId))
+        form.append(("block_list", blockList))
+        form.append(("target_path", targetPath))
+        form.append(("local_mtime", String(mtime)))
+        form.append(("local_ctime", String(ctime)))
+        return form
+    }
+
+    /// precreate 返回的 block_list 是还缺的片号；为空时整份重传
+    static func missingBlocks(_ json: JSON, count: Int) -> [Int] {
+        let listed = json["block_list"].array.map { $0.int }.filter { $0 >= 0 && $0 < count }
+        return listed.isEmpty ? Array(0..<count) : listed
+    }
+
+    /// locateupload：servers[0].server，其次 bak_servers；都没有时用 d.pcs.baidu.com
+    static func parseUploadHost(_ json: JSON?) -> String {
+        var servers: [JSON] = json?["servers"].array ?? []
+        servers += json?["bak_servers"].array ?? []
+        for s in servers {
+            let host = normalizeUploadHost(s["server"].string)
+            if !host.isEmpty { return host }
+        }
+        return uploadFallbackHost
+    }
+
+    /// 统一成 https://host（iOS 默认不允许明文 http）
+    static func normalizeUploadHost(_ server: String) -> String {
+        var s = server.trimmed
+        while s.hasSuffix("/") { s.removeLast() }
+        if s.isEmpty { return "" }
+        if s.hasPrefix("http://") { return "https://" + String(s.dropFirst(7)) }
+        return s.hasPrefix("https://") ? s : "https://" + s
+    }
+
+    static func superfileURL(host: String, path: String, uploadId: String, partseq: Int) -> String {
+        let query = "method=upload&app_id=\(appId)&channel=chunlei&clienttype=0&web=1&type=tmpfile&path=\(path.formEncoded)" +
+            "&uploadid=\(uploadId.formEncoded)&uploadsign=0&partseq=\(partseq)"
+        return host + "/rest/2.0/pcs/superfile2?" + query
+    }
+
+    /// superfile2 响应：{"md5":…,"partseq":"i","uploadid":…}。提到 uploadid 且 invalid / expired / not found 视为过期；
+    /// error_code、errno 非 0 失败；返回的 md5 要和本地这一片一致
+    static func checkSuperfile(_ text: String, status: Int, expectedMD5: String) throws {
+        let lower = text.lowercased()
+        if lower.contains("uploadid") && (lower.contains("invalid") || lower.contains("expired") || lower.contains("not found")) {
+            throw CloudnError("百度网盘上传 ID 已过期", code: uploadIdExpiredCode)
+        }
+        guard (200..<300).contains(status), let json = JSON(text: text), json.isObject else {
+            throw CloudnError("百度网盘分片上传失败（HTTP \(status)）")
+        }
+        let errorCode = json["error_code"].int
+        let errno = json["errno"].int
+        guard errorCode == 0 && errno == 0 else {
+            let msg = json.string("error_msg", "errmsg", "err_msg")
+            throw CloudnError(msg.isEmpty ? "百度网盘分片上传失败（error_code=\(errorCode) errno=\(errno)）" : msg,
+                              code: errorCode != 0 ? errorCode : errno)
+        }
+        let md5 = json["md5"].string.lowercased()
+        // 回传的 md5 与本地不一致只记日志：百度这一字段的含义没在真机上核实过，合并时 create 会以 block_list 为准再校验
+        if !md5.isEmpty && md5 != expectedMD5.lowercased() { Log.info("百度分片 md5 与本地不一致：\(md5) ≠ \(expectedMD5)") }
+    }
+
+    /// 本地文件的修改 / 创建时间（秒）
+    static func fileTimes(_ file: URL) -> (mtime: Int64, ctime: Int64) {
+        let attrs = (try? FileManager.default.attributesOfItem(atPath: file.path)) ?? [:]
+        let modified = (attrs[.modificationDate] as? Date) ?? Date()
+        let created = (attrs[.creationDate] as? Date) ?? modified
+        return (Int64(modified.timeIntervalSince1970), Int64(created.timeIntervalSince1970))
+    }
+
+    // MARK: 请求
+
+    /// 网页端表单接口（precreate / create）：Cookie + netdisk UA + Referer，按 errno 判错
+    private func uploadForm(_ url: String, _ form: [(String, String)], cookie: String, fallback: String) async throws -> JSON {
+        let r = try await client.send(.postForm(url, form, headers: [("Cookie", cookie), ("User-Agent", Self.netdiskUA),
+                                                                     ("Referer", Self.diskReferer)]))
+        guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
+        let errno = json["errno"].int
+        if errno == -6 || errno == 111 { throw CloudnError("百度网盘登录已失效，请到「我的」页重新登录", code: errno) }
+        try Self.check(json, fallback: fallback)
+        return json
+    }
+
+    /// locateupload 不需要认证；失败时退回默认上传域名
+    private func uploadHost(path: String, uploadId: String) async -> String {
+        let url = "https://d.pcs.baidu.com/rest/2.0/pcs/file?method=locateupload&appid=\(Self.appId)&upload_version=2.0" +
+            "&path=\(path.formEncoded)&uploadid=\(uploadId.formEncoded)"
+        let r = try? await client.send(.get(url, headers: [("User-Agent", Self.netdiskUA)]))
+        return Self.parseUploadHost(r?.json)
+    }
+
+    /// 顺序上传缺的片（multipart/form-data，文件字段 file，一片读进内存）；每片最多试 3 次，uploadid 过期立即抛出
+    private func uploadBlocks(_ file: URL, missing: [Int], parts: [(offset: Int64, length: Int64)], blocks: [String], path: String,
+                              uploadId: String, cookie: String, progress: UploadProgress) async throws {
+        let host = await uploadHost(path: path, uploadId: uploadId)
+        var totalBytes: Int64 = 0
+        for i in missing { totalBytes += parts[i].length }
+        let total = Double(max(1, totalBytes))
+        var sent: Int64 = 0
+        for i in missing {
+            let part = parts[i]
+            let slice = try FileChunks.read(file, offset: part.offset, length: Int(part.length))
+            let form = MultipartForm()
+            let body = form.body(fileField: "file", fileName: "blob", content: slice)
+            let url = Self.superfileURL(host: host, path: path, uploadId: uploadId, partseq: i)
+            let headers: [(String, String)] = [("Cookie", cookie), ("User-Agent", Self.netdiskUA), ("Content-Type", form.contentType)]
+            let base = sent
+            let length = part.length
+            var lastError: Error = CloudnError("百度网盘分片上传失败")
+            var ok = false
+            for _ in 0..<3 where !ok {
+                do {
+                    let r = try await client.upload(HTTPRequest(url: url, method: "POST", headers: headers), body: .data(body)) { done in
+                        progress(.uploading, Double(base + min(done, length)) / total)
+                    }
+                    try Self.checkSuperfile(r.text, status: r.status, expectedMD5: blocks[i])
+                    ok = true
+                } catch let e as CloudnError where e.code == Self.uploadIdExpiredCode {
+                    throw e
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                }
+            }
+            if !ok { throw lastError }
+            sent += part.length
+        }
+    }
+}
