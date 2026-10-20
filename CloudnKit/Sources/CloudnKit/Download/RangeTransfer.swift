@@ -227,7 +227,8 @@ struct RangeTransfer {
     private func makeRequest(source: Int = 0) -> URLRequest {
         let all = sources
         let picked = all[min(max(0, source), all.count - 1)]
-        var request = URLRequest(url: URL(string: picked.url) ?? URL(string: url)!)
+        // 链接解析不出来时用一个必然失败的地址，让这次请求按普通失败处理，而不是崩溃
+        var request = URLRequest(url: URL(string: picked.url) ?? URL(string: url) ?? URL(fileURLWithPath: "/dev/null/invalid"))
         request.httpShouldHandleCookies = false
         for (k, v) in picked.headers { request.setValue(v, forHTTPHeaderField: k) }
         return request

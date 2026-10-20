@@ -142,13 +142,13 @@ struct DownloadsView: View {
 
     @ViewBuilder
     private func groupMenu(_ members: [DownloadItem]) -> some View {
-        Button { members.filter { $0.status == .paused || $0.status == .failed }.forEach(app.downloads.resume) } label: {
+        Button { app.downloads.resume(members.filter { $0.status == .paused || $0.status == .failed }) } label: {
             Label("全部继续", glyph: .play)
         }
-        Button { members.filter(\.status.isActive).forEach(app.downloads.pause) } label: { Label("全部暂停", glyph: .pause) }
+        Button { app.downloads.pause(members.filter(\.status.isActive)) } label: { Label("全部暂停", glyph: .pause) }
         Menu {
-            Button("删除任务和文件", role: .destructive) { members.forEach { app.downloads.remove($0, deleteFile: true) } }
-            Button("仅删除记录") { members.forEach { app.downloads.remove($0, deleteFile: false) } }
+            Button("删除任务和文件", role: .destructive) { app.downloads.remove(members, deleteFile: true) }
+            Button("仅删除记录") { app.downloads.remove(members, deleteFile: false) }
         } label: { Label("删除这一组", glyph: .trash) }
     }
 
@@ -230,14 +230,14 @@ struct DownloadsView: View {
             }
             Spacer(minLength: 0)
             if canResume {
-                Button { chosen.filter { $0.status == .paused || $0.status == .failed }.forEach(app.downloads.resume) } label: {
+                Button { app.downloads.resume(chosen.filter { $0.status == .paused || $0.status == .failed }) } label: {
                     IconView(.play, size: 16)
                 }
                 .buttonStyle(CircleIconButtonStyle(size: 40))
                 .accessibilityLabel("继续所选")
             }
             if canPause {
-                Button { chosen.filter(\.status.isActive).forEach(app.downloads.pause) } label: { IconView(.pause, size: 16) }
+                Button { app.downloads.pause(chosen.filter(\.status.isActive)) } label: { IconView(.pause, size: 16) }
                     .buttonStyle(CircleIconButtonStyle(size: 40))
                     .accessibilityLabel("暂停所选")
             }
@@ -272,7 +272,7 @@ struct DownloadsView: View {
 
     private func removeSelected(deleteFiles: Bool) {
         let chosen = app.downloads.items.filter { selection.contains($0.id) }
-        chosen.forEach { app.downloads.remove($0, deleteFile: deleteFiles) }
+        app.downloads.remove(chosen, deleteFile: deleteFiles)
         app.show("已删除 \(chosen.count) 个任务")
         selection = []
         selecting = false

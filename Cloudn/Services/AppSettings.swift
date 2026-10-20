@@ -49,7 +49,10 @@ final class AppSettings {
     }
     /// 应用不在前台时，下载完成 / 失败发本地通知
     var notifyOnFinish: Bool {
-        didSet { defaults.set(notifyOnFinish, forKey: "notifyOnFinish") }
+        didSet {
+            defaults.set(notifyOnFinish, forKey: "notifyOnFinish")
+            if notifyOnFinish && !oldValue { Notifier.requestAuthorizationIfNeeded() }
+        }
     }
     /// 多账号下载：批量下载时按文件轮换使用同平台的多个账号
     var multiAccountDownload: Bool {

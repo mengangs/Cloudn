@@ -68,6 +68,8 @@ final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate, @unchecke
         lock.lock()
         systemCompletion = handler
         lock.unlock()
+        // 会话事件可能在交来回调之前就已处理完（会话在应用初始化时就建好了），这里补一次
+        callSystemCompletionIfIdle()
     }
 
     // MARK: URLSessionDownloadDelegate

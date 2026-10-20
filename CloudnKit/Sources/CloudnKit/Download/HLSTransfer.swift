@@ -174,9 +174,9 @@ struct HLSTransfer {
                     guard key.method == "AES-128", let k = keys[key.uri] else { throw TransferError("不支持的加密方式 \(key.method)") }
                     data = try Self.decrypt(data, key: k, iv: key.iv ?? Self.sequenceIV(segment.sequence))
                 }
-                let tmp = segmentURL(index).appendingPathExtension("tmp")
-                try data.write(to: tmp)
-                try FileManager.default.moveItem(at: tmp, to: segmentURL(index))
+                // 已被暂停的这一轮不再落盘；原子写入自带唯一临时文件，快速暂停 / 继续时两轮不会写同一个 .tmp
+                if Task.isCancelled { throw CancellationError() }
+                try data.write(to: segmentURL(index), options: .atomic)
                 progress.segmentFinished(bytes: Int64(data.count))
                 return
             } catch {

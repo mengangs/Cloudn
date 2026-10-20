@@ -184,10 +184,11 @@ struct ShareBrowserView: View {
             VStack(spacing: 0) {
                 if model.loading { ProgressLine(value: nil).padding(.horizontal, 14).padding(.top, 2) }
                 LazyVStack(spacing: 0) {
-                    let states = downloadStates
-                    ForEach(Array(visibleFiles.enumerated()), id: \.element.fid) { index, file in
+                    let states = app.downloads.shareFiles[model.share.url] ?? [:]
+                    let files = visibleFiles
+                    ForEach(Array(files.enumerated()), id: \.element.fid) { index, file in
                         row(file, state: states[file.fid], proxy: proxy)
-                        if index < visibleFiles.count - 1 { RowDivider(leading: model.selecting ? 96 : 64) }
+                        if index < files.count - 1 { RowDivider(leading: model.selecting ? 96 : 64) }
                     }
                 }
                 .scrollTargetLayout()
@@ -247,17 +248,6 @@ struct ShareBrowserView: View {
                 run { try await model.download(file); app.show("已添加到下载") }
             }
         }
-    }
-
-    /// 这个分享里每个文件最近一次的下载任务
-    private var downloadStates: [String: DownloadItem] {
-        var map: [String: DownloadItem] = [:]
-        for item in app.downloads.items {
-            guard let origin = item.request.origin, origin.platform == model.share.platform, origin.shareURL == model.share.url else { continue }
-            if let old = map[origin.fileId], old.status == .completed, item.status == .failed { continue }
-            map[origin.fileId] = item
-        }
-        return map
     }
 
     /// 多选时左侧一条拖动区：按住上下滑，一次选中（或取消）一串

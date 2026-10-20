@@ -383,24 +383,28 @@ struct ResolveView: View {
         }
     }
 
-    static func mark(for text: String) -> PlatformMark? {
-        switch DetectedInput.detect(text) {
-        case .share(let s): return .share(s.platform)
-        case .video(let v): return .video(v.platform)
-        case .github: return .github
-        default: return nil
+    /// 链接识别要跑几十条正则：按文本缓存，最近记录与收藏重绘时不再重复识别
+    @MainActor private static var markCache: [String: PlatformMark?] = [:]
+
+    @MainActor static func mark(for text: String) -> PlatformMark? {
+        if let hit = markCache[text] { return hit }
+        let mark: PlatformMark? = switch DetectedInput.detect(text) {
+        case .share(let s): .share(s.platform)
+        case .video(let v): .video(v.platform)
+        case .github: .github
+        default: nil
         }
+        if markCache.count > 500 { markCache.removeAll() }
+        markCache[text] = mark
+        return mark
     }
 
-    /// 某条记录对应分享的下载情况：(已完成, 总数)
+    /// 某条记录对应分享的下载情况：(已完成, 总数)。读的是只在数量变化时更新的汇总，不随进度重绘
     private func downloadProgress(for text: String) -> (done: Int, total: Int)? {
-        guard let share = ShareLinkParser.parse(text) else { return nil }
-        let related = app.downloads.items.filter {
-            guard let origin = $0.request.origin else { return false }
-            return origin.platform == share.platform && ShareLinkParser.parse(origin.shareURL)?.shareId == share.shareId
-        }
-        guard !related.isEmpty else { return nil }
-        return (related.filter { $0.status == .completed }.count, related.count)
+        guard let share = ShareLinkParser.parse(text),
+              let key = app.downloads.shareKey(platform: share.platform, shareURL: share.url),
+              let p = app.downloads.shareProgress[key] else { return nil }
+        return (p.done, p.total)
     }
 
     /// 支持的平台：一排图标，不写长段文字

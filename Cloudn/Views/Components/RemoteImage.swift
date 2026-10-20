@@ -1,4 +1,5 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -14,7 +15,11 @@ final class ImageLoader {
         return URLSession(configuration: config)
     }()
 
-    init() { cache.countLimit = 300 }
+    init() {
+        cache.countLimit = 300
+        // 按解码后的字节数计费，图集翻多了也不会把内存吃满
+        cache.totalCostLimit = 120 << 20
+    }
 
     func clear() {
         cache.removeAllObjects()
@@ -28,10 +33,27 @@ final class ImageLoader {
         guard let u = URL(string: url) else { return nil }
         var request = URLRequest(url: u)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        guard let (data, _) = try? await session.data(for: request), let image = UIImage(data: data) else { return nil }
-        let prepared = await image.byPreparingForDisplay() ?? image
-        cache.setObject(prepared, forKey: url as NSString)
-        return prepared
+        guard let (data, _) = try? await session.data(for: request) else { return nil }
+        // 原图常有三四千像素（解码后四五十 MB），按最长边 1600 像素降采样解码，放在后台线程
+        guard let image = await Task.detached(priority: .userInitiated, operation: { Self.downsample(data, maxPixel: 1600) }).value else {
+            return nil
+        }
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? data.count
+        cache.setObject(image, forKey: url as NSString, cost: cost)
+        return image
+    }
+
+    nonisolated static func downsample(_ data: Data, maxPixel: Int) -> UIImage? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return UIImage(data: data) }
+        let thumb: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, thumb as CFDictionary) else { return UIImage(data: data) }
+        return UIImage(cgImage: cg)
     }
 }
 

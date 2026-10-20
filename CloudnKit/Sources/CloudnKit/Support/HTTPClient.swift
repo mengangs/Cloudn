@@ -112,19 +112,31 @@ public final class HTTPClient: @unchecked Sendable {
         urlRequest.httpBody = request.body
         let session = request.followRedirects ? following : nonFollowing
 
-        return try await withCheckedThrowingContinuation { cont in
-            let task = session.dataTask(with: urlRequest) { data, response, error in
-                if let error {
-                    cont.resume(throwing: HTTPError.network(error.localizedDescription))
-                    return
+        // 调用方的 Task 被取消（离开页面、点了取消）时，把网络请求也一并取消，不再白白等到超时
+        let box = TaskBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                let task = session.dataTask(with: urlRequest) { data, response, error in
+                    if let error {
+                        if (error as NSError).code == NSURLErrorCancelled {
+                            cont.resume(throwing: CancellationError())
+                        } else {
+                            cont.resume(throwing: HTTPError.network(error.localizedDescription))
+                        }
+                        return
+                    }
+                    guard let http = response as? HTTPURLResponse else {
+                        cont.resume(throwing: HTTPError.network("无响应"))
+                        return
+                    }
+                    cont.resume(returning: HTTPClient.makeResponse(http, data: data ?? Data(), fallbackURL: url))
                 }
-                guard let http = response as? HTTPURLResponse else {
-                    cont.resume(throwing: HTTPError.network("无响应"))
-                    return
-                }
-                cont.resume(returning: HTTPClient.makeResponse(http, data: data ?? Data(), fallbackURL: url))
+                box.task = task
+                if Task.isCancelled { task.cancel() }
+                task.resume()
             }
-            task.resume()
+        } onCancel: {
+            box.task?.cancel()
         }
     }
 

@@ -21,7 +21,7 @@ struct CloudnApp: App {
                 .environment(\.onAccent, model.settings.onAccentColor)
         }
         .onChange(of: scenePhase) { _, phase in
-            model.scenePhaseChanged(active: phase == .active)
+            model.scenePhaseChanged(phase)
         }
     }
 }

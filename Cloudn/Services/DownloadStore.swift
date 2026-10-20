@@ -3,11 +3,27 @@ import CloudnKit
 import Foundation
 import Observation
 
-/// 下载引擎的界面侧镜像
+/// 某个分享的下载情况
+struct ShareDownloadProgress: Equatable {
+    var done: Int
+    var total: Int
+}
+
+/// 下载引擎的界面侧镜像。
+/// 引擎每 0.5 秒推一次完整列表；只有真正需要进度的视图读 `items` / `shareFiles`，
+/// 角标、解析页最近记录读的是只在数量变化时才更新的派生值，不会跟着进度一起重绘
 @MainActor
 @Observable
 final class DownloadStore {
     private(set) var items: [DownloadItem] = []
+    /// 进行中的任务数（标签角标）
+    private(set) var activeCount = 0
+    /// 「平台|分享 ID」→ 已完成 / 总数（解析页最近记录）
+    private(set) var shareProgress: [String: ShareDownloadProgress] = [:]
+    /// 分享链接 → 文件 ID → 该文件最近一次的下载任务（分享页行尾状态）
+    private(set) var shareFiles: [String: [String: DownloadItem]] = [:]
+    /// 分享链接 → 分享 ID 的解析缓存（链接解析是一串正则，不能每次进度刷新都跑）
+    @ObservationIgnored private var shareIdCache: [String: String] = [:]
     @ObservationIgnored let engine: DownloadEngine
     @ObservationIgnored private let resolvers: ShareResolvers
     @ObservationIgnored private let background: BackgroundTransfers
@@ -19,16 +35,47 @@ final class DownloadStore {
         self.background = background
         Task { [weak self] in
             for await list in await engine.updates() {
-                self?.items = list
-                self?.activity.update(with: list)
+                self?.apply(list)
             }
         }
     }
 
-    var activeCount: Int { items.filter { $0.status.isActive }.count }
+    private func apply(_ list: [DownloadItem]) {
+        items = list
+        activity.update(with: list)
+
+        let active = list.reduce(0) { $0 + ($1.status.isActive ? 1 : 0) }
+        if active != activeCount { activeCount = active }
+
+        var progress: [String: ShareDownloadProgress] = [:]
+        var files: [String: [String: DownloadItem]] = [:]
+        for item in list {
+            guard let origin = item.request.origin else { continue }
+            if let key = shareKey(platform: origin.platform, shareURL: origin.shareURL) {
+                var p = progress[key] ?? ShareDownloadProgress(done: 0, total: 0)
+                p.total += 1
+                if item.status == .completed { p.done += 1 }
+                progress[key] = p
+            }
+            // 同一文件下过多次时：已完成的不被之后失败的那次盖掉
+            if let old = files[origin.shareURL]?[origin.fileId], old.status == .completed, item.status == .failed { continue }
+            files[origin.shareURL, default: [:]][origin.fileId] = item
+        }
+        if progress != shareProgress { shareProgress = progress }
+        shareFiles = files
+    }
+
+    /// 「平台|分享 ID」：同一分享的不同写法（带不带提取码、短链参数）归到一起
+    func shareKey(platform: SharePlatform, shareURL: String) -> String? {
+        if let id = shareIdCache[shareURL] { return platform.rawValue + "|" + id }
+        guard let id = ShareLinkParser.parse(shareURL)?.shareId else { return nil }
+        shareIdCache[shareURL] = id
+        return platform.rawValue + "|" + id
+    }
 
     func enqueue(_ request: DownloadRequest) {
-        Notifier.requestAuthorizationIfNeeded()
+        // 只有打开了「下载完成通知」才申请通知权限（权限弹窗也会让应用短暂进入 inactive）
+        if UserDefaults.standard.bool(forKey: "notifyOnFinish") { Notifier.requestAuthorizationIfNeeded() }
         Task { await engine.enqueue(request) }
     }
 
@@ -62,6 +109,22 @@ final class DownloadStore {
     func pauseAll() {
         for item in items where item.backgrounded { background.cancel(itemId: item.id) }
         Task { await engine.pauseAll() }
+    }
+
+    /// 批量操作：引擎只落盘、发布一次
+    func pause(_ batch: [DownloadItem]) {
+        for item in batch where item.backgrounded { background.cancel(itemId: item.id) }
+        let ids = batch.map(\.id)
+        Task { await engine.pause(ids) }
+    }
+    func resume(_ batch: [DownloadItem]) {
+        let ids = batch.map(\.id)
+        Task { await engine.resume(ids) }
+    }
+    func remove(_ batch: [DownloadItem], deleteFile: Bool) {
+        for item in batch where item.backgrounded { background.cancel(itemId: item.id) }
+        let ids = batch.map(\.id)
+        Task { await engine.remove(ids, deleteFile: deleteFile) }
     }
     func resumeAll() { Task { await engine.resumeAll() } }
     func clearFinished() { Task { await engine.clearFinished() } }

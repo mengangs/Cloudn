@@ -26,6 +26,12 @@ public actor DownloadEngine {
     private var observers: [UUID: AsyncStream<[DownloadItem]>.Continuation] = [:]
     private var ticker: Task<Void, Never>?
     private var lastSave = Date.distantPast
+    /// 应用即将被挂起：暂停的任务不应让排队任务顶上来
+    private var suspended = false
+    /// 每次开始运行分配一个编号；旧的运行（已被暂停 / 换链取消）结束时不能改动新一轮的状态
+    private var runIds: [UUID: UUID] = [:]
+    /// 回调还没配置好时完成的任务（后台会话唤醒时可能先于 configure 到达），配置后补发
+    private var pendingFinished: [DownloadItem] = []
     private let limiter: RateLimiter
     private let streamer: StreamingSession
     private let client: HTTPClient
@@ -60,6 +66,11 @@ public actor DownloadEngine {
         self.merger = merger
         self.onFinished = onFinished
         self.onFailed = onFailed
+        if let onFinished, !pendingFinished.isEmpty {
+            let finished = pendingFinished
+            pendingFinished = []
+            Task { for item in finished { await onFinished(item) } }
+        }
     }
 
     // MARK: 观察
@@ -95,21 +106,43 @@ public actor DownloadEngine {
     }
 
     public func pause(_ id: UUID) {
-        guard let i = index(id), items[i].status.isActive else { return }
-        runners[id]?.cancel()
-        runners[id] = nil
-        syncProgress(i)
-        leaveBackground(i)
-        items[i].status = .paused
-        items[i].speed = 0
+        pause([id])
+    }
+
+    /// 批量暂停：只落盘、发布一次
+    public func pause(_ ids: [UUID]) {
+        var touched = false
+        for id in ids {
+            guard let i = index(id), items[i].status.isActive else { continue }
+            runners[id]?.cancel()
+            runners[id] = nil
+            runIds[id] = nil
+            syncProgress(i)
+            leaveBackground(i)
+            items[i].status = .paused
+            items[i].speed = 0
+            touched = true
+        }
+        guard touched else { return }
         changed(force: true)
         schedule()
     }
 
     public func resume(_ id: UUID) {
-        guard let i = index(id), items[i].status == .paused || items[i].status == .failed else { return }
-        items[i].status = .queued
-        items[i].errorMessage = nil
+        resume([id])
+    }
+
+    /// 批量继续（暂停的与失败的）：只落盘、发布一次
+    public func resume(_ ids: [UUID]) {
+        suspended = false
+        var touched = false
+        for id in ids {
+            guard let i = index(id), items[i].status == .paused || items[i].status == .failed else { continue }
+            items[i].status = .queued
+            items[i].errorMessage = nil
+            touched = true
+        }
+        guard touched else { return }
         changed(force: true)
         schedule()
     }
@@ -119,6 +152,7 @@ public actor DownloadEngine {
         guard let i = index(id) else { return }
         runners[id]?.cancel()
         runners[id] = nil
+        runIds[id] = nil
         try? FileManager.default.removeItem(at: workDir(id))
         leaveBackground(i)
         items[i].request = request
@@ -140,6 +174,7 @@ public actor DownloadEngine {
         guard let i = index(id), items[i].status != .completed else { return }
         runners[id]?.cancel()
         runners[id] = nil
+        runIds[id] = nil
         syncProgress(i)
         leaveBackground(i)
         items[i].request.url = url
@@ -153,26 +188,37 @@ public actor DownloadEngine {
     }
 
     public func remove(_ id: UUID, deleteFile: Bool) {
-        guard let i = index(id) else { return }
-        runners[id]?.cancel()
-        runners[id] = nil
-        progress[id] = nil
-        backgroundBytes[id] = nil
-        try? FileManager.default.removeItem(at: workDir(id))
-        if deleteFile, let path = items[i].outputPath {
-            try? FileManager.default.removeItem(at: downloadsDirectory.appendingPathComponent(path))
+        remove([id], deleteFile: deleteFile)
+    }
+
+    /// 批量删除：只落盘、发布一次
+    public func remove(_ ids: [UUID], deleteFile: Bool) {
+        let targets = Set(ids)
+        guard items.contains(where: { targets.contains($0.id) }) else { return }
+        let fm = FileManager.default
+        for item in items where targets.contains(item.id) {
+            runners[item.id]?.cancel()
+            runners[item.id] = nil
+            runIds[item.id] = nil
+            progress[item.id] = nil
+            backgroundBytes[item.id] = nil
+            try? fm.removeItem(at: workDir(item.id))
+            if deleteFile, let path = item.outputPath {
+                try? fm.removeItem(at: downloadsDirectory.appendingPathComponent(path))
+            }
         }
-        items.remove(at: i)
+        items.removeAll { targets.contains($0.id) }
         changed(force: true)
         schedule()
     }
 
     public func pauseAll() {
-        for item in items where item.status.isActive { pause(item.id) }
+        pause(items.filter(\.status.isActive).map(\.id))
     }
 
+    /// 全部继续：暂停的与失败的都重新排队
     public func resumeAll() {
-        for item in items where item.status == .paused { resume(item.id) }
+        resume(items.filter { $0.status == .paused || $0.status == .failed }.map(\.id))
     }
 
     public func clearFinished() {
@@ -187,6 +233,7 @@ public actor DownloadEngine {
     // MARK: 调度
 
     private func schedule() {
+        guard !suspended else { return }
         let limit = max(1, settings().maxConcurrentTasks)
         var running = items.filter { $0.status == .running || $0.status == .merging }.count
         // 队列按创建时间先进先出
@@ -203,21 +250,26 @@ public actor DownloadEngine {
         Log.info("开始下载：\(items[i].request.fileName)（\(items[i].request.source)）\(items[i].request.url)")
         items[i].status = .running
         let item = items[i]
-        let box = progress[id] ?? TransferProgress(chunks: item.chunks, total: item.totalBytes)
+        // 每一轮用新的进度盒：上一轮被取消的连接可能还有回调在途，不能和这一轮记到同一个盒子里
+        let box = TransferProgress(chunks: item.chunks, total: item.totalBytes)
         progress[id] = box
         lastBytes[id] = (box.received, Date())
-        changed(force: true)
+        // 「运行中」重启后一律恢复成暂停，不必为它单独落盘
+        changed()
         let config = settings()
+        let run = UUID()
+        runIds[id] = run
         runners[id] = Task { [weak self] in
             guard let self else { return }
             do {
                 let output = try await self.perform(item, box: box, config: config)
-                await self.finish(id, output: output)
+                if Task.isCancelled { return }
+                await self.finish(id, output: output, run: run)
             } catch is CancellationError {
                 // 暂停/删除：状态已由调用方设置
             } catch {
                 if Task.isCancelled { return }
-                await self.fail(id, error)
+                await self.fail(id, error, run: run)
             }
         }
     }
@@ -274,7 +326,9 @@ public actor DownloadEngine {
         changed(force: true)
     }
 
-    private func finish(_ id: UUID, output: URL) async {
+    private func finish(_ id: UUID, output: URL, run: UUID? = nil) async {
+        // 这一轮已被暂停 / 换链 / 重新开始取代：结果作废
+        if let run, runIds[id] != run { return }
         guard let i = index(id) else { return }
         let request = items[i].request
         var name = FileNames.sanitize(request.fileName)
@@ -302,17 +356,24 @@ public actor DownloadEngine {
             items[i].chunks = []
             items[i].outputPath = folder.isEmpty ? target.lastPathComponent : folder + "/" + target.lastPathComponent
             runners[id] = nil
+            runIds[id] = nil
             progress[id] = nil
             changed(force: true)
             let done = items[i]
             schedule()
-            await onFinished?(done)
+            // 完成后的收尾（清理临时转存、通知、存相册、移到外部文件夹）不阻塞引擎，也不拖住系统后台会话的回调
+            if let onFinished {
+                Task { await onFinished(done) }
+            } else {
+                pendingFinished.append(done)
+            }
         } catch {
             fail(id, error)
         }
     }
 
-    private func fail(_ id: UUID, _ error: Error) {
+    private func fail(_ id: UUID, _ error: Error, run: UUID? = nil) {
+        if let run, runIds[id] != run { return }
         guard let i = index(id) else { return }
         syncProgress(i)
         leaveBackground(i)
@@ -321,6 +382,7 @@ public actor DownloadEngine {
         items[i].errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         Log.error("下载失败：\(items[i].request.fileName)：\(items[i].errorMessage ?? "")（\(items[i].request.url)）")
         runners[id] = nil
+        runIds[id] = nil
         changed(force: true)
         if let onFailed {
             let item = items[i]
@@ -357,6 +419,7 @@ public actor DownloadEngine {
             guard !pending.isEmpty else { continue }
             runners[id]?.cancel()
             runners[id] = nil
+            runIds[id] = nil
             let request = items[i].request
             for index in pending {
                 let chunk = chunks[index]
@@ -456,18 +519,18 @@ public actor DownloadEngine {
 
     /// 应用即将被挂起：暂停仍在前台下载的任务（m3u8 / 分轨等无法交给后台会话的），返回它们的 id 供回到前台时继续
     public func pauseForegroundForSuspension() -> [UUID] {
+        // 先挂起调度，暂停时排队的任务不会顶上来（挂起期间跑不完，下次启动还会变成「暂停」）
+        suspended = true
         let ids = items.filter { $0.status == .running && !$0.backgrounded }.map(\.id)
-        for id in ids { pause(id) }
+        pause(ids)
         return ids
     }
 
-    public func resume(_ ids: [UUID]) {
-        for id in ids { resume(id) }
-    }
-
-    /// 当前仍由后台会话负责的任务
-    public func backgroundedItemIds() -> Set<UUID> {
-        Set(items.filter(\.backgrounded).map(\.id))
+    /// 回到前台：恢复调度（被挂起前暂停的任务由调用方另行继续）
+    public func endSuspension() {
+        guard suspended else { return }
+        suspended = false
+        schedule()
     }
 
     /// 结束后台状态：丢弃在途进度，进度盒按已落盘的分片计划重建
@@ -533,6 +596,11 @@ public actor DownloadEngine {
         }
         if active {
             changed()
+            // 「同时下载任务」调大后，排队中的任务不用等别的任务结束才开始
+            let running = items.filter { $0.status == .running || $0.status == .merging }.count
+            if !suspended, running < max(1, settings().maxConcurrentTasks), items.contains(where: { $0.status == .queued }) {
+                schedule()
+            }
         } else {
             ticker = nil
         }

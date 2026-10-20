@@ -72,14 +72,11 @@ struct TextPreviewView: View {
     }
 
     private func load() async {
-        var headers = item.headers.map { ($0.key, $0.value) }
-        headers.append(("Range", "bytes=0-\(Self.limit - 1)"))
         do {
-            let r = try await HTTPClient.shared.send(.get(item.url, headers: headers))
-            guard r.isSuccess else { throw CloudnError("读取失败（HTTP \(r.status)）") }
-            let data = r.body.prefix(Self.limit)
-            truncated = r.status == 206 || r.body.count > Self.limit
-            text = Self.decode(Data(data))
+            let r = try await HTTPClient.fetchPrefix(item.url, headers: item.headers.map { ($0.key, $0.value) }, limit: Self.limit)
+            guard (200..<300).contains(r.status) else { throw CloudnError("读取失败（HTTP \(r.status)）") }
+            truncated = r.partial
+            text = Self.decode(Data(r.data))
         } catch {
             self.error = error.localizedDescription
         }

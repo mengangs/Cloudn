@@ -2,6 +2,7 @@
 import CloudnKit
 import Foundation
 import Observation
+import SwiftUI
 import UIKit
 
 enum AppTab: Hashable { case resolve, downloads, me }
@@ -37,7 +38,6 @@ final class AppModel {
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续
     @ObservationIgnored private var suspendedIds: [UUID] = []
-    @ObservationIgnored private var isActive = true
 
     init() {
         let fm = FileManager.default
@@ -74,9 +74,9 @@ final class AppModel {
         Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished, onFailed: onFailed) }
     }
 
-    /// 应用不在前台时发本地通知
+    /// 应用不在前台时发本地通知（包括被系统在后台唤醒、没有界面的时候）
     private func notify(title: String, body: String) {
-        guard !isActive, settings.notifyOnFinish else { return }
+        guard UIApplication.shared.applicationState != .active, settings.notifyOnFinish else { return }
         Notifier.post(title: title, body: body)
     }
 
@@ -98,22 +98,26 @@ final class AppModel {
         guard let folder = settings.exportFolder else { return }
         let accessing = folder.startAccessingSecurityScopedResource()
         defer { if accessing { folder.stopAccessingSecurityScopedResource() } }
-        let fm = FileManager.default
         let sub = (item.outputPath as NSString?)?.deletingLastPathComponent ?? ""
         let dir = sub.isEmpty ? folder : folder.appendingPathComponent(sub, isDirectory: true)
         do {
-            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            var target = dir.appendingPathComponent(file.lastPathComponent)
-            var n = 1
-            let base = (file.lastPathComponent as NSString).deletingPathExtension
-            let ext = file.pathExtension
-            while fm.fileExists(atPath: target.path) {
-                target = dir.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
-                n += 1
-            }
-            // 跨卷（如 iCloud 云盘）不能直接 move，先复制再删
-            try fm.copyItem(at: file, to: target)
-            try? fm.removeItem(at: file)
+            // 大文件跨卷复制可能要几十秒，放到后台线程，不卡界面
+            let target = try await Task.detached(priority: .utility) { () throws -> URL in
+                let fm = FileManager.default
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                var target = dir.appendingPathComponent(file.lastPathComponent)
+                var n = 1
+                let base = (file.lastPathComponent as NSString).deletingPathExtension
+                let ext = file.pathExtension
+                while fm.fileExists(atPath: target.path) {
+                    target = dir.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
+                    n += 1
+                }
+                // 跨卷（如 iCloud 云盘）不能直接 move，先复制再删
+                try fm.copyItem(at: file, to: target)
+                try? fm.removeItem(at: file)
+                return target
+            }.value
             let location = folder.lastPathComponent + (sub.isEmpty ? "" : "/" + sub) + "/" + target.lastPathComponent
             await downloads.engine.markExported(item.id, to: location)
         } catch {
@@ -150,16 +154,24 @@ final class AppModel {
         }
     }
 
-    /// 进入后台：单文件任务剩余分片交给系统后台会话；其余任务借一段后台执行时间，到期前暂停、回到前台再继续
-    func scenePhaseChanged(active: Bool) {
-        isActive = active
+    /// 进入后台：单文件任务剩余分片交给系统后台会话；其余任务借一段后台执行时间，到期前暂停、回到前台再继续。
+    /// 只在真正进入后台时交出：下拉通知中心 / 控制中心、系统弹窗只是 inactive，交出去会白白断掉前台的多连接下载
+    func scenePhaseChanged(_ phase: ScenePhase) {
         let engine = downloads.engine
-        if active {
+        switch phase {
+        case .active:
             autoCheckForUpdates()
             endBackgroundTask()
             let ids = suspendedIds
             suspendedIds = []
-            if !ids.isEmpty { Task { await engine.resume(ids) } }
+            Task {
+                await engine.endSuspension()
+                if !ids.isEmpty { await engine.resume(ids) }
+            }
+            return
+        case .background:
+            break
+        default:
             return
         }
         guard downloads.activeCount > 0, backgroundTask == .invalid else { return }

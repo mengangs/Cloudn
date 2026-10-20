@@ -30,6 +30,8 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     private var session: URLSession!
     private let lock = NSLock()
     private var handlers: [Int: Handler] = [:]
+    /// 已被取消的请求：取消后仍可能有排队的数据回调，一律丢弃，免得和下一轮重复写同一段
+    private var cancelled: Set<Int> = []
     private let limiter: RateLimiter?
 
     init(limiter: RateLimiter? = nil) {
@@ -61,14 +63,20 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
                 task.resume()
             }
         } onCancel: {
-            box.task?.cancel()
+            guard let task = box.task else { return }
+            self.lock.lock()
+            self.cancelled.insert(task.taskIdentifier)
+            self.lock.unlock()
+            task.cancel()
         }
     }
 
+    /// 仍在进行（没被取消、没出错）的请求对应的回调
     private func handler(for task: URLSessionTask) -> Handler? {
         lock.lock()
         defer { lock.unlock() }
-        return handlers[task.taskIdentifier]
+        guard !cancelled.contains(task.taskIdentifier), let h = handlers[task.taskIdentifier], h.failure == nil else { return nil }
+        return h
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -82,18 +90,24 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
         if h.onResponse(Response(status: http.statusCode, headers: headers)) {
             completionHandler(.allow)
         } else {
+            lock.lock()
             h.failure = h.failure ?? Rejected()
+            lock.unlock()
             completionHandler(.cancel)
         }
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard let h = handler(for: dataTask), h.failure == nil else { return }
+        guard let h = handler(for: dataTask) else { return }
         limiter?.throttle(data.count)
+        // 限速等待期间可能已被取消
+        guard handler(for: dataTask) != nil else { return }
         do {
             try h.onData(data)
         } catch {
+            lock.lock()
             h.failure = error
+            lock.unlock()
             dataTask.cancel()
         }
     }
@@ -101,12 +115,68 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
         let h = handlers.removeValue(forKey: task.taskIdentifier)
+        cancelled.remove(task.taskIdentifier)
         lock.unlock()
         guard let h else { return }
         if let failure = h.failure { h.completion(failure) } else { h.completion(error) }
     }
 
-    private final class TaskBox: @unchecked Sendable {
-        var task: URLSessionTask?
+}
+
+/// 取消回调里要拿到的 URLSessionTask
+final class TaskBox: @unchecked Sendable {
+    var task: URLSessionTask?
+}
+
+extension HTTPClient {
+    private static let prefixStreamer = StreamingSession()
+
+    /// 只取前 limit 字节：带 Range 请求，服务端忽略 Range 时也会在取够之后主动断开，不会把整个文件读进内存。
+    /// partial 为 true 表示文件比 limit 长（只拿到了开头）
+    public static func fetchPrefix(_ url: String, headers: [(String, String)], limit: Int) async throws -> (status: Int, data: Data, partial: Bool) {
+        guard let u = URL(string: url) else { throw HTTPError.invalidURL(url) }
+        var request = URLRequest(url: u)
+        request.httpShouldHandleCookies = false
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        request.setValue("bytes=0-\(max(0, limit - 1))", forHTTPHeaderField: "Range")
+        let buffer = PrefixBuffer()
+        do {
+            try await prefixStreamer.run(request, onResponse: { response in
+                buffer.set(status: response.status)
+                return true
+            }, onData: { data in
+                if buffer.append(data) >= limit { throw PrefixBuffer.Enough() }
+            })
+        } catch is PrefixBuffer.Enough {
+            // 取够了
+        }
+        let (status, data) = buffer.snapshot()
+        return (status, data.prefix(limit), status == 206 || data.count > limit)
+    }
+}
+
+private final class PrefixBuffer: @unchecked Sendable {
+    struct Enough: Error {}
+    private let lock = NSLock()
+    private var status = 0
+    private var data = Data()
+
+    func set(status: Int) {
+        lock.lock()
+        self.status = status
+        lock.unlock()
+    }
+
+    func append(_ chunk: Data) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+        return data.count
+    }
+
+    func snapshot() -> (Int, Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (status, data)
     }
 }

@@ -12,8 +12,20 @@ final class DownloadActivity {
     /// 本轮开始时已完成的任务，用来统计「本轮已完成」
     private var baselineCompleted = Set<UUID>()
 
+    /// 上次创建失败的时间（在后台时创建必然失败，不要每次进度刷新都重试）
+    private var lastStartFailure = Date.distantPast
+
     /// 设置页开关（默认开启）
     private var enabled: Bool { UserDefaults.standard.object(forKey: "liveActivity") as? Bool ?? true }
+
+    init() {
+        // 上一个进程留下的实时活动（进程被杀时没来得及结束）：接管第一个，多余的结束掉
+        let existing = Activity<DownloadActivityAttributes>.activities
+        activity = existing.first
+        for extra in existing.dropFirst() {
+            Task { await extra.end(nil, dismissalPolicy: .immediate) }
+        }
+    }
 
     func update(with items: [DownloadItem]) {
         guard enabled, ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -22,7 +34,7 @@ final class DownloadActivity {
         }
         let active = items.filter { $0.status.isActive }
         if activity == nil {
-            guard !active.isEmpty else { return }
+            guard !active.isEmpty, Date().timeIntervalSince(lastStartFailure) > 30 else { return }
             baselineCompleted = Set(items.filter { $0.status == .completed }.map(\.id))
             start(state(items, active: active))
             return
@@ -32,8 +44,9 @@ final class DownloadActivity {
             return
         }
         let next = state(items, active: active)
-        // 实时活动更新有频率预算：至少间隔 2 秒，内容没变化不发
-        guard next != lastState, Date().timeIntervalSince(lastUpdate) >= 2 else { return }
+        // 实时活动更新有频率预算：任务数变了立即更新，其余（进度、速度）至少间隔 5 秒
+        let countsChanged = next.active != lastState?.active || next.finished != lastState?.finished
+        guard next != lastState, countsChanged || Date().timeIntervalSince(lastUpdate) >= 5 else { return }
         lastUpdate = Date()
         lastState = next
         let content = ActivityContent(state: next, staleDate: Date().addingTimeInterval(120))
@@ -58,8 +71,9 @@ final class DownloadActivity {
             lastState = state
             lastUpdate = Date()
         } catch {
-            // 只能在前台创建；失败（如在后台）就等下次有变化再试
+            // 只能在前台创建；失败（如在后台）就隔一会儿再试
             activity = nil
+            lastStartFailure = Date()
         }
     }
 
