@@ -13,25 +13,26 @@ final class LiveParseTests: XCTestCase {
         }
     }
 
-    func testYouTube() async { await check("https://www.youtube.com/watch?v=jNQXAC9IVRw") }
-    func testBilibili() async { await check("https://www.bilibili.com/video/BV13x41117TL") }
-    func testTwitter() async { await check("https://twitter.com/freethenipple/status/643211948184596480") }
-    func testTikTok() async { await check("https://www.tiktok.com/@leenabhushan/video/6748451240264420610") }
-    func testInstagram() async { await check("https://www.instagram.com/p/BQ0eAlwhDrw/") }
-    func testFacebook() async { await check("https://www.facebook.com/radiokicksfm/videos/3676516585958356/") }
-    func testReddit() async { await check("https://www.reddit.com/r/videos/comments/6rrwyj/that_small_heart_attack/") }
-    func testPinterest() async { await check("https://www.pinterest.com/pin/664281013778109217/") }
-    func testTumblr() async { await check("https://tatianamaslanydaily.tumblr.com/post/54196191430/orphan-black-dvd-extra-behind-the-scenes") }
-    func testImgur() async { await check("https://imgur.com/A61SaA1") }
-    func testBluesky() async { await check("https://bsky.app/profile/blu3blue.bsky.social/post/3l4omssdl632g") }
-    func testSnapchat() async { await check("https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYWtidGhudGZpAX1TKn0JAX1TKnXJAAAAAA") }
-    func testVimeo() async { await check("https://vimeo.com/76979871") }
-    func testDailymotion() async { await check("https://www.dailymotion.com/video/x5kesuj") }
-    func testTwitchClip() async { await check("https://clips.twitch.tv/FaintLightGullWholeWheat") }
-    func testSoundCloud() async { await check("https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy") }
+    func testYouTube() async throws { try await check("https://www.youtube.com/watch?v=jNQXAC9IVRw") }
+    func testBilibili() async throws { try await check("https://www.bilibili.com/video/BV13x41117TL") }
+    func testTwitter() async throws { try await check("https://twitter.com/starwars/status/665052190608723968") }
+    func testTikTok() async throws { try await check("https://www.tiktok.com/@patroxofficial/video/6742501081818877190") }
+    func testInstagram() async throws { try await check("https://www.instagram.com/p/BQ0eAlwhDrw/") }
+    func testFacebook() async throws { try await check("https://www.facebook.com/radiokicksfm/videos/3676516585958356/") }
+    func testReddit() async throws { try await check("https://www.reddit.com/r/videos/comments/6rrwyj/that_small_heart_attack/") }
+    func testPinterest() async throws { try await check("https://www.pinterest.com/pin/664281013778109217/") }
+    func testTumblr() async throws { try await check("https://tatianamaslanydaily.tumblr.com/post/54196191430/orphan-black-dvd-extra-behind-the-scenes") }
+    func testImgur() async throws { try await check("https://imgur.com/A61SaA1") }
+    func testBluesky() async throws { try await check("https://bsky.app/profile/bsky.app/post/3l3vgf77uco2g") }
+    func testSnapchat() async throws { try await check("https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYWtidGhudGZpAX1TKn0JAX1TKnXJAAAAAA") }
+    func testVimeo() async throws { try await check("https://vimeo.com/76979871") }
+    func testDailymotion() async throws { try await check("https://www.dailymotion.com/video/x5kesuj") }
+    func testTwitchClip() async throws { try await check("https://clips.twitch.tv/FaintLightGullWholeWheat") }
+    func testSoundCloud() async throws { try await check("https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy") }
 
-    /// 解析出至少一个媒体，且第一个媒体的直链能探测到（大小或时长）
-    private func check(_ url: String, file: StaticString = #filePath, line: UInt = #line) async {
+    /// 解析出至少一个媒体，且第一个媒体的直链能探测到（大小或时长）。
+    /// 机房 IP 被平台风控（YouTube「确认不是机器人」、Reddit 拦截等）属于环境问题，记为「受限」并跳过，不算失败
+    private func check(_ url: String, file: StaticString = #filePath, line: UInt = #line) async throws {
         guard let link = VideoLinkParser.parse(url) else {
             report(url, ok: false, detail: "链接识别失败")
             return XCTFail("链接识别失败：\(url)", file: file, line: line)
@@ -50,15 +51,27 @@ final class LiveParseTests: XCTestCase {
             report(name, ok: reachable, detail: detail)
             XCTAssertTrue(reachable, "\(name)：直链探测失败 \(media.url)", file: file, line: line)
         } catch {
-            report(name, ok: false, detail: error.localizedDescription + ((error as? VideoParseError).map { "（\($0.detail)）" } ?? ""))
+            let detail = error.localizedDescription + ((error as? VideoParseError).map { "（\($0.detail)）" } ?? "")
+            if Self.isEnvironmentBlock(error) {
+                report(name, ok: nil, detail: "机房 IP 受限：" + detail)
+                throw XCTSkip("\(name)：机房 IP 受限，跳过")
+            }
+            report(name, ok: false, detail: detail)
             XCTFail("\(name)：\(error.localizedDescription)", file: file, line: line)
         }
     }
 
+    static func isEnvironmentBlock(_ error: Error) -> Bool {
+        if let e = error as? VideoParseError, e.kind == .blocked { return true }
+        let text = error.localizedDescription + ((error as? VideoParseError)?.detail ?? "")
+        return ["机器人", "风控", "HTTP 412", "HTTP 429", "需要登录"].contains { text.contains($0) }
+    }
+
     /// 每个平台一行写进报告文件（CLOUDN_LIVE_REPORT），定时任务把它贴到运行摘要里
-    private func report(_ name: String, ok: Bool, detail: String) {
+    private func report(_ name: String, ok: Bool?, detail: String) {
         guard let path = ProcessInfo.processInfo.environment["CLOUDN_LIVE_REPORT"] else { return }
-        let line = "| \(name) | \(ok ? "✅" : "❌") | \(detail.replacingOccurrences(of: "|", with: "/")) |\n"
+        let mark = ok.map { $0 ? "✅" : "❌" } ?? "⚠️"
+        let line = "| \(name) | \(mark) | \(detail.replacingOccurrences(of: "|", with: "/")) |\n"
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(Data(line.utf8))
