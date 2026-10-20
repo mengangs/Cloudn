@@ -38,9 +38,58 @@ public enum VideoLinkParser {
         Rule(platform: .bilibili, kind: "short", rx: Rx(#"b23\.tv/[A-Za-z\d]+"#, ignoreCase: true)),
         Rule(platform: .bilibili, kind: "short", rx: Rx(#"bili2233\.cn/[A-Za-z\d]+"#, ignoreCase: true)),
         Rule(platform: .bilibili, kind: "video", rx: Rx(#"bilibili\.com/video/(BV[0-9a-zA-Z]{10}|av\d+)"#, ignoreCase: true)),
+        Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"t\.bilibili\.com/(?:h5/dynamic/detail/)?(\d{10,20})"#, ignoreCase: true)),
+        Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"bilibili\.com/opus/(\d{10,20})"#, ignoreCase: true)),
+        Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"m\.bilibili\.com/dynamic/(\d{10,20})"#, ignoreCase: true)),
+
+        // 先认回答再认问题：回答链接里也带 /question/
+        Rule(platform: .zhihu, kind: "answer", rx: Rx(#"zhihu\.com/question/\d+/answer/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .zhihu, kind: "answer", rx: Rx(#"zhihu\.com/answer/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .zhihu, kind: "question", rx: Rx(#"zhihu\.com/question/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .zhihu, kind: "article", rx: Rx(#"zhuanlan\.zhihu\.com/p/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .zhihu, kind: "pin", rx: Rx(#"zhihu\.com/pin/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .zhihu, kind: "story", rx: Rx(#"daily\.zhihu\.com/story/(\d+)"#, ignoreCase: true)),
 
         Rule(platform: .pixiv, kind: "artwork", rx: Rx(#"pixiv\.net/(?:[a-z]{2}/)?artworks/(\d+)"#, ignoreCase: true)),
-        Rule(platform: .pixiv, kind: "artwork", rx: Rx(#"pixiv\.net/member_illust\.php\?[^\s]*illust_id=(\d+)"#, ignoreCase: true))
+        Rule(platform: .pixiv, kind: "artwork", rx: Rx(#"pixiv\.net/member_illust\.php\?[^\s]*illust_id=(\d+)"#, ignoreCase: true)),
+
+        // 以下国内平台的分享短链在各自解析器里展开，不走统一的短链流程
+        Rule(platform: .toutiao, kind: "share", rx: Rx(#"toutiao\.com/is/([A-Za-z0-9_\-]+)"#, ignoreCase: true)),
+        Rule(platform: .toutiao, kind: "item", rx: Rx(#"toutiao\.com/(?:(?:article|video|w|group|item)/|a|i)(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .tieba, kind: "post", rx: Rx(#"tieba\.baidu\.com/p/(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .weixin, kind: "article", rx: Rx(#"mp\.weixin\.qq\.com/s/([A-Za-z0-9_\-]+)"#, ignoreCase: true)),
+        Rule(platform: .weixin, kind: "params", rx: Rx(#"mp\.weixin\.qq\.com/s\?[^\s]*?__biz=([^&\s#]+)"#, ignoreCase: true)),
+
+        Rule(platform: .douban, kind: "topic", rx: Rx(#"douban\.com/(?:group/)?topic/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .douban, kind: "topic", rx: Rx(#"douban\.com/doubanapp/dispatch\?[^\s]*?uri=(?:/|%2F)?(?:group(?:/|%2F))?topic(?:/|%2F)(\d+)"#, ignoreCase: true)),
+        Rule(platform: .douban, kind: "share", rx: Rx(#"douban\.com/doubanapp/dispatch"#, ignoreCase: true)),
+        Rule(platform: .douban, kind: "share", rx: Rx(#"douc\.cc/([A-Za-z0-9]+)"#, ignoreCase: true)),
+
+        Rule(platform: .coolapk, kind: "feed", rx: Rx(#"coolapk(?:1s)?\.com/feed/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .coolapk, kind: "picture", rx: Rx(#"coolapk(?:1s)?\.com/picture/(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .pipix, kind: "share", rx: Rx(#"h5\.pipix\.com/s/([A-Za-z0-9_\-]+)"#, ignoreCase: true)),
+        Rule(platform: .pipix, kind: "item", rx: Rx(#"h5\.pipix\.com/(?:ppx/)?item/(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .zuiyou, kind: "post", rx: Rx(#"(?:share\.xiaochuankeji\.cn|share\.izuiyou\.com)/hybrid/share/post\?[^\s]*?\bpid=(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .twitter, kind: "short", rx: Rx(#"(?<![A-Za-z0-9.\-])t\.co/[A-Za-z0-9]+"#, ignoreCase: true)),
+        Rule(platform: .twitter, kind: "status", rx: Rx(#"(?<![A-Za-z0-9\-])(?:www\.|mobile\.)?(?:twitter|x|fixupx|fxtwitter|vxtwitter|fixvx)\.com/(?:i/web/|[A-Za-z0-9_]+/)status(?:es)?/(\d+)"#, ignoreCase: true)),
+
+        Rule(platform: .tiktok, kind: "short", rx: Rx(#"(?:vt|vm)\.tiktok\.com/[A-Za-z0-9]+"#, ignoreCase: true)),
+        Rule(platform: .tiktok, kind: "short", rx: Rx(#"tiktok\.com/t/[A-Za-z0-9]+"#, ignoreCase: true)),
+        Rule(platform: .tiktok, kind: "video", rx: Rx(#"tiktok\.com/@[^/\s?]*/(?:video|photo)/(\d+)"#, ignoreCase: true)),
+        Rule(platform: .tiktok, kind: "video", rx: Rx(#"tiktok\.com/(?:v|embed(?:/v2)?)/(\d+)"#, ignoreCase: true)),
+
+        // share 短链要排在作品规则前面，否则 share/reel/X 会被当成作品
+        Rule(platform: .instagram, kind: "short", rx: Rx(#"instagram\.com/share/(?:reel/|p/)?[A-Za-z0-9_\-]+"#, ignoreCase: true)),
+        Rule(platform: .instagram, kind: "post", rx: Rx(#"(?:instagram\.com|instagr\.am)/(?:[A-Za-z0-9_.]+/)?(?:p|reels?|tv)/([A-Za-z0-9_\-]+)"#, ignoreCase: true)),
+
+        Rule(platform: .threads, kind: "short", rx: Rx(#"threads\.(?:com|net)/share/[A-Za-z0-9_\-/]+"#, ignoreCase: true)),
+        Rule(platform: .threads, kind: "post", rx: Rx(#"threads\.(?:com|net)/@[\w.]+/post/([A-Za-z0-9_\-]+)"#, ignoreCase: true)),
+        Rule(platform: .threads, kind: "post", rx: Rx(#"threads\.(?:com|net)/t/([A-Za-z0-9_\-]+)"#, ignoreCase: true))
     ]
 
     /// 只在链接上匹配（不看文案：抖音/快手文案里常带一堆数字，整段匹配必然误判）

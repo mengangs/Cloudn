@@ -429,9 +429,12 @@ struct ResolveView: View {
             HStack(spacing: 10) {
                 ForEach(SharePlatform.allCases) { PlatformGlyph(mark: .share($0), size: 15) }
             }
-            HStack(spacing: 10) {
-                ForEach(VideoPlatform.allCases) { PlatformGlyph(mark: .video($0), size: 15) }
-                PlatformGlyph(mark: .github, size: 15)
+            // 视频平台较多：每行 10 个，避免窄屏溢出
+            let marks = VideoPlatform.allCases.map(PlatformMark.video) + [.github]
+            ForEach(Array(stride(from: 0, to: marks.count, by: 10)), id: \.self) { start in
+                HStack(spacing: 10) {
+                    ForEach(start..<min(start + 10, marks.count), id: \.self) { PlatformGlyph(mark: marks[$0], size: 15) }
+                }
             }
             Text("以及任意 http(s) 下载直链与 m3u8").font(.caption)
         }

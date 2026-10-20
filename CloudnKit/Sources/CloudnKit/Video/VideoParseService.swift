@@ -20,7 +20,19 @@ public final class VideoParseService: Sendable {
             KuaishouParser(),
             WeiboParser(),
             AcFunParser(),
-            BilibiliParser()
+            BilibiliParser(),
+            ZhihuParser(),
+            TwitterParser(),
+            TikTokParser(),
+            InstagramParser(),
+            ThreadsParser(),
+            ToutiaoParser(),
+            TiebaParser(),
+            WeixinParser(),
+            DoubanParser(),
+            CoolapkParser(),
+            PipixParser(),
+            ZuiyouParser()
         ]
         parsers = Dictionary(uniqueKeysWithValues: list.map { ($0.platform, $0) })
     }
@@ -44,7 +56,13 @@ public final class VideoParseService: Sendable {
     /// 展开短链（最多 5 跳），终址能重新识别就用新的识别结果
     private func expand(_ link: DetectedVideoLink) async throws -> DetectedVideoLink {
         var current = link
-        let ua = (link.platform == .douyin || link.platform == .kuaishou) ? VideoHTTP.uaIPhone : VideoHTTP.uaChrome
+        let ua: String
+        switch link.platform {
+        case .douyin, .kuaishou: ua = VideoHTTP.uaIPhone
+        // t.co 对浏览器 UA 回 200 + meta refresh 而不是 301；Threads 分享链同理
+        case .twitter, .threads: ua = "curl/8.5.0"
+        default: ua = VideoHTTP.uaChrome
+        }
         for _ in 0..<5 {
             guard let next = try await VideoHTTP.expandRedirect(current.url, headers: ["User-Agent": ua]) else { return current }
             guard let again = VideoLinkParser.parse(next) else {
@@ -82,6 +100,8 @@ public enum AccountValidator {
             return await XiaohongshuParser.validate(cookie: cookie)
         case .pixiv:
             return await PixivParser.validate(cookie: cookie)
+        case .zhihu:
+            return await ZhihuParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

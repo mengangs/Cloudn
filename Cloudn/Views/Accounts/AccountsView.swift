@@ -57,7 +57,7 @@ struct AccountsView: View {
                             }
                         }
                         .card()
-                        Text("抖音、快手、微博、AcFun 无需登录；小红书需要登录；Pixiv 未登录只能解析公开作品。")
+                        Text("小红书、知乎需要登录；Pixiv 未登录只能解析公开作品；其余平台无需登录。")
                             .font(.caption)
                             .foregroundStyle(Color.ink3)
                             .padding(.horizontal, 4)

@@ -3,6 +3,8 @@ import Foundation
 
 public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable {
     case douyin, xiaohongshu, kuaishou, weibo, acfun, bilibili, pixiv
+    case toutiao, tieba, weixin, douban, coolapk, pipix, zuiyou, zhihu
+    case twitter, tiktok, instagram, threads
 
     public var id: String { rawValue }
 
@@ -15,6 +17,18 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .weibo: return "微博"
         case .acfun: return "AcFun"
         case .bilibili: return "哔哩哔哩"
+        case .toutiao: return "今日头条"
+        case .tieba: return "百度贴吧"
+        case .weixin: return "微信公众号"
+        case .douban: return "豆瓣"
+        case .coolapk: return "酷安"
+        case .pipix: return "皮皮虾"
+        case .zuiyou: return "最右"
+        case .zhihu: return "知乎"
+        case .twitter: return "X（Twitter）"
+        case .tiktok: return "TikTok"
+        case .instagram: return "Instagram"
+        case .threads: return "Threads"
         }
     }
 
@@ -24,6 +38,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .bilibili: return .bilibili
         case .xiaohongshu: return .xiaohongshu
         case .pixiv: return .pixiv
+        case .zhihu: return .zhihu
         default: return nil
         }
     }

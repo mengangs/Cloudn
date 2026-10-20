@@ -312,6 +312,7 @@ extension AccountKind {
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
         case .pixiv: return URL(string: "https://accounts.pixiv.net/login")!
+        case .zhihu: return URL(string: "https://www.zhihu.com/signin")!
         }
     }
 
@@ -332,6 +333,7 @@ extension AccountKind {
         // 移动 UA 下没有登录页（/login 返回 404）
         case .xiaohongshu: return VideoHTTP.uaChrome
         case .pixiv: return VideoHTTP.uaChrome
+        case .zhihu: return VideoHTTP.uaChrome
         }
     }
 
@@ -349,6 +351,7 @@ extension AccountKind {
         case .bilibili: return .cookies(["bilibili.com"])
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
         case .pixiv: return .cookies(["pixiv.net"])
+        case .zhihu: return .cookies(["zhihu.com"])
         }
     }
 
@@ -368,6 +371,8 @@ extension AccountKind {
         case .xiaohongshu: return credential.contains("web_session=")
         // 游客也有 PHPSESSID，登录后的才带「用户 ID_」前缀
         case .pixiv: return PixivSession.isLoggedIn(cookie: credential)
+        // d_c0 游客也有；登录后才有 z_c0
+        case .zhihu: return credential.contains("z_c0=") && credential.contains("d_c0=")
         }
     }
 
@@ -386,6 +391,7 @@ extension AccountKind {
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "登录后可解析 R18 与受限作品"
+        case .zhihu: return "知乎接口要求登录后才能解析回答、文章与想法"
         }
     }
 
@@ -404,6 +410,7 @@ extension AccountKind {
         case .bilibili: return "需包含 SESSDATA"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
+        case .zhihu: return "需包含 z_c0 与 d_c0"
         }
     }
 
@@ -429,6 +436,7 @@ extension AccountKind {
         case .bilibili: return "play.tv.fill"
         case .xiaohongshu: return "book.closed.fill"
         case .pixiv: return "paintpalette.fill"
+        case .zhihu: return "questionmark.bubble.fill"
         }
     }
 
@@ -445,7 +453,7 @@ extension AccountKind {
         case .xunlei: return LoginWebView.xunleiRenderFix
         case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
         // 只有桌面版的登录页（115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
-        case .pan115, .pan123, .lanzou: return LoginWebView.fitToWidthScript
+        case .pan115, .pan123, .lanzou, .zhihu: return LoginWebView.fitToWidthScript
         default: return nil
         }
     }
