@@ -368,3 +368,100 @@ extension ILanzouResolver: DriveManager {
         return DriveQuota(used: map["usedSize"].int64 * 1024, total: total)
     }
 }
+
+// MARK: - 上传到我的网盘（七牛云，参考 OpenList drivers/ilanzou，AGPL-3.0）
+
+extension ILanzouResolver: DriveUploader {
+    static let qiniuHost = "https://upload.qiniup.com"
+    static let qiniuBucket = "wpanstore-lanzou"
+    static let qiniuPartSize: Int64 = 8 << 20
+
+    /// getUpToken（"-1" 即秒传）→ 七牛表单上传 / 分片上传 → 7n/results 等落库
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let cred = try await requireAccount()
+        let size = FileChunks.size(of: file)
+        var md5 = MD5Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in md5.update(d) }
+        let account = try await proved("/proved/user/account/map", cred)["map"]["account"].string
+        let folder = folderId.hasPrefix(Self.folderPrefix) ? String(folderId.dropFirst(Self.folderPrefix.count)) : folderId
+        let tokenJSON = try await proved("/proved/7n/getUpToken", cred, body: .object([
+            ("fileId", .string("")), ("fileName", .string(name)), ("fileSize", .int(max(1, (size + 1023) / 1024))),
+            ("folderId", .int(Int64(folder) ?? 0)), ("md5", .string(Crypto.hex(md5.finalize()))), ("type", .int(1))
+        ]))
+        let upToken = tokenJSON["upToken"].string
+        if upToken == "-1" { progress(.finishing, 1); return }
+        guard !upToken.isEmpty else { throw CloudnError("蓝奏优享未返回上传凭证") }
+        let key = Self.objectKey(account: account, date: Date())
+
+        let token: String
+        if size <= Self.qiniuPartSize {
+            let form = MultipartForm(fields: [("token", upToken), ("key", key), ("fname", name)])
+            let body = form.body(fileField: "file", fileName: name, content: try FileChunks.read(file, offset: 0, length: Int(size)))
+            let r = try await client.upload(HTTPRequest(url: Self.qiniuHost + "/", method: "POST", headers: [("Content-Type", form.contentType)]),
+                                            body: .data(body)) { done in progress(.uploading, Double(done) / Double(max(1, body.count))) }
+            token = try Self.qiniuToken(r)
+        } else {
+            let qiniu = "\(Self.qiniuHost)/buckets/\(Self.qiniuBucket)/objects/\(Self.base64URL(key))/uploads"
+            let auth = [("Authorization", "UpToken \(upToken)")]
+            let start = try await client.send(HTTPRequest(url: qiniu, method: "POST", headers: auth))
+            guard let uploadId = start.json?["uploadId"].string.nilIfBlank else { throw CloudnError("七牛分片上传初始化失败（HTTP \(start.status)）") }
+            var etags: [OrderedJSON] = []
+            var sent: Int64 = 0
+            for (i, part) in UploadUtil.parts(size: size, partSize: Self.qiniuPartSize).enumerated() {
+                let b = sent
+                let r = try await client.upload(HTTPRequest(url: "\(qiniu)/\(uploadId)/\(i + 1)", method: "PUT",
+                                                            headers: auth + [("Content-Type", "application/octet-stream")]),
+                                                body: .file(file, offset: part.offset, length: part.length)) { done in
+                    progress(.uploading, Double(b + done) / Double(size))
+                }
+                guard r.isSuccess, let etag = r.json?["etag"].string.nilIfBlank else { throw CloudnError("七牛分片上传失败（HTTP \(r.status)）") }
+                etags.append(.object([("partNumber", .int(Int64(i + 1))), ("etag", .string(etag))]))
+                sent += part.length
+            }
+            let done = try await client.send(HTTPRequest(url: "\(qiniu)/\(uploadId)", method: "POST",
+                                                         headers: auth + [("Content-Type", "application/json")],
+                                                         body: Data(OrderedJSON.object([("fname", .string(name)), ("parts", .array(etags))]).text.utf8)))
+            token = try Self.qiniuToken(done)
+        }
+
+        // 七牛回调落库是异步的：轮询结果
+        progress(.finishing, 0)
+        for _ in 0..<10 {
+            let url = base + "/unproved/7n/results?" + Self.query(Self.commonParams(uuid: cred.uuid, devModel: "chrome") +
+                [("extra", "2"), ("tokenList", token), ("tokenTime", Self.jsDate(Date()))])
+            if let r = try? await client.send(.get(url, headers: Self.headers)), r.json?["list"][0]["status"].int == 1 {
+                progress(.finishing, 1)
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        throw CloudnError("文件已传到七牛，但蓝奏优享还没确认，请稍后刷新查看")
+    }
+
+    /// disk/年/月/日/账号/毫秒.rar（网页端就是这样生成的，与真实类型无关）
+    static func objectKey(account: String, date: Date) -> String {
+        let c = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
+        func pad(_ v: Int?) -> String { let n = v ?? 1; return n < 10 ? "0\(n)" : "\(n)" }
+        return "disk/\(c.year ?? 1970)/\(pad(c.month))/\(pad(c.day))/\(account)/\(Int64(date.timeIntervalSince1970 * 1000)).rar"
+    }
+
+    static func base64URL(_ s: String) -> String {
+        Data(s.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+    }
+
+    static func qiniuToken(_ r: HTTPResponse) throws -> String {
+        guard r.isSuccess, let token = r.json?["token"].string.nilIfBlank else {
+            throw CloudnError(r.json?["error"].string.nilIfBlank.map { "七牛上传失败：\($0)" } ?? "七牛上传失败（HTTP \(r.status)）")
+        }
+        return token
+    }
+
+    /// JS Date.toString() 的样子：Mon Jan 02 2006 15:04:05 GMT+0800 (CST)
+    static func jsDate(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        f.dateFormat = "EEE MMM dd yyyy HH:mm:ss 'GMT'Z '(CST)'"
+        return f.string(from: d)
+    }
+}

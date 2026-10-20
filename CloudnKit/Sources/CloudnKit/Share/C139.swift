@@ -523,3 +523,91 @@ extension C139Resolver: DriveManager {
         return DriveQuota(used: used, total: total)
     }
 }
+
+// MARK: - 上传到我的网盘（个人盘 hcy 接口，参考 OpenList drivers/139 personal_new，AGPL-3.0）
+
+extension C139Resolver: DriveUploader {
+    /// 网页端客户端类型单文件上限 50GB
+    public var uploadSizeLimit: Int64? { 50 << 30 }
+
+    static func uploadPartSize(for size: Int64) -> Int64 { size > 30 << 30 ? 512 << 20 : 100 << 20 }
+
+    /// file/create（同内容已存在或秒传时直接完成）→ 按片 PUT 预签名地址（每批最多 100 片）→ file/complete
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let (cookie, authorization) = try await driveAuth()
+        let size = FileChunks.size(of: file)
+        var sha = SHA256Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in sha.update(d) }
+        let hash = Crypto.hex(sha.finalize())
+        let parts = UploadUtil.parts(size: size, partSize: Self.uploadPartSize(for: size))
+        let infos = Self.partInfos(parts)
+
+        let created = try await personalPost(personalBase + "/hcy/file/create",
+                                             Self.uploadCreateBody(name: name, size: size, hash: hash, parentId: folderId,
+                                                                   parts: Array(infos.prefix(100))),
+                                             authorization: authorization, fallback: "上传失败")
+        let data = created["data"]
+        var urls = Self.parseUploadURLs(data["partInfos"])
+        if data["exist"].bool || data["rapidUpload"].bool || urls.isEmpty { progress(.finishing, 1); return }
+        let fileId = data["fileId"].string, uploadId = data["uploadId"].string
+        var sent: Int64 = 0
+        for (i, part) in parts.enumerated() {
+            let n = i + 1
+            if urls[n] == nil {
+                // 超过 100 片：后面的批次另行申请地址
+                let batch = Array(infos[i..<min(i + 100, infos.count)])
+                let more = try await personalPost(personalBase + "/hcy/file/getUploadUrl",
+                                                  Self.uploadURLBody(fileId: fileId, uploadId: uploadId, parts: batch,
+                                                                     account: Self.account(in: cookie) ?? ""),
+                                                  authorization: authorization, fallback: "获取上传地址失败")
+                urls.merge(Self.parseUploadURLs(more["data"]["partInfos"])) { $1 }
+            }
+            guard let url = urls[n] else { throw CloudnError("139 网盘未返回第 \(n) 片的上传地址") }
+            let base = sent
+            var attempt = 0
+            while true {
+                let r = try await client.upload(HTTPRequest(url: url, method: "PUT",
+                                                            headers: [("Content-Type", "application/octet-stream"),
+                                                                      ("Origin", "https://yun.139.com"), ("Referer", "https://yun.139.com/")]),
+                                                body: .file(file, offset: part.offset, length: part.length)) { done in
+                    progress(.uploading, Double(base + done) / Double(max(1, size)))
+                }
+                if r.isSuccess { break }
+                attempt += 1
+                guard attempt < 3 else { throw CloudnError("139 网盘分片上传失败（HTTP \(r.status)）") }
+            }
+            sent += part.length
+        }
+        progress(.finishing, 0)
+        _ = try await personalPost(personalBase + "/hcy/file/complete",
+                                   .object([("contentHash", .string(hash)), ("contentHashAlgorithm", .string("SHA256")),
+                                            ("fileId", .string(fileId)), ("uploadId", .string(uploadId))]),
+                                   authorization: authorization, fallback: "上传完成确认失败")
+        progress(.finishing, 1)
+    }
+
+    static func partInfos(_ parts: [(offset: Int64, length: Int64)]) -> [OrderedJSON] {
+        parts.enumerated().map { i, p in
+            .object([("partNumber", .int(Int64(i + 1))), ("partSize", .int(p.length)),
+                     ("parallelHashCtx", .object([("partOffset", .int(p.offset))]))])
+        }
+    }
+
+    static func uploadCreateBody(name: String, size: Int64, hash: String, parentId: String, parts: [OrderedJSON]) -> OrderedJSON {
+        .object([("contentHash", .string(hash)), ("contentHashAlgorithm", .string("SHA256")),
+                 ("contentType", .string("application/octet-stream")), ("parallelUpload", .bool(false)),
+                 ("partInfos", .array(parts)), ("size", .int(size)), ("parentFileId", .string(parentId.nilIfBlank ?? "/")),
+                 ("name", .string(name)), ("type", .string("file")), ("fileRenameMode", .string("auto_rename"))])
+    }
+
+    static func uploadURLBody(fileId: String, uploadId: String, parts: [OrderedJSON], account: String) -> OrderedJSON {
+        .object([("fileId", .string(fileId)), ("uploadId", .string(uploadId)), ("partInfos", .array(parts)),
+                 ("commonAccountInfo", .object([("account", .string(account)), ("accountType", .int(1))]))])
+    }
+
+    static func parseUploadURLs(_ json: JSON) -> [Int: String] {
+        var out: [Int: String] = [:]
+        for p in json.array where !p["uploadUrl"].string.isEmpty { out[p["partNumber"].int] = p["uploadUrl"].string }
+        return out
+    }
+}

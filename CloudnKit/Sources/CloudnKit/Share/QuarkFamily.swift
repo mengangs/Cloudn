@@ -666,3 +666,125 @@ extension QuarkFamilyResolver: DriveManager {
         return nil
     }
 }
+
+// MARK: - 上传到我的网盘（参考 OpenList drivers/quark_uc，AGPL-3.0）
+
+extension QuarkFamilyResolver: DriveUploader {
+    static let ossUA = "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit"
+    static let uploadMime = "application/octet-stream"
+
+    /// upload/pre → update/hash（秒传）→ 每片向服务端要 OSS 签名再 PUT → 合并（带回调）→ upload/finish
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
+        let size = FileChunks.size(of: file)
+        var md5 = MD5Hasher(), sha1 = SHA1Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in md5.update(d); sha1.update(d) }
+        let md5Hex = Crypto.hex(md5.finalize()), sha1Hex = Crypto.hex(sha1.finalize())
+        let headers = apiHeaders(cookie) + [("Referer", config.referer)]
+
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let pre = try await callRaw(.postJSON(url("/1/clouddrive/file/upload/pre"), [
+            "ccp_hash_update": true, "dir_name": "", "file_name": name, "format_type": Self.uploadMime,
+            "l_created_at": now, "l_updated_at": now, "pdir_fid": folderId.nilIfBlank ?? "0", "size": size
+        ] as [String: Any], headers: headers), cookie: cookie)
+        let data = pre["data"]
+        if data["finish"].bool { progress(.finishing, 1); return }
+        let taskId = data["task_id"].string
+        let hash = try await callRaw(.postJSON(url("/1/clouddrive/file/update/hash"),
+                                               ["md5": md5Hex, "sha1": sha1Hex, "task_id": taskId], headers: headers), cookie: cookie)
+        if hash["data"]["finish"].bool { progress(.finishing, 1); return }
+
+        let ticket = OSSTicket(bucket: data["bucket"].string, objectKey: data["obj_key"].string, uploadId: data["upload_id"].string,
+                               authInfo: data["auth_info"].string, host: Self.host(of: data["upload_url"].string),
+                               callbackURL: data["callback"]["callbackUrl"].string, callbackBody: data["callback"]["callbackBody"].string)
+        let partSize = max(pre["metadata"]["part_size"].int64, 100 * 1024)
+        let parts = UploadUtil.parts(size: size, partSize: partSize)
+        var etags: [String] = []
+        var sent: Int64 = 0
+        for (i, part) in parts.enumerated() {
+            let n = i + 1
+            let t = UploadUtil.httpDate()
+            let meta = "PUT\n\n\(Self.uploadMime)\n\(t)\nx-oss-date:\(t)\nx-oss-user-agent:\(Self.ossUA)\n" +
+                "/\(ticket.bucket)/\(ticket.objectKey)?partNumber=\(n)&uploadId=\(ticket.uploadId)"
+            let auth = try await ossAuth(meta, ticket: ticket, taskId: taskId, cookie: cookie, headers: headers)
+            let base = sent
+            let r = try await client.upload(HTTPRequest(url: ticket.objectURL + "?partNumber=\(n)&uploadId=\(ticket.uploadId)", method: "PUT",
+                                                        headers: [("Authorization", auth), ("Content-Type", Self.uploadMime),
+                                                                  ("Referer", config.referer), ("x-oss-date", t),
+                                                                  ("x-oss-user-agent", Self.ossUA)]),
+                                            body: .file(file, offset: part.offset, length: part.length)) { done in
+                progress(.uploading, Double(base + done) / Double(max(1, size)))
+            }
+            guard r.isSuccess, let etag = r.header("ETag") else { throw CloudnError("上传分片失败（HTTP \(r.status)）") }
+            etags.append(etag)
+            sent += part.length
+        }
+
+        progress(.finishing, 0)
+        let xml = Self.completeXML(etags)
+        let contentMD5 = Data(MD5Hasher.digest(Data(xml.utf8))).base64EncodedString()
+        let callback = Data(OrderedJSON.object([("callbackUrl", .string(ticket.callbackURL)),
+                                                ("callbackBody", .string(ticket.callbackBody))]).text.utf8).base64EncodedString()
+        let t = UploadUtil.httpDate()
+        let meta = "POST\n\(contentMD5)\napplication/xml\n\(t)\nx-oss-callback:\(callback)\nx-oss-date:\(t)\nx-oss-user-agent:\(Self.ossUA)\n" +
+            "/\(ticket.bucket)/\(ticket.objectKey)?uploadId=\(ticket.uploadId)"
+        let auth = try await ossAuth(meta, ticket: ticket, taskId: taskId, cookie: cookie, headers: headers)
+        let done = try await client.upload(HTTPRequest(url: ticket.objectURL + "?uploadId=\(ticket.uploadId)", method: "POST",
+                                                       headers: [("Authorization", auth), ("Content-MD5", contentMD5),
+                                                                 ("Content-Type", "application/xml"), ("Referer", config.referer),
+                                                                 ("x-oss-callback", callback), ("x-oss-date", t), ("x-oss-user-agent", Self.ossUA)]),
+                                           body: .data(Data(xml.utf8)))
+        guard done.isSuccess else { throw CloudnError("合并分片失败（HTTP \(done.status)）") }
+        _ = try await callRaw(.postJSON(url("/1/clouddrive/file/upload/finish"), ["obj_key": ticket.objectKey, "task_id": taskId],
+                                        headers: headers), cookie: cookie)
+        progress(.finishing, 1)
+        // 服务端异步落库，稍等再刷新列表
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+
+    struct OSSTicket {
+        let bucket: String
+        let objectKey: String
+        let uploadId: String
+        let authInfo: String
+        let host: String
+        let callbackURL: String
+        let callbackBody: String
+
+        var objectURL: String { "https://\(bucket).\(host)/\(UploadUtil.encodePath(objectKey))" }
+    }
+
+    /// 服务端签名：把要签的串交给 upload/auth，拿回 Authorization
+    private func ossAuth(_ meta: String, ticket: OSSTicket, taskId: String, cookie: String, headers: [(String, String)]) async throws -> String {
+        let json = try await callRaw(.postJSON(url("/1/clouddrive/file/upload/auth"),
+                                               ["auth_info": ticket.authInfo, "auth_meta": meta, "task_id": taskId], headers: headers),
+                                     cookie: cookie)
+        let key = json["data"]["auth_key"].string
+        guard !key.isEmpty else { throw CloudnError("获取上传签名失败") }
+        return key
+    }
+
+    /// 和 callData 一样校验 status，但返回整个响应（分片大小在顶层 metadata 里）
+    private func callRaw(_ req: HTTPRequest, cookie: String) async throws -> JSON {
+        let r = try await client.send(req)
+        await absorbCookies(r, cookie: cookie)
+        guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
+        guard json["status"].int == 200 else {
+            let msg = json["message"].string
+            throw CloudnError(msg.isEmpty ? "上传失败（HTTP \(r.status)）" : msg, code: json["code"].int)
+        }
+        return json
+    }
+
+    static func host(of uploadURL: String) -> String {
+        var s = uploadURL
+        for p in ["https://", "http://"] where s.hasPrefix(p) { s.removeFirst(p.count) }
+        return s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    static func completeXML(_ etags: [String]) -> String {
+        var s = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<CompleteMultipartUpload>\n"
+        for (i, e) in etags.enumerated() { s += "<Part>\n<PartNumber>\(i + 1)</PartNumber>\n<ETag>\(e)</ETag>\n</Part>\n" }
+        return s + "</CompleteMultipartUpload>"
+    }
+}

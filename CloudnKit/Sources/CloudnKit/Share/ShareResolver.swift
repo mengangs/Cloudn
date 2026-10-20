@@ -90,4 +90,7 @@ public final class ShareResolvers: Sendable {
 
     /// 支持「我的网盘」文件管理的平台才返回
     public func manager(for platform: SharePlatform) -> DriveManager? { resolvers[platform] as? DriveManager }
+
+    /// 支持上传到「我的网盘」的平台才返回
+    public func uploader(for platform: SharePlatform) -> DriveUploader? { resolvers[platform] as? DriveUploader }
 }

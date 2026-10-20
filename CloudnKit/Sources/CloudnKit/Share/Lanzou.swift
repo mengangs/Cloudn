@@ -616,3 +616,31 @@ extension LanzouResolver: DriveManager {
         return origin + "/" + path
     }
 }
+
+// MARK: - 上传到我的网盘（html5up.php，参考 OpenList drivers/lanzou，AGPL-3.0）
+
+extension LanzouResolver: DriveUploader {
+    /// 普通账号单文件 100MB；文件类型由服务端判断（视频、图片等大多不允许）
+    public var uploadSizeLimit: Int64? { 100 << 20 }
+
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let acc = try await diskAccount()
+        let size = FileChunks.size(of: file)
+        guard size <= 100 << 20 else { throw CloudnError("蓝奏云普通账号单个文件最大 100MB") }
+        let form = MultipartForm(fields: [("task", "1"), ("vie", "2"), ("ve", "2"), ("id", "WU_FILE_0"), ("name", name),
+                                          ("folder_id_bb_n", Self.folderArg(folderId))])
+        let body = try form.write(fileField: "upload_file", fileName: name, file: file)
+        defer { try? FileManager.default.removeItem(at: body) }
+        let total = FileChunks.size(of: body)
+        let r = try await client.upload(HTTPRequest(url: Self.diskOrigin + "/html5up.php", method: "POST",
+                                                    headers: [("Cookie", acc.cookie), ("User-Agent", Self.ua),
+                                                              ("Referer", Self.diskOrigin + "/mydisk.php"), ("Origin", Self.diskOrigin),
+                                                              ("Content-Type", form.contentType)]),
+                                        body: .file(body, offset: 0, length: total)) { done in
+            progress(.uploading, Double(done) / Double(max(1, total)))
+        }
+        guard let json = r.json, json.isObject else { throw CloudnError("蓝奏上传失败（HTTP \(r.status)），可能是文件类型不被允许") }
+        try Self.checkDoupload(json, allowEnd: false)
+        progress(.finishing, 1)
+    }
+}

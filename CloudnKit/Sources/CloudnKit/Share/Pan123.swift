@@ -459,3 +459,96 @@ extension Pan123Resolver: DriveManager {
         return DriveQuota(used: data["SpaceUsed"].int64, total: data["SpacePermanent"].int64 + data["SpaceTemp"].int64)
     }
 }
+
+// MARK: - 上传到我的网盘（参考 OpenList drivers/123，AGPL-3.0）
+
+extension Pan123Resolver: DriveUploader {
+    static let uploadPartSize: Int64 = 16 << 20
+
+    /// upload_request（秒传判断）→ 申请预签名地址 → 按片 PUT → upload_complete
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let token = try await driveToken()
+        let size = FileChunks.size(of: file)
+        var md5 = MD5Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in md5.update(d) }
+        let etag = Crypto.hex(md5.finalize())
+
+        let request = try await uploadCall("/b/api/file/upload_request",
+                                           Self.uploadRequestBody(name: name, size: size, etag: etag, parentId: folderId), token: token)
+        let data = request["data"]
+        // 秒传：服务端已有同样的文件
+        if data["Reuse"].bool || data["Key"].string.isEmpty { progress(.finishing, 1); return }
+        let session = Self.UploadTicket(storageNode: data["StorageNode"].string, bucket: data["Bucket"].string, key: data["Key"].string,
+                                         uploadId: data["UploadId"].string, fileId: data["FileId"].int64)
+        let parts = UploadUtil.parts(size: size, partSize: Self.uploadPartSize)
+        let count = max(1, parts.count)
+        var urls: [Int: String] = [:]
+        var sent: Int64 = 0
+        for n in 1...count {
+            let part = parts.isEmpty ? (offset: Int64(0), length: Int64(0)) : parts[n - 1]
+            var attempt = 0
+            while true {
+                // 预签名地址 10 片一批申请；失败（多为地址过期 403）就重新申请这一片所在的批次
+                if urls[n] == nil {
+                    urls.merge(try await presignedURLs(session, from: n, to: min(n + 10, count + 1), single: count == 1, token: token)) { $1 }
+                }
+                guard let url = urls[n] else { throw CloudnError("123 云盘未返回第 \(n) 片的上传地址") }
+                let base = sent
+                let r = try await client.upload(HTTPRequest(url: url, method: "PUT", headers: [("Content-Type", "application/octet-stream")]),
+                                                body: .file(file, offset: part.offset, length: part.length)) { done in
+                    progress(.uploading, size > 0 ? Double(base + done) / Double(size) : 1)
+                }
+                if r.isSuccess { break }
+                attempt += 1
+                guard attempt < 3 else { throw CloudnError("123 云盘分片上传失败（HTTP \(r.status)）") }
+                urls[n] = nil
+            }
+            sent += part.length
+        }
+        try await completeUpload(session, size: size, multipart: count > 1, token: token, progress: progress)
+    }
+
+    struct UploadTicket {
+        let storageNode: String
+        let bucket: String
+        let key: String
+        let uploadId: String
+        let fileId: Int64
+    }
+
+    private func uploadCall(_ path: String, _ body: [String: Any], token: String) async throws -> JSON {
+        let json = try await callJSON(.postJSON(apiBase + path, body, headers: jsonAuthHeaders(path: path, token: token)))
+        try Self.check(json, fallback: "上传失败")
+        return json
+    }
+
+    /// 分片 [from, to)（片号从 1 开始）的预签名地址；只有一片时走单对象接口
+    private func presignedURLs(_ s: UploadTicket, from: Int, to: Int, single: Bool, token: String) async throws -> [Int: String] {
+        let path = single ? "/b/api/file/s3_upload_object/auth" : "/b/api/file/s3_repare_upload_parts_batch"
+        let body: [String: Any] = ["StorageNode": s.storageNode, "bucket": s.bucket, "key": s.key, "uploadId": s.uploadId,
+                                   "partNumberStart": from, "partNumberEnd": single ? 2 : to]
+        let json = try await uploadCall(path, body, token: token)
+        return Self.parsePresigned(json["data"]["presignedUrls"])
+    }
+
+    private func completeUpload(_ s: UploadTicket, size: Int64, multipart: Bool, token: String, progress: UploadProgress) async throws {
+        progress(.finishing, 0)
+        let body: [String: Any] = ["StorageNode": s.storageNode, "bucket": s.bucket, "fileId": s.fileId, "fileSize": size,
+                                   "isMultipart": multipart, "key": s.key, "uploadId": s.uploadId]
+        _ = try await uploadCall("/b/api/file/upload_complete/v2", body, token: token)
+        progress(.finishing, 1)
+    }
+
+    /// duplicate 1 = 同名时保留两个（自动改名）
+    static func uploadRequestBody(name: String, size: Int64, etag: String, parentId: String) -> [String: Any] {
+        ["driveId": 0, "duplicate": 1, "etag": etag, "fileName": name, "parentFileId": Int64(parentId) ?? 0, "size": size, "type": 0,
+         "NotReuse": false, "RequestSource": NSNull()]
+    }
+
+    /// presignedUrls：{"1": "https://…", "2": …}
+    static func parsePresigned(_ json: JSON) -> [Int: String] {
+        var out: [Int: String] = [:]
+        for k in json.keys { if let n = Int(k), !json[k].string.isEmpty { out[n] = json[k].string } }
+        return out
+    }
+}
