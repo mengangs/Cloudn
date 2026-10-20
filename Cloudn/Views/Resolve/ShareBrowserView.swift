@@ -65,7 +65,7 @@ struct ShareBrowserView: View {
             .animation(.snappy(duration: 0.25), value: model.selecting)
             .animation(.snappy(duration: 0.25), value: model.batch?.total)
         }
-        .sheet(item: $preview) { item in
+        .fullScreenCover(item: $preview) { item in
             MediaPreviewView(item: item)
         }
         .sheet(item: $textPreview) { TextPreviewView(item: $0) }

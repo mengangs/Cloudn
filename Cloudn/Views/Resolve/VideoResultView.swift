@@ -62,7 +62,7 @@ struct VideoResultView: View {
         .safeAreaInset(edge: .bottom) { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
         .sensoryFeedback(.selection, trigger: selected)
         .animation(.snappy(duration: 0.25), value: selecting)
-        .sheet(item: $preview) { MediaPreviewView(item: $0) }
+        .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }
     }
 
     // MARK: 头部

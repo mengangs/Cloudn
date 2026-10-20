@@ -1,0 +1,339 @@
+// Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
+import AVKit
+import CloudnKit
+import QuickLook
+import SwiftUI
+import UIKit
+
+/// 下载好的文件全屏预览：按类型选最合适的查看方式，顶部统一的深色操作栏（关闭 / 分享 / 更多），轻点画面隐藏或显示
+struct FilePreviewView: View {
+    let url: URL
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var chromeVisible = true
+    @State private var player: AVPlayer?
+
+    enum Mode { case player, image, text, document, unsupported }
+
+    /// AVFoundation 能直接播的格式；mkv / avi / flv 等交给其他应用
+    static let playable: Set<String> = ["mp4", "mov", "m4v", "3gp", "mp3", "m4a", "aac", "wav", "aiff", "caf", "flac", "m3u8", "ts"]
+
+    private var mode: Mode {
+        let ext = url.pathExtension.lowercased()
+        switch FileNames.kind(of: url.lastPathComponent) {
+        case .video, .audio: return Self.playable.contains(ext) ? .player : .unsupported
+        case .image: return .image
+        case .text: return .text
+        default: return QLPreviewController.canPreview(url as NSURL) ? .document : .unsupported
+        }
+    }
+
+    /// 文档 / 文本页面是浅色的，操作栏常驻；媒体类全屏黑底，轻点隐藏
+    private var immersive: Bool { mode == .player || mode == .image }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            (immersive ? Color.black : Color.paper).ignoresSafeArea()
+            if mode == .image {
+                // 图片铺满全屏，操作栏浮在上面，轻点切换
+                content
+                if chromeVisible { topBar.transition(.opacity) }
+            } else {
+                // 播放器顶部有它自己的画中画 / 音量按钮，操作栏放在画面之外，不叠在一起
+                VStack(spacing: 0) {
+                    topBar
+                    content.frame(maxHeight: .infinity)
+                }
+            }
+        }
+        .statusBarHidden(mode == .image && !chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: chromeVisible)
+        .preferredColorScheme(immersive ? .dark : nil)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch mode {
+        case .player:
+            if let player {
+                PlayerController(player: player).ignoresSafeArea(edges: .bottom)
+            } else {
+                Color.black.onAppear { player = PlayerController.makePlayer(url) }
+            }
+        case .image:
+            ZoomableImageFile(url: url) { chromeVisible.toggle() }.ignoresSafeArea()
+        case .text:
+            LocalTextView(url: url)
+        case .document:
+            QuickLookContent(url: url)
+        case .unsupported:
+            unsupportedCard
+        }
+    }
+
+    // MARK: 顶部操作栏
+
+    private var meta: String {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let ext = url.pathExtension.uppercased()
+        return [ext.isEmpty ? nil : ext, size > 0 ? ByteFormat.string(size) : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button { dismiss() } label: { IconView(.close, size: 15) }
+                .buttonStyle(PreviewBarButtonStyle(dark: immersive))
+                .accessibilityLabel("关闭")
+            VStack(spacing: 2) {
+                Text(url.lastPathComponent)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !meta.isEmpty {
+                    Text(meta).font(.caption2.monospacedDigit()).opacity(0.65)
+                }
+            }
+            .foregroundStyle(immersive ? Color.white : Color.ink)
+            .frame(maxWidth: .infinity)
+            ShareLink(item: url) { IconView(.share, size: 16) }
+                .buttonStyle(PreviewBarButtonStyle(dark: immersive))
+                .accessibilityLabel("分享")
+            Menu {
+                if MediaTools.canSaveToPhotos(url) {
+                    Button {
+                        Task {
+                            do { try await MediaTools.saveToPhotos(url); app.show("已保存到相册") } catch { app.show(error.localizedDescription, error: true) }
+                        }
+                    } label: { Label("保存到相册", glyph: .image) }
+                }
+                Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: { Label("在「文件」中查看", glyph: .folder) }
+                Button { UIPasteboard.general.string = url.lastPathComponent; app.show("已复制文件名") } label: { Label("复制文件名", glyph: .paste) }
+            } label: { IconView(.more, size: 16) }
+                .buttonStyle(PreviewBarButtonStyle(dark: immersive))
+                .accessibilityLabel("更多")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        .background {
+            if mode == .image {
+                LinearGradient(colors: [.black.opacity(0.65), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .ignoresSafeArea(edges: .top)
+            } else {
+                (immersive ? Color.black : Color.paper).ignoresSafeArea(edges: .top)
+            }
+        }
+    }
+
+    // MARK: 不能直接预览
+
+    private var unsupportedCard: some View {
+        let kind = FileNames.kind(of: url.lastPathComponent)
+        let hint: String = switch kind {
+        case .video, .audio: "这个格式系统播放器不支持，可以用 VLC、Infuse 等应用打开"
+        case .archive: "压缩包可在「文件」App 中轻点解压"
+        case .apk: "安装包请用「分享」发送到对应的安装工具"
+        default: "可以用其他应用打开，或在「文件」App 中查看"
+        }
+        return VStack(spacing: 18) {
+            Spacer()
+            FileIcon(name: url.lastPathComponent).scaleEffect(1.6).frame(width: 80, height: 80)
+            VStack(spacing: 6) {
+                Text(url.lastPathComponent)
+                    .font(.headline)
+                    .foregroundStyle(Color.ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                if !meta.isEmpty { Text(meta).font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3) }
+            }
+            Text(hint).font(.footnote).foregroundStyle(Color.ink2).multilineTextAlignment(.center)
+            VStack(spacing: 10) {
+                ShareLink(item: url) {
+                    Label("用其他应用打开", glyph: .share).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillButtonStyle(kind: .primary))
+                Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: {
+                    Label("在「文件」中查看", glyph: .folder).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillButtonStyle(kind: .secondary))
+            }
+            .padding(.top, 8)
+            Spacer()
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 预览页顶栏的圆形按钮（深色画面上用半透明黑底）
+struct PreviewBarButtonStyle: ButtonStyle {
+    var dark: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(dark ? Color.white : Color.ink)
+            .frame(width: 38, height: 38)
+            .background(dark ? AnyShapeStyle(Color.white.opacity(0.14)) : AnyShapeStyle(Color.fillMuted), in: Circle())
+            .contentShape(Circle().inset(by: -4))
+            .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+
+// MARK: - 播放器
+
+/// 系统播放器（AVPlayerViewController）：自带进度、画中画、隔空播放、倍速
+struct PlayerController: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    /// 本地文件或带请求头的直链
+    static func makePlayer(_ url: URL, headers: [String: String] = [:]) -> AVPlayer {
+        var options: [String: Any] = [:]
+        if !headers.isEmpty { options["AVURLAssetHTTPHeaderFieldsKey"] = headers }
+        if let ua = headers["User-Agent"] { options[AVURLAssetHTTPUserAgentKey] = ua }
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        return AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
+    }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.allowsPictureInPicturePlayback = true
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.view.backgroundColor = .black
+        player.play()
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== player { controller.player = player; player.play() }
+    }
+
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
+        controller.player?.pause()
+    }
+}
+
+// MARK: - 图片
+
+/// 本地图片：双指缩放、拖动、双击放大 / 还原，单击切换操作栏
+struct ZoomableImageFile: UIViewRepresentable {
+    let url: URL
+    var onTap: () -> Void = {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.delegate = context.coordinator
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 6
+        scroll.showsVerticalScrollIndicator = false
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.backgroundColor = .black
+        let imageView = UIImageView(image: UIImage(contentsOfFile: url.path))
+        imageView.contentMode = .scaleAspectFit
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
+            imageView.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+            imageView.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor)
+        ])
+        context.coordinator.imageView = imageView
+        let double = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        double.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.singleTap))
+        single.require(toFail: double)
+        scroll.addGestureRecognizer(double)
+        scroll.addGestureRecognizer(single)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) { context.coordinator.onTap = onTap }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var onTap: () -> Void
+        weak var imageView: UIImageView?
+        init(onTap: @escaping () -> Void) { self.onTap = onTap }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        @objc func singleTap() { onTap() }
+
+        @objc func doubleTap(_ g: UITapGestureRecognizer) {
+            guard let scroll = g.view as? UIScrollView else { return }
+            if scroll.zoomScale > 1 {
+                scroll.setZoomScale(1, animated: true)
+            } else {
+                let p = g.location(in: imageView)
+                let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
+                scroll.zoom(to: CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height), animated: true)
+            }
+        }
+    }
+}
+
+// MARK: - 文本
+
+/// 本地文本：只读前 2MB，编码自动识别（UTF-8 / GB18030）
+struct LocalTextView: View {
+    let url: URL
+    @State private var text: String?
+    @State private var truncated = false
+
+    var body: some View {
+        Group {
+            if let text {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if truncated {
+                            Label("文件较大，只显示前 2MB", glyph: .warning).font(.footnote).foregroundStyle(Color.ink3)
+                        }
+                        Text(text)
+                            .font(.mono)
+                            .foregroundStyle(Color.ink)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(16)
+                }
+            } else {
+                Spinner(size: 26).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            let limit = TextPreviewView.limit
+            let data = (try? FileChunks.read(url, offset: 0, length: limit)) ?? Data()
+            truncated = FileChunks.size(of: url) > Int64(limit)
+            text = TextPreviewView.decode(data)
+        }
+    }
+}
+
+// MARK: - 文档（QuickLook，不带它自己的导航栏）
+
+struct QuickLookContent: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: QLPreviewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        init(url: URL) { self.url = url }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
+    }
+}

@@ -20,9 +20,24 @@ struct MediaPreviewView: View {
     @State private var failure: String?
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button { dismiss() } label: { IconView(.close, size: 15) }
+                    .buttonStyle(PreviewBarButtonStyle(dark: true))
+                    .accessibilityLabel("关闭")
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity)
+                // 与左侧按钮等宽，标题保持居中
+                Color.clear.frame(width: 38, height: 38)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
             ZStack {
-                Color.black.ignoresSafeArea()
                 switch item.kind {
                 case .video, .audio:
                     if let failure {
@@ -38,24 +53,16 @@ struct MediaPreviewView: View {
                         .foregroundStyle(.white)
                         .padding(32)
                     } else if let player {
-                        VideoPlayer(player: player)
-                            .ignoresSafeArea(edges: .bottom)
+                        PlayerController(player: player).ignoresSafeArea(edges: .bottom)
                     }
                 case .image:
                     ZoomableImage(url: item.url, headers: item.headers)
                 }
             }
-            .navigationTitle(item.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color.black, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
         .onAppear(perform: startPlayer)
         .onDisappear { player?.pause() }
     }
@@ -63,14 +70,9 @@ struct MediaPreviewView: View {
     private func startPlayer() {
         guard item.kind != .image, let url = URL(string: item.url) else { return }
         failure = nil
-        var options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": item.headers]
-        if let ua = item.headers["User-Agent"] { options[AVURLAssetHTTPUserAgentKey] = ua }
-        let asset = AVURLAsset(url: url, options: options)
-        let playerItem = AVPlayerItem(asset: asset)
-        let p = AVPlayer(playerItem: playerItem)
+        let p = PlayerController.makePlayer(url, headers: item.headers)
+        guard let playerItem = p.currentItem else { return }
         player = p
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        p.play()
         // 盯一会儿播放状态：失败时换成说明 + 重试
         Task { @MainActor in
             for _ in 0..<60 {
@@ -116,27 +118,5 @@ struct ZoomableImage: View {
                     if scale > 1 { scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero } else { scale = 2.5; lastScale = 2.5 }
                 }
             }
-    }
-}
-
-/// 本地文件预览（QuickLook：视频、图片、PDF、文本、Office 文档等）
-struct QuickLookPreview: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> UINavigationController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        return UINavigationController(rootViewController: controller)
-    }
-
-    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
-
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-        init(url: URL) { self.url = url }
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
     }
 }

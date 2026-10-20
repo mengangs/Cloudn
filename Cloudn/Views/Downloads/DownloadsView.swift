@@ -210,8 +210,8 @@ struct DownloadsView: View {
             }
             .sensoryFeedback(.selection, trigger: selection)
             .task { await sampleSpeed() }
-            .sheet(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
-                QuickLookPreview(url: item.url).ignoresSafeArea()
+            .fullScreenCover(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
+                FilePreviewView(url: item.url)
             }
         }
     }
