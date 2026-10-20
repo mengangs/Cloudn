@@ -12,6 +12,9 @@ final class TransferProgress: @unchecked Sendable {
     private var _segmentsDone = 0
     private var _segmentsTotal = 0
     private var _hlsBytes: Int64 = 0
+    private var _title: String?
+    private var _peers = 0
+    private var _knownPeers = 0
 
     init(chunks: [DownloadChunk], total: Int64) {
         _chunks = chunks
@@ -25,6 +28,13 @@ final class TransferProgress: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return _chunks.reduce(0) { $0 + $1.received } + _hlsBytes
     }
+
+    /// BT：元数据到手后的种子名（任务名随之更新）
+    var title: String? { lock.lock(); defer { lock.unlock() }; return _title }
+    func setTitle(_ t: String) { lock.lock(); _title = t; lock.unlock() }
+    /// BT：已连接 / 已知的 peer 数
+    var peers: (connected: Int, known: Int) { lock.lock(); defer { lock.unlock() }; return (_peers, _knownPeers) }
+    func setPeers(_ connected: Int, known: Int) { lock.lock(); _peers = connected; _knownPeers = known; lock.unlock() }
 
     var segments: (done: Int, total: Int) { lock.lock(); defer { lock.unlock() }; return (_segmentsDone, _segmentsTotal) }
 
@@ -56,7 +66,7 @@ final class TransferProgress: @unchecked Sendable {
     }
 
     func setReceived(_ index: Int, _ value: Int64) {
-        lock.lock(); _chunks[index].received = value; lock.unlock()
+        lock.lock(); if index < _chunks.count { _chunks[index].received = value }; lock.unlock()
     }
 
     /// 长度未知的流读完后，把实际长度回填为总大小

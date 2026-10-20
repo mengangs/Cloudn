@@ -10,6 +10,9 @@ public typealias TrackMerger = @Sendable (_ video: URL, _ audio: URL, _ output: 
 /// - 设置项通过闭包读取，修改后对下一个开始的任务即时生效。
 public actor DownloadEngine {
     public nonisolated let downloadsDirectory: URL
+    /// BT 元数据缓存（解析页取到的种子信息，开始下载时直接用）
+    public nonisolated let torrentCacheDirectory: URL
+    private let torrentNetwork: TorrentNetwork
     private let workDirectory: URL
     private let stateFile: URL
     private let settings: @Sendable () -> DownloadSettings
@@ -37,8 +40,11 @@ public actor DownloadEngine {
     private let client: HTTPClient
 
     public init(baseDirectory: URL, downloadsDirectory: URL, client: HTTPClient = .shared,
+                torrentNetwork: TorrentNetwork = TorrentNetworks.system,
                 settings: @escaping @Sendable () -> DownloadSettings) {
         self.downloadsDirectory = downloadsDirectory
+        torrentCacheDirectory = baseDirectory.appendingPathComponent("torrents", isDirectory: true)
+        self.torrentNetwork = torrentNetwork
         workDirectory = baseDirectory.appendingPathComponent("work", isDirectory: true)
         stateFile = baseDirectory.appendingPathComponent("downloads.json")
         self.settings = settings
@@ -310,6 +316,11 @@ public actor DownloadEngine {
             try? FileManager.default.removeItem(at: output)
             try await merger(video, audio, output)
             return output
+        case .torrent(let files):
+            guard let magnet = MagnetLink.parse(request.url) else { throw TransferError("磁力链接无效") }
+            return try await TorrentTransfer(magnet: magnet, selection: files, workDir: dir, cacheDir: torrentCacheDirectory, progress: box,
+                                             network: torrentNetwork, client: client, limiter: limiter,
+                                             extraTrackers: config.useExtraTrackers ? TorrentDefaults.publicTrackers : []).run()
         }
     }
 
@@ -337,6 +348,11 @@ public actor DownloadEngine {
         if case .hls = request.kind, output.pathExtension == "ts" {
             name = (name as NSString).deletingPathExtension + ".ts"
         }
+        if case .torrent = request.kind {
+            // 种子的产物名由元数据决定（单文件 = 文件名，多文件 = 目录名）
+            name = FileNames.sanitize(output.lastPathComponent)
+            if name.isEmpty { name = "download" }
+        }
         let folder = FileNames.sanitizeRelativePath(request.folder) ?? ""
         let dir = folder.isEmpty ? downloadsDirectory : downloadsDirectory.appendingPathComponent(folder, isDirectory: true)
         let fm = FileManager.default
@@ -351,7 +367,7 @@ public actor DownloadEngine {
             Log.info("下载完成：\(request.fileName)")
             items[i].finishedAt = Date()
             items[i].speed = 0
-            let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value ?? items[i].receivedBytes
+            let size = Self.size(of: target) ?? items[i].receivedBytes
             items[i].totalBytes = size
             items[i].receivedBytes = size
             items[i].chunks = []
@@ -390,6 +406,20 @@ public actor DownloadEngine {
             Task { await onFailed(item) }
         }
         schedule()
+    }
+
+    /// 文件大小；目录（多文件种子）为其中所有文件之和
+    static func size(of url: URL) -> Int64? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
+        guard isDir.boolValue else { return (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value }
+        var total: Int64 = 0
+        let walker = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
+        while let f = walker?.nextObject() as? URL {
+            total += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
     }
 
     static func uniqueURL(in dir: URL, name: String) -> URL {
@@ -625,6 +655,10 @@ public actor DownloadEngine {
         items[i].receivedBytes = box.received
         let total = box.total
         if total > 0 { items[i].totalBytes = total }
+        let peers = box.peers
+        items[i].peers = peers.connected
+        items[i].knownPeers = peers.known
+        if let title = box.title, !title.isEmpty, items[i].request.fileName != title { items[i].request.fileName = title }
         let seg = box.segments
         if seg.total > 0 {
             items[i].segmentsDone = seg.done

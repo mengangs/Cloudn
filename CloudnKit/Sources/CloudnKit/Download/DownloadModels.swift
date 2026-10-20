@@ -8,6 +8,8 @@ public enum DownloadKind: Codable, Sendable, Hashable {
     case hls
     /// 音视频分轨（B 站 DASH）：两路分别下载，完成后由后处理合轨
     case dash(audioURL: String)
+    /// BT（url 为磁力链接）：files 为选中的文件序号，nil 表示全部
+    case torrent(files: [Int]?)
 }
 
 /// 下载完成后要交还给网盘解析器清理的令牌
@@ -180,6 +182,9 @@ public struct DownloadItem: Codable, Identifiable, Sendable, Hashable {
     public var exportedTo: String?
     /// 瞬时速度（不落盘）
     public var speed: Double = 0
+    /// BT：已连接 / 已知的 peer 数（不落盘）
+    public var peers = 0
+    public var knownPeers = 0
 
     enum CodingKeys: String, CodingKey {
         case id, request, status, totalBytes, receivedBytes, errorMessage, createdAt, finishedAt, outputPath, chunks, phase, segmentsDone, segmentsTotal
@@ -240,6 +245,8 @@ public struct DownloadSettings: Sendable {
     public var speedLimit: Int64
     /// 按来源（DownloadRequest.source，即平台显示名）覆盖单任务连接数
     public var connectionsBySource: [String: Int]
+    /// BT 下载时附加内置的公共 tracker
+    public var useExtraTrackers = true
 
     public init(maxConcurrentTasks: Int = 3, connectionsPerTask: Int = 8, retryCount: Int = 3,
                 speedLimit: Int64 = 0, connectionsBySource: [String: Int] = [:]) {
