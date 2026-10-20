@@ -313,13 +313,16 @@ struct LicenseView: View {
                     .font(.cardTitle)
                     .foregroundStyle(Color.ink)
                 Text("""
-                部分网盘与视频平台的协议实现参考了开源项目 YunX（https://github.com/CYQawa/YunX，AGPL-3.0）。\
-                今日头条、贴吧、公众号、豆瓣、酷安、皮皮虾、最右、知乎、X、TikTok、Instagram、Threads 的解析参考了 \
-                ParseHub（https://github.com/z-mio/ParseHub，MIT License，Copyright (c) 2024 梓澪）。\
+                部分网盘与视频平台的协议实现参考了开源项目 YunX（https://github.com/CYQawa/YunX，AGPL-3.0），\
                 依照该许可，Cloudn 的完整源代码同样以 AGPL-3.0 开放。
 
+                其他视频平台的解析分别参考了：ParseHub（https://github.com/z-mio/ParseHub，MIT License，Copyright (c) 2024 梓澪）、\
+                parse-video（https://github.com/wujunwei928/parse-video，MIT License，Copyright (c) 2022 wujunwei928）、\
+                yt-dlp（https://github.com/yt-dlp/yt-dlp，Unlicense / 公有领域）。\
+                YouTube 签名求解脚本取自 yt-dlp-ejs（Unlicense），其中打包了 meriyah（ISC License）与 astring（MIT License）。
+
                 平台图标改绘自 Arcticons（https://github.com/Arcticons-Team/Arcticons，CC BY-SA 4.0），\
-                115、光鸭云盘、蓝奏云、蓝奏云优享版、AcFun 及上述 12 个新平台的图标为本项目按同一规格绘制，同样以 CC BY-SA 4.0 提供。\
+                115、光鸭云盘、蓝奏云、蓝奏云优享版、AcFun 及后来新增平台的图标为本项目按同一规格绘制，同样以 CC BY-SA 4.0 提供。\
                 实心平台图标中，百度、哔哩哔哩、抖音、快手、微博、小红书、Pixiv、GitHub 取自 Simple Icons（https://simpleicons.org，CC0 1.0），\
                 其余由本项目在上述线性图标基础上绘制（CC BY-SA 4.0）；\
                 各平台名称与标识归其所有者，仅用于标明来源。

@@ -120,7 +120,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv, zhihu
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
 
     public var id: String { rawValue }
 
@@ -140,11 +140,12 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .xiaohongshu: return "小红书"
         case .pixiv: return "Pixiv"
         case .zhihu: return "知乎"
+        case .yuanbao: return "腾讯元宝"
         }
     }
 
     /// 网盘账号（区别于视频平台账号）
-    public var isDrive: Bool { ![.bilibili, .xiaohongshu, .pixiv, .zhihu].contains(self) }
+    public var isDrive: Bool { ![.bilibili, .xiaohongshu, .pixiv, .zhihu, .yuanbao].contains(self) }
 }
 
 /// 解析过程中给用户看的错误（文案即提示语）

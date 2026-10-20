@@ -313,6 +313,7 @@ extension AccountKind {
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
         case .pixiv: return URL(string: "https://accounts.pixiv.net/login")!
         case .zhihu: return URL(string: "https://www.zhihu.com/signin")!
+        case .yuanbao: return URL(string: YuanbaoAccount.loginURL)!
         }
     }
 
@@ -334,6 +335,7 @@ extension AccountKind {
         case .xiaohongshu: return VideoHTTP.uaChrome
         case .pixiv: return VideoHTTP.uaChrome
         case .zhihu: return VideoHTTP.uaChrome
+        case .yuanbao: return VideoHTTP.uaChrome
         }
     }
 
@@ -352,6 +354,7 @@ extension AccountKind {
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
         case .pixiv: return .cookies(["pixiv.net"])
         case .zhihu: return .cookies(["zhihu.com"])
+        case .yuanbao: return .cookies(["yuanbao.tencent.com", "tencent.com"])
         }
     }
 
@@ -373,6 +376,7 @@ extension AccountKind {
         case .pixiv: return PixivSession.isLoggedIn(cookie: credential)
         // d_c0 游客也有；登录后才有 z_c0
         case .zhihu: return credential.contains("z_c0=") && credential.contains("d_c0=")
+        case .yuanbao: return YuanbaoAccount.looksLoggedIn(cookie: credential)
         }
     }
 
@@ -392,6 +396,7 @@ extension AccountKind {
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "登录后可解析 R18 与受限作品"
         case .zhihu: return "知乎接口要求登录后才能解析回答、文章与想法"
+        case .yuanbao: return "解析微信视频号需要登录腾讯元宝"
         }
     }
 
@@ -411,6 +416,7 @@ extension AccountKind {
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
         case .zhihu: return "需包含 z_c0 与 d_c0"
+        case .yuanbao: return "需包含 hy_user 与 hy_token"
         }
     }
 
@@ -437,6 +443,7 @@ extension AccountKind {
         case .xiaohongshu: return "book.closed.fill"
         case .pixiv: return "paintpalette.fill"
         case .zhihu: return "questionmark.bubble.fill"
+        case .yuanbao: return "sparkles"
         }
     }
 

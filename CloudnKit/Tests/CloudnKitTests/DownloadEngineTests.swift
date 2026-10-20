@@ -123,6 +123,25 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(item.outputPath, "same (1).bin")
     }
 
+    func testM3U8AudioRendition() {
+        let text = """
+        #EXTM3U
+        #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="a1",DEFAULT=NO,URI="audio_lo.m3u8"
+        #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="a2",DEFAULT=YES,URI="audio_hi.m3u8"
+        #EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO="aud"
+        v720.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aud"
+        v1080.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=300000
+        v360.m3u8
+        """
+        let p = M3U8.parse(text, baseURL: "https://h/p/master.m3u8")
+        XCTAssertEqual(p.bestVariant?.url, "https://h/p/v1080.m3u8")
+        XCTAssertEqual(p.bestVariant?.audio, "https://h/p/audio_hi.m3u8")
+        let plain = M3U8.parse("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n", baseURL: "https://h/p/m.m3u8")
+        XCTAssertNil(plain.bestVariant?.audio)
+    }
+
     func testM3U8Parse() {
         let p = M3U8.parse("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k.bin\",IV=0x000102030405060708090a0b0c0d0e0f\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2,\nhttps://cdn/a.m4s\n", baseURL: "https://h/p/list.m3u8")
         XCTAssertEqual(p.mapURL, "https://h/p/init.mp4")

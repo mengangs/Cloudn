@@ -223,14 +223,34 @@ struct RangeTransfer {
         }
     }
 
+    /// 单次请求的范围上限：YouTube（googlevideo.com）对一次拉取超过约 10MB 的请求限速，按 10MB 一段分多次请求
+    static func requestCap(for url: String) -> Int64? {
+        guard let host = URL(string: url)?.host?.lowercased(), host.hasSuffix("googlevideo.com") else { return nil }
+        return 10 * 1024 * 1024
+    }
+
     private func fetchChunk(_ index: Int, source: Int = 0, scheduler: ChunkScheduler? = nil) async throws {
+        let picked = sources[min(max(0, source), sources.count - 1)].url
+        guard let cap = Self.requestCap(for: picked), progress.chunk(index).end >= 0 else {
+            return try await fetchPart(index, source: source, scheduler: scheduler, cap: nil)
+        }
+        while !progress.chunk(index).isDone {
+            let before = progress.chunk(index).received
+            try await fetchPart(index, source: source, scheduler: scheduler, cap: cap)
+            if progress.chunk(index).received == before { throw TransferError("连接提前断开") }
+        }
+    }
+
+    /// 下载分片（cap 不为空时只取从当前位置起至多 cap 字节，由 fetchChunk 循环取完）
+    private func fetchPart(_ index: Int, source: Int, scheduler: ChunkScheduler?, cap: Int64?) async throws {
         let chunk = progress.chunk(index)
         if chunk.isDone { return }
         let single = progress.chunks.count == 1
         var offset = chunk.start + chunk.received
         var request = makeRequest(source: source)
+        let partEnd: Int64 = cap.map { min(chunk.end, offset + $0 - 1) } ?? chunk.end
         if offset > 0 || chunk.end >= 0 {
-            request.setValue("bytes=\(offset)-\(chunk.end >= 0 ? String(chunk.end) : "")", forHTTPHeaderField: "Range")
+            request.setValue("bytes=\(offset)-\(partEnd >= 0 ? String(partEnd) : "")", forHTTPHeaderField: "Range")
         }
         let handle = try FileHandle(forWritingTo: destination)
         defer { try? handle.close() }
@@ -279,6 +299,12 @@ struct RangeTransfer {
         if let failure { throw failure }
         if chunk.end < 0 {
             progress.finishOpenEnded(index)
+        } else if cap != nil {
+            // 分段请求：这一段没取完（且分片也没被切短到已完成）才算断开
+            let current = progress.chunk(index)
+            if !current.isDone && current.start + current.received <= min(partEnd, current.end) {
+                throw TransferError("连接提前断开")
+            }
         } else if !progress.chunk(index).isDone {
             throw TransferError("连接提前断开")
         }

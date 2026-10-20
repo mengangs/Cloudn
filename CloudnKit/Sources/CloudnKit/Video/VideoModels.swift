@@ -5,6 +5,9 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
     case douyin, xiaohongshu, kuaishou, weibo, acfun, bilibili, pixiv
     case toutiao, tieba, weixin, douban, coolapk, pipix, zuiyou, zhihu
     case twitter, tiktok, instagram, threads
+    case ixigua, haokan, weishi, kge, huoshan, lishipin, lvzhou, meipai, pipigaoxiao, xinpianchang, huya, cctv
+    case reddit, pinterest, tumblr, imgur, bluesky, snapchat, vimeo, dailymotion, twitch, soundcloud, medium, bangumi
+    case youtube, facebook, xiaoheihe, wxchannels
 
     public var id: String { rawValue }
 
@@ -29,6 +32,34 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .tiktok: return "TikTok"
         case .instagram: return "Instagram"
         case .threads: return "Threads"
+        case .ixigua: return "西瓜视频"
+        case .haokan: return "好看视频"
+        case .weishi: return "微视"
+        case .kge: return "全民K歌"
+        case .huoshan: return "抖音火山版"
+        case .lishipin: return "梨视频"
+        case .lvzhou: return "绿洲"
+        case .meipai: return "美拍"
+        case .pipigaoxiao: return "皮皮搞笑"
+        case .xinpianchang: return "新片场"
+        case .huya: return "虎牙"
+        case .cctv: return "央视网"
+        case .reddit: return "Reddit"
+        case .pinterest: return "Pinterest"
+        case .tumblr: return "Tumblr"
+        case .imgur: return "Imgur"
+        case .bluesky: return "Bluesky"
+        case .snapchat: return "Snapchat"
+        case .vimeo: return "Vimeo"
+        case .dailymotion: return "Dailymotion"
+        case .twitch: return "Twitch"
+        case .soundcloud: return "SoundCloud"
+        case .medium: return "Medium"
+        case .bangumi: return "Bangumi"
+        case .youtube: return "YouTube"
+        case .facebook: return "Facebook"
+        case .xiaoheihe: return "小黑盒"
+        case .wxchannels: return "微信视频号"
         }
     }
 
@@ -39,6 +70,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .xiaohongshu: return .xiaohongshu
         case .pixiv: return .pixiv
         case .zhihu: return .zhihu
+        case .wxchannels: return .yuanbao
         default: return nil
         }
     }

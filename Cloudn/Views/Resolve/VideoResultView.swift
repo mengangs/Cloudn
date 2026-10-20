@@ -146,7 +146,7 @@ struct VideoResultView: View {
 
     private var videoSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(title: videos.count > 1 ? "视频 \(videos.count) 个" : "视频")
+            SectionLabel(title: (videos.allSatisfy { $0.kind == .audio } ? "音频" : "视频") + (videos.count > 1 ? " \(videos.count) 个" : ""))
             VStack(spacing: 0) {
                 ForEach(Array(videos.enumerated()), id: \.element.id) { index, media in
                     HStack(spacing: 12) {

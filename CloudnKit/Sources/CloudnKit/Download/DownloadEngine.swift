@@ -295,9 +295,16 @@ public actor DownloadEngine {
                                     mirrors: request.mirrors ?? []).run()
             return target
         case .hls:
-            return try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),
-                                         progress: box, connections: connections, retryCount: config.retryCount,
-                                         client: client, limiter: limiter).run()
+            let result = try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),
+                                               progress: box, connections: connections, retryCount: config.retryCount,
+                                               client: client, limiter: limiter).run()
+            // 独立音轨：两边都是 fMP4 才能用 AVFoundation 无损合并；TS 合不了，只保留视频（与之前一致）
+            guard let audio = result.audio, result.video.pathExtension == "mp4", audio.pathExtension == "mp4",
+                  let merger = await currentMerger() else { return result.video }
+            let output = dir.appendingPathComponent("merged.mp4")
+            try? FileManager.default.removeItem(at: output)
+            try await merger(result.video, audio, output)
+            return output
         case .dash(let audioURL):
             let video = dir.appendingPathComponent("video.m4s")
             let audio = dir.appendingPathComponent("audio.m4s")

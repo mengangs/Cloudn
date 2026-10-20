@@ -32,7 +32,35 @@ public final class VideoParseService: Sendable {
             DoubanParser(),
             CoolapkParser(),
             PipixParser(),
-            ZuiyouParser()
+            ZuiyouParser(),
+            IxiguaParser(),
+            HaokanParser(),
+            WeishiParser(),
+            KgeParser(),
+            HuoshanParser(),
+            LishipinParser(),
+            LvzhouParser(),
+            MeipaiParser(),
+            PipigaoxiaoParser(),
+            XinpianchangParser(),
+            HuyaParser(),
+            CctvParser(),
+            VimeoParser(),
+            DailymotionParser(),
+            TwitchParser(),
+            SoundCloudParser(),
+            MediumParser(),
+            BangumiParser(),
+            RedditParser(),
+            PinterestParser(),
+            TumblrParser(),
+            ImgurParser(),
+            BlueskyParser(),
+            SnapchatParser(),
+            WxChannelsParser(),
+            YouTubeParser(),
+            FacebookParser(extractor: webExtractor),
+            XiaoheiheParser(extractor: webExtractor)
         ]
         parsers = Dictionary(uniqueKeysWithValues: list.map { ($0.platform, $0) })
     }
@@ -102,6 +130,8 @@ public enum AccountValidator {
             return await PixivParser.validate(cookie: cookie)
         case .zhihu:
             return await ZhihuParser.validate(cookie: cookie)
+        case .yuanbao:
+            return await WxChannelsParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

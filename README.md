@@ -26,7 +26,8 @@ Cloudn 是一款个人独立开发的 iOS 应用：粘贴网盘分享链接即�
 - **网盘分享解析**：夸克网盘、UC 网盘、百度网盘、迅雷网盘、115 网盘、123 云盘、139 网盘、光鸭云盘、蓝奏云、蓝奏云优享版，自动识别链接里的提取码（迅雷中文口令也能直接粘贴解析），支持多级目录浏览、多选、整个文件夹下载（保留目录结构）
 - **游客下载**：蓝奏云 / 蓝奏云优享版 / 光鸭云盘（公开分享） / UC 未登录即可下载，夸克（约 50MB 以内）与 115（小文件）也可直接下载；登录夸克后不限大小，直链失败时自动回退「临时转存后取链」并在下载完成后清理
 - **登录后下载**：百度、迅雷借助临时转存取直链、取完即删；115 大文件转存后走电脑端通道取链，下载完成后自动清理；123、139 登录后直接取分享直链。未登录时这些网盘也能浏览分享内容
-- **短视频 / 图集解析**：抖音、小红书（需登录，图集自动换去水印原图）、快手、微博（含 Live 图、动图、转发）、AcFun、Pixiv（登录后可解析受限作品）、哔哩哔哩（视频与动态 / 图文；登录后 1080P+，DASH 音视频下载后用 AVFoundation 无损合轨）、今日头条、百度贴吧、微信公众号、豆瓣、酷安、皮皮虾、最右、知乎（需登录）、X（Twitter）、TikTok、Instagram、Threads
+- **短视频 / 图集解析**：抖音、小红书（需登录，图集自动换去水印原图）、快手、微博（含 Live 图、动图、转发）、AcFun、Pixiv（登录后可解析受限作品）、哔哩哔哩（视频与动态 / 图文；登录后 1080P+，DASH 音视频下载后用 AVFoundation 无损合轨）、今日头条、百度贴吧、微信公众号、微信视频号（需登录腾讯元宝）、豆瓣、酷安、皮皮虾、最右、知乎（需登录）、小黑盒、西瓜视频、好看视频、微视、全民K歌、抖音火山版、梨视频、绿洲、美拍、皮皮搞笑、新片场、虎牙（录像 / 剪辑）、央视网、YouTube、X（Twitter）、TikTok、Instagram、Threads、Facebook、Reddit、Pinterest、Tumblr、Imgur、Bluesky、Snapchat、Vimeo、Dailymotion、Twitch（剪辑 / 录像）、SoundCloud、Medium、Bangumi
+- **网页嗅探**：识别不了的网页在应用内浏览器打开，自动抓取页面播放的视频 / 音频地址（mp4、m3u8）下载；专门解析失败时也可改用嗅探
 - **高速下载**：Range 多连接分片并发（空闲连接自动接手剩余最多的分片，明显变慢的连接自动重连）、断点续传（任务表与分片进度持久化，重启后可继续）；切到后台或锁屏后，普通文件剩余分片交给系统后台下载会话继续下载，完成后发通知、m3u8（含 AES-128）分片下载；直链过期（403 / 404 / 410）时自动重新取链继续一次，也可手动「重新获取直链并继续」——分享、我的网盘、短视频 / 图集的下载都支持
 - **登录后下载（光鸭）**：分享者关闭免登录下载时，登录光鸭后自动临时转存到个人盘取链，下载完成后清理
 - **转存到我的网盘**：夸克、UC、百度、迅雷、115、123、139、光鸭、蓝奏云优享版登录后可把分享里的文件 / 文件夹（单个、多选或整个目录）转存到自己网盘，可逐级选择目标文件夹
@@ -45,9 +46,9 @@ Cloudn 是一款个人独立开发的 iOS 应用：粘贴网盘分享链接即�
 - **检查更新**：新版本可直接从 GitHub（可走镜像）下载 IPA；发布说明里附了网盘链接时，「网盘下载」自动在分享里找到安装包并下载，做不到时打开分享页
 - **收藏与历史**：常用分享一键打开，长按主屏幕图标可「粘贴并解析」或直接打开最近收藏；`cloudn://resolve?text=<链接>` 可从快捷指令等外部唤起解析
 
-除各网盘 / 视频平台与 GitHub 自身的接口外，Cloudn 不依赖任何第三方服务。
+除各网盘 / 视频平台与 GitHub 自身的接口外（视频号借助腾讯自家的元宝接口），Cloudn 不依赖任何第三方服务。
 
-暂不支持：微信视频号、小黑盒（只能借助第三方服务取数据，出于隐私不接入）、YouTube / Facebook / Snapchat（依赖 yt-dlp，无法在 iOS 上运行）。
+YouTube 的签名求解、小黑盒与 Facebook 的兜底解析会在手机本地运行网页脚本（JavaScriptCore / 隐藏网页），数据不经过第三方服务器。暂不支持：优酷、爱奇艺、腾讯视频、芒果 TV 等长视频平台（DRM 版权加密）、直播流。
 
 ## 构建
 
@@ -97,9 +98,9 @@ Cloudn 以 [GNU AGPL-3.0](LICENSE) 发布。
 
 Cloudn 是独立开发的应用，与 YunX 项目及其作者没有关联；但其中部分网盘与视频平台的协议实现参考了开源项目 [YunX](https://github.com/CYQawa/YunX)（AGPL-3.0），依照该许可，Cloudn 的源代码同样以 AGPL-3.0 开放，相关文件头部已注明来源。
 
-今日头条、贴吧、公众号、豆瓣、酷安、皮皮虾、最右、知乎、X、TikTok、Instagram、Threads 的解析参考了 [ParseHub](https://github.com/z-mio/ParseHub)（MIT License，Copyright (c) 2024 梓澪）。
+其他视频平台的解析分别参考了 [ParseHub](https://github.com/z-mio/ParseHub)（MIT License，Copyright (c) 2024 梓澪）、[parse-video](https://github.com/wujunwei928/parse-video)（MIT License，Copyright (c) 2022 wujunwei928）与 [yt-dlp](https://github.com/yt-dlp/yt-dlp)（Unlicense）；YouTube 签名求解脚本取自 yt-dlp-ejs（Unlicense，内含 meriyah / ISC 与 astring / MIT）。
 
-- 线性平台图标改绘自 [Arcticons](https://github.com/Arcticons-Team/Arcticons)（CC BY-SA 4.0）；115、光鸭、蓝奏云、蓝奏优享、AcFun 及新增的 12 个平台为本项目按同规格绘制（CC BY-SA 4.0）
+- 线性平台图标改绘自 [Arcticons](https://github.com/Arcticons-Team/Arcticons)（CC BY-SA 4.0）；115、光鸭、蓝奏云、蓝奏优享、AcFun 及后来新增的平台为本项目按同规格绘制（CC BY-SA 4.0）
 - 实心平台图标中百度、哔哩哔哩、抖音、快手、微博、小红书、Pixiv、GitHub 取自 [Simple Icons](https://simpleicons.org)（CC0 1.0），其余由本项目绘制（CC BY-SA 4.0）
 - 标题字体为[思源宋体](https://github.com/notofonts/noto-cjk)子集（SIL Open Font License 1.1）
 - 各平台名称与标识归其所有者，仅用于标明来源

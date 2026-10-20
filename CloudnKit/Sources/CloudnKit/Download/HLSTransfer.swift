@@ -22,6 +22,10 @@ struct M3U8 {
     }
 
     var variants: [(bandwidth: Int, url: String)] = []
+    /// 与 variants 一一对应：该清晰度引用的独立音轨组（EXT-X-STREAM-INF 的 AUDIO 属性）
+    var variantAudioGroups: [String?] = []
+    /// 独立音轨：组名 → 音轨播放列表地址（同组有多条时取 DEFAULT=YES 的）
+    var audioRenditions: [String: String] = [:]
     var segments: [Segment] = []
     var mapURL: String?
 
@@ -32,11 +36,22 @@ struct M3U8 {
         var key: Key?
         var sequence = 0
         var pendingBandwidth: Int?
+        var pendingAudio: String?
+        var defaultAudio = Set<String>()
         for rawLine in text.components(separatedBy: .newlines) {
             let line = rawLine.trimmed
             if line.isEmpty { continue }
             if line.hasPrefix("#EXT-X-STREAM-INF") {
                 pendingBandwidth = Int(attribute("BANDWIDTH", in: line) ?? "") ?? 0
+                pendingAudio = attribute("AUDIO", in: line)
+            } else if line.hasPrefix("#EXT-X-MEDIA:") {
+                guard attribute("TYPE", in: line) == "AUDIO", let group = attribute("GROUP-ID", in: line),
+                      let uri = attribute("URI", in: line) else { continue }
+                let isDefault = attribute("DEFAULT", in: line) == "YES"
+                if playlist.audioRenditions[group] == nil || (isDefault && !defaultAudio.contains(group)) {
+                    playlist.audioRenditions[group] = resolve(uri, base: baseURL)
+                }
+                if isDefault { defaultAudio.insert(group) }
             } else if line.hasPrefix("#EXT-X-MEDIA-SEQUENCE:") {
                 sequence = Int(line.dropFirst("#EXT-X-MEDIA-SEQUENCE:".count)) ?? 0
             } else if line.hasPrefix("#EXT-X-KEY") {
@@ -53,13 +68,22 @@ struct M3U8 {
                 continue
             } else if let bw = pendingBandwidth {
                 playlist.variants.append((bw, resolve(line, base: baseURL)))
+                playlist.variantAudioGroups.append(pendingAudio)
                 pendingBandwidth = nil
+                pendingAudio = nil
             } else {
                 playlist.segments.append(Segment(url: resolve(line, base: baseURL), key: key, sequence: sequence))
                 sequence += 1
             }
         }
         return playlist
+    }
+
+    /// 码率最高的清晰度，以及它引用的独立音轨（没有则为 nil）
+    var bestVariant: (url: String, audio: String?)? {
+        guard let i = variants.indices.max(by: { variants[$0].bandwidth < variants[$1].bandwidth }) else { return nil }
+        let group = i < variantAudioGroups.count ? variantAudioGroups[i] : nil
+        return (variants[i].url, group.flatMap { audioRenditions[$0] })
     }
 
     static func attribute(_ name: String, in line: String) -> String? {
@@ -98,23 +122,44 @@ struct HLSTransfer {
     let client: HTTPClient
     var limiter: RateLimiter?
 
-    /// 返回拼接后的文件
-    func run() async throws -> URL {
-        var playlistURL = url
-        var playlist = try await load(playlistURL)
+    /// 下载结果：视频（或音视频一体）文件，以及独立音轨文件（有的话）
+    struct Output {
+        let video: URL
+        let audio: URL?
+    }
+
+    /// 返回拼接后的文件。主播放列表里最高清晰度带独立音轨时（Reddit、Vimeo 等），音轨也一并下载，交给调用方合并
+    func run() async throws -> Output {
+        var playlist = try await load(url)
+        var audioURL: String?
         if playlist.isMaster {
-            guard let best = playlist.variants.max(by: { $0.bandwidth < $1.bandwidth }) else { throw TransferError("播放列表为空") }
-            playlistURL = best.url
-            playlist = try await load(playlistURL)
+            guard let best = playlist.bestVariant else { throw TransferError("播放列表为空") }
+            audioURL = best.audio
+            playlist = try await load(best.url)
         }
-        let segments = playlist.segments
-        guard !segments.isEmpty else { throw TransferError("播放列表里没有分片") }
+        guard !playlist.segments.isEmpty else { throw TransferError("播放列表里没有分片") }
+        var audioPlaylist: M3U8?
+        if let audioURL, let list = try? await load(audioURL), !list.segments.isEmpty { audioPlaylist = list }
 
         let fm = FileManager.default
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
-        let done = segments.indices.filter { fm.fileExists(atPath: segmentURL($0).path) }.count
-        progress.setSegments(done: done, total: segments.count)
+        let audioDir = workDir.appendingPathComponent("audio", isDirectory: true)
+        if audioPlaylist != nil { try fm.createDirectory(at: audioDir, withIntermediateDirectories: true) }
+        let total = playlist.segments.count + (audioPlaylist?.segments.count ?? 0)
+        let done = playlist.segments.indices.filter { fm.fileExists(atPath: segmentURL($0, in: workDir).path) }.count
+            + (audioPlaylist?.segments.indices.filter { fm.fileExists(atPath: segmentURL($0, in: audioDir).path) }.count ?? 0)
+        progress.setSegments(done: done, total: total)
 
+        let video = try await download(playlist, in: workDir, name: "output")
+        guard let audioPlaylist else { return Output(video: video, audio: nil) }
+        let audio = try await download(audioPlaylist, in: audioDir, name: "audio")
+        return Output(video: video, audio: audio)
+    }
+
+    /// 并发下载一个媒体播放列表的全部分片并按序拼接；fMP4 输出 .mp4，否则 .ts
+    private func download(_ playlist: M3U8, in dir: URL, name: String) async throws -> URL {
+        let fm = FileManager.default
+        let segments = playlist.segments
         var keys: [String: Data] = [:]
         for uri in Set(segments.compactMap { $0.key?.uri }) {
             let r = try await client.send(.get(uri, headers: headers.sortedPairs))
@@ -122,20 +167,20 @@ struct HLSTransfer {
             keys[uri] = r.body
         }
 
-        let pending = segments.indices.filter { !fm.fileExists(atPath: segmentURL($0).path) }
+        let pending = segments.indices.filter { !fm.fileExists(atPath: segmentURL($0, in: dir).path) }
         try await withThrowingTaskGroup(of: Void.self) { group in
             var iterator = pending.makeIterator()
             for _ in 0..<max(1, min(connections, 6, pending.count)) {
                 guard let i = iterator.next() else { break }
-                group.addTask { try await self.fetchSegment(i, segments[i], keys: keys) }
+                group.addTask { try await self.fetchSegment(i, segments[i], keys: keys, dir: dir) }
             }
             while try await group.next() != nil {
-                if let i = iterator.next() { group.addTask { try await self.fetchSegment(i, segments[i], keys: keys) } }
+                if let i = iterator.next() { group.addTask { try await self.fetchSegment(i, segments[i], keys: keys, dir: dir) } }
             }
         }
 
         let isFMP4 = playlist.mapURL != nil
-        let output = workDir.appendingPathComponent(isFMP4 ? "output.mp4" : "output.ts")
+        let output = dir.appendingPathComponent(name + (isFMP4 ? ".mp4" : ".ts"))
         _ = fm.createFile(atPath: output.path, contents: nil)
         let out = try FileHandle(forWritingTo: output)
         defer { try? out.close() }
@@ -145,7 +190,7 @@ struct HLSTransfer {
             try out.write(contentsOf: r.body)
         }
         for i in segments.indices {
-            try out.write(contentsOf: try Data(contentsOf: segmentURL(i)))
+            try out.write(contentsOf: try Data(contentsOf: segmentURL(i, in: dir)))
         }
         return output
     }
@@ -158,11 +203,11 @@ struct HLSTransfer {
         return M3U8.parse(text, baseURL: r.url)
     }
 
-    private func segmentURL(_ i: Int) -> URL {
-        workDir.appendingPathComponent(String(format: "seg_%05d.bin", i))
+    private func segmentURL(_ i: Int, in dir: URL) -> URL {
+        dir.appendingPathComponent(String(format: "seg_%05d.bin", i))
     }
 
-    private func fetchSegment(_ index: Int, _ segment: M3U8.Segment, keys: [String: Data]) async throws {
+    private func fetchSegment(_ index: Int, _ segment: M3U8.Segment, keys: [String: Data], dir: URL) async throws {
         var attempt = 0
         while true {
             do {
@@ -176,7 +221,7 @@ struct HLSTransfer {
                 }
                 // 已被暂停的这一轮不再落盘；原子写入自带唯一临时文件，快速暂停 / 继续时两轮不会写同一个 .tmp
                 if Task.isCancelled { throw CancellationError() }
-                try data.write(to: segmentURL(index), options: .atomic)
+                try data.write(to: segmentURL(index, in: dir), options: .atomic)
                 progress.segmentFinished(bytes: Int64(data.count))
                 return
             } catch {
