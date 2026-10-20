@@ -16,7 +16,7 @@ struct PlatformConnectionsView: View {
     @Environment(AppModel.self) private var app
 
     private var sources: [String] {
-        SharePlatform.allCases.map(\.displayName) + VideoPlatform.allCases.map(\.displayName) + ["直链"]
+        SharePlatform.allCases.map(\.displayName) + VideoPlatform.allCases.map(\.displayName) + ["GitHub", "直链"]
     }
 
     var body: some View {

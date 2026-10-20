@@ -71,14 +71,19 @@ actor AccountVault: CredentialStore {
         onChange()
     }
 
-    /// 添加账号：没有主账号时成为主账号；同一凭据或同名账号直接替换
+    /// 添加账号：没有主账号时成为主账号；同一凭据或同名账号直接替换。
+    /// 「×× 用户」这类拿不到真实昵称时的占位名不能用来判断是不是同一个账号
     func add(_ account: Account, for kind: AccountKind) {
-        guard let primary = cache[kind], primary.nickname != account.nickname, primary.cookie != account.cookie else {
+        let placeholder = account.nickname.hasSuffix("用户")
+        func same(_ other: Account) -> Bool {
+            other.cookie == account.cookie || (!placeholder && other.nickname == account.nickname)
+        }
+        guard let primary = cache[kind], !same(primary) else {
             save(account, for: kind)
             return
         }
         var list = extras[kind] ?? []
-        if let i = list.firstIndex(where: { $0.nickname == account.nickname || $0.cookie == account.cookie }) {
+        if let i = list.firstIndex(where: same) {
             list[i] = account
         } else {
             list.append(account)
@@ -167,8 +172,11 @@ final class AccountStore {
 
     /// 从备份恢复：覆盖同平台的现有账号
     func restore(_ restored: [AccountKind: Account], extras restoredExtras: [AccountKind: [Account]] = [:]) async {
-        for (kind, account) in restored { await vault.save(account, for: kind) }
-        for (kind, list) in restoredExtras { await vault.saveExtras(list, for: kind) }
+        // 备份里有的平台整体覆盖：主账号与附加账号都以备份为准（备份里没有附加账号就清空本机的）
+        for (kind, account) in restored {
+            await vault.save(account, for: kind)
+            await vault.saveExtras(restoredExtras[kind] ?? [], for: kind)
+        }
         await reload()
     }
 

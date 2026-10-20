@@ -50,10 +50,10 @@ struct PixivParser: VideoParser {
         let lower = message.lowercased()
         if lower.contains("not found") || message.contains("削除") { return VideoParseError(.notFound, "Pixiv 作品不存在或已删除") }
         if lower.contains("login") || lower.contains("session") {
-            return VideoParseError(.unsupported, "Pixiv 登录态已失效，请到「我的」页重新粘贴 Cookie")
+            return VideoParseError(.unsupported, "Pixiv 登录已失效，请到「我的」页重新登录 Pixiv")
         }
         if !hasCookie {
-            return VideoParseError(.unsupported, "该作品需要登录后才能解析（多为 R18 或受限作品），请在「我的」页粘贴浏览器里的 Pixiv Cookie")
+            return VideoParseError(.unsupported, "该作品需要登录后才能解析（多为 R18 或受限作品），请到「我的」页登录 Pixiv")
         }
         return VideoParseError(.blocked, "Pixiv 返回错误：\(message)")
     }

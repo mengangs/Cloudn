@@ -72,6 +72,8 @@ final class AppModel {
             await self?.notify(title: "下载失败", body: "\(item.displayName)：\(item.errorMessage ?? "未知错误")")
         }
         Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished, onFailed: onFailed) }
+        let settings = self.settings
+        downloads.exportedURL = { settings.exportedFileURL($0) }
     }
 
     /// 应用不在前台时发本地通知（包括被系统在后台唤醒、没有界面的时候）
@@ -134,7 +136,7 @@ final class AppModel {
         settings.lastUpdateCheck = Date()
         Task {
             guard let release = try? await UpdateChecker.check(current: Self.currentVersion, includePrerelease: settings.acceptPrerelease),
-                  release.version != settings.skippedVersion else { return }
+                  release.tag != settings.skippedVersion else { return }
             availableUpdate = release
         }
     }

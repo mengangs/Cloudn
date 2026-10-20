@@ -164,12 +164,28 @@ final class SettingsSnapshot: @unchecked Sendable {
 // MARK: - 完成后移动到所选文件夹
 
 extension AppSettings {
-    /// 解析书签得到文件夹地址；书签失效返回 nil
+    /// 解析书签得到文件夹地址；书签过期时就地刷新，彻底失效返回 nil
     var exportFolder: URL? {
         guard let data = exportFolderBookmark else { return nil }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale) else { return nil }
+        if stale {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            if let fresh = try? url.bookmarkData() { exportFolderBookmark = fresh }
+        }
         return url
+    }
+
+    /// 已移到外部文件夹的下载文件的位置（exportedTo 记的是「文件夹名/子目录/文件名」）。
+    /// 会开启该文件夹的安全访问，供打开、分享、删除使用
+    func exportedFileURL(_ item: DownloadItem) -> URL? {
+        guard let text = item.exportedTo, let folder = exportFolder else { return nil }
+        let relative = text.split(separator: "/").dropFirst().joined(separator: "/")
+        guard !relative.isEmpty else { return nil }
+        _ = folder.startAccessingSecurityScopedResource()
+        let url = folder.appendingPathComponent(relative)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     func setExportFolder(_ url: URL?) {

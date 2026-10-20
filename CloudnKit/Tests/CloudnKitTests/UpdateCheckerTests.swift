@@ -9,6 +9,11 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertFalse(UpdateChecker.isNewer("v1.0.0-beta", than: "1.0.0"))
         XCTAssertFalse(UpdateChecker.isNewer("0.9", than: "1.0.0"))
         XCTAssertFalse(UpdateChecker.isNewer("nightly", than: "1.0.0"))
+        // 正式版高于同号的预发布版；预发布版之间按后缀数字比较
+        XCTAssertTrue(UpdateChecker.isNewer("1.3.0", than: "1.3.0-beta.2"))
+        XCTAssertTrue(UpdateChecker.isNewer("v1.3.0-beta.2", than: "1.3.0-beta.1"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.3.0-beta.1", than: "1.3.0-beta.1"))
+        XCTAssertEqual(UpdateChecker.parse(JSON(["tag_name": "v1.3.0-beta.1"])).tag, "1.3.0-beta.1")
     }
 
     func testParseRelease() {

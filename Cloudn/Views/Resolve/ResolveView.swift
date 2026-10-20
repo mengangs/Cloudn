@@ -431,6 +431,8 @@ struct ResolveView: View {
     private func consumePending() {
         guard let text = app.pendingInput else { return }
         app.pendingInput = nil
+        // 分享扩展会顺手把链接放进剪贴板：已经打开了，就别再提示「剪贴板里有一个链接」
+        markClipboardHandled()
         open(text: text)
     }
 

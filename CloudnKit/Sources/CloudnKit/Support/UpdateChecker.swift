@@ -3,8 +3,11 @@ import Foundation
 
 /// 新版本信息（来自 GitHub Releases）
 public struct AppRelease: Equatable, Sendable, Identifiable {
-    public var id: String { version }
+    public var id: String { tag }
+    /// 纯数字版本号（1.3.0）
     public let version: String
+    /// 完整标签（去掉 v 前缀，保留 -beta.1 之类的后缀）：「忽略此版本」按它记，预发布版与正式版不会互相挡住
+    public let tag: String
     public let name: String
     public let notes: String
     public let pageURL: String
@@ -50,7 +53,9 @@ public enum UpdateChecker {
     static func parse(_ json: JSON) -> AppRelease {
         let tag = json["tag_name"].string
         let ipa = json["assets"].array.first { $0["name"].string.lowercased().hasSuffix(".ipa") }?["browser_download_url"].string ?? ""
-        return AppRelease(version: normalize(tag), name: json["name"].string.nilIfBlank ?? tag, notes: json["body"].string,
+        var full = tag.trimmed
+        if full.first == "v" || full.first == "V" { full.removeFirst() }
+        return AppRelease(version: normalize(tag), tag: full, name: json["name"].string.nilIfBlank ?? tag, notes: json["body"].string,
                           pageURL: json["html_url"].string, ipaURL: ipa, publishedAt: json["published_at"].string,
                           isPrerelease: json["prerelease"].bool)
     }
@@ -62,7 +67,8 @@ public enum UpdateChecker {
         return String(s.prefix { $0.isNumber || $0 == "." })
     }
 
-    /// 按数字段逐段比较（1.10.0 > 1.9.3，缺的段按 0）
+    /// 按数字段逐段比较（1.10.0 > 1.9.3，缺的段按 0）；数字相同时正式版高于预发布版，
+    /// 两个预发布版按后缀里的数字比较（1.3.0-beta.2 > 1.3.0-beta.1）
     public static func isNewer(_ candidate: String, than current: String) -> Bool {
         let a = normalize(candidate).split(separator: ".").map { Int($0) ?? 0 }
         let b = normalize(current).split(separator: ".").map { Int($0) ?? 0 }
@@ -72,6 +78,21 @@ public enum UpdateChecker {
             let y = i < b.count ? b[i] : 0
             if x != y { return x > y }
         }
-        return false
+        let sa = suffix(candidate), sb = suffix(current)
+        switch (sa.isEmpty, sb.isEmpty) {
+        case (true, false): return true
+        case (false, true), (true, true): return false
+        case (false, false):
+            let na = sa.split { !$0.isNumber }.compactMap { Int($0) }
+            let nb = sb.split { !$0.isNumber }.compactMap { Int($0) }
+            return nb.lexicographicallyPrecedes(na)
+        }
+    }
+
+    /// 版本号后面的预发布后缀（-beta.1），没有为空串
+    static func suffix(_ tag: String) -> String {
+        var s = tag.trimmed
+        if s.first == "v" || s.first == "V" { s.removeFirst() }
+        return String(s.drop { $0.isNumber || $0 == "." })
     }
 }

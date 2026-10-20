@@ -99,6 +99,10 @@ public enum AccountValidator {
         case .xunlei:
             guard let cred = XunleiCredential.parse(cookie),
                   await XunleiResolver(credentials: NoCredentials()).validate(cred) else { return nil }
+            // 令牌里带用户 ID：取末四位区分多个账号（同名会被当成同一个账号覆盖）
+            if let sub = XunleiCredential.jwtClaim(cred.accessToken, "sub").string, sub.count >= 4 {
+                return "迅雷用户 · \(sub.suffix(4))"
+            }
             return "迅雷网盘用户"
         case .guangya:
             guard let cred = GuangYaCredential.parse(cookie) else { return nil }

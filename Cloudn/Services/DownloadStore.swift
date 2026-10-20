@@ -28,6 +28,8 @@ final class DownloadStore {
     @ObservationIgnored private let resolvers: ShareResolvers
     @ObservationIgnored private let background: BackgroundTransfers
     @ObservationIgnored private let activity = DownloadActivity()
+    /// 已移到外部文件夹的文件的位置（由 AppModel 提供，依赖设置里的文件夹书签）
+    @ObservationIgnored var exportedURL: ((DownloadItem) -> URL?)?
 
     init(engine: DownloadEngine, resolvers: ShareResolvers, background: BackgroundTransfers) {
         self.engine = engine
@@ -103,8 +105,7 @@ final class DownloadStore {
     }
     func resume(_ item: DownloadItem) { Task { await engine.resume(item.id) } }
     func remove(_ item: DownloadItem, deleteFile: Bool) {
-        background.cancel(itemId: item.id)
-        Task { await engine.remove(item.id, deleteFile: deleteFile) }
+        remove([item], deleteFile: deleteFile)
     }
     func pauseAll() {
         for item in items where item.backgrounded { background.cancel(itemId: item.id) }
@@ -123,12 +124,19 @@ final class DownloadStore {
     }
     func remove(_ batch: [DownloadItem], deleteFile: Bool) {
         for item in batch where item.backgrounded { background.cancel(itemId: item.id) }
+        // 已移到外部文件夹的文件不在下载目录里，引擎删不到，这里删
+        if deleteFile {
+            for item in batch where item.exportedTo != nil {
+                if let url = exportedURL?(item) { try? FileManager.default.removeItem(at: url) }
+            }
+        }
         let ids = batch.map(\.id)
         Task { await engine.remove(ids, deleteFile: deleteFile) }
     }
     func resumeAll() { Task { await engine.resumeAll() } }
     func clearFinished() { Task { await engine.clearFinished() } }
-    func fileURL(_ item: DownloadItem) -> URL? { engine.fileURL(for: item) }
+    /// 下载完成的文件：在下载目录里，或已移到外部文件夹
+    func fileURL(_ item: DownloadItem) -> URL? { engine.fileURL(for: item) ?? exportedURL?(item) }
 
     /// 直链过期：按来源信息重新解析取链，保留已下载部分继续
     func refreshLink(_ item: DownloadItem) async throws {

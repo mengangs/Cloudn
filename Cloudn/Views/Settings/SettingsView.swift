@@ -39,7 +39,7 @@ struct SettingsView: View {
 
                     Section {
                         Toggle("回到应用时提示剪贴板链接", isOn: $settings.clipboardHint)
-                        Toggle("免转存下载（夸克 / UC）", isOn: $settings.directFirst)
+                        Toggle("夸克免转存下载", isOn: $settings.directFirst)
                         Toggle("多账号下载", isOn: $settings.multiAccountDownload)
                         if settings.multiAccountDownload {
                             Toggle("单文件多源分片（实验性）", isOn: $settings.multiSourceDownload)
@@ -47,7 +47,7 @@ struct SettingsView: View {
                     } header: {
                         Text("解析")
                     } footer: {
-                        Text("免转存：先用分享凭证直接取直链，失败再临时转存；关闭后一律先转存到「Cloudn临时转存」再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链，分摊单账号的并发与限速；开启多源分片后，大文件还会同时用各账号的直链分段下载。")
+                        Text("夸克免转存：先直接取直链，失败再临时转存；关闭后一律先转存再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链；开启多源分片后，大文件还会同时用各账号的直链分段下载。")
                     }
 
                     Section {
@@ -168,7 +168,7 @@ struct UpdateSheet: View {
             List {
                 Group {
                     Section {
-                        LabeledContent("新版本", value: release.isPrerelease ? "\(release.version)（预发布）" : release.version)
+                        LabeledContent("新版本", value: release.isPrerelease ? "\(release.tag)（预发布）" : release.tag)
                         LabeledContent("当前版本", value: AppModel.currentVersion)
                     }
                     if !release.notes.isEmpty {
@@ -184,7 +184,7 @@ struct UpdateSheet: View {
                             Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
                         }
                         Button("忽略此版本", role: .destructive) {
-                            app.settings.skippedVersion = release.version
+                            app.settings.skippedVersion = release.tag
                             dismiss()
                         }
                     }
