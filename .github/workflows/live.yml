@@ -1,0 +1,36 @@
+name: Live parse check
+
+# 每日用真实链接解析海外平台，接口一变就能当天发现（失败时 GitHub 会给仓库所有者发邮件）。
+# 国内平台从海外服务器访问会被拦，不在这里巡检。
+on:
+  schedule:
+    - cron: "37 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  live:
+    name: Live parse (macOS)
+    # macOS：YouTube 签名求解要用 JavaScriptCore
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Live tests
+        working-directory: CloudnKit
+        env:
+          CLOUDN_LIVE: "1"
+          CLOUDN_LIVE_REPORT: ${{ runner.temp }}/live-report.md
+        run: swift test --filter LiveParseTests
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 在线巡检 $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "| 平台 | 结果 | 说明 |"
+            echo "|---|---|---|"
+            sort "${{ runner.temp }}/live-report.md" 2>/dev/null || echo "| - | ❌ | 没有生成报告（编译失败？） |"
+          } >> "$GITHUB_STEP_SUMMARY"
