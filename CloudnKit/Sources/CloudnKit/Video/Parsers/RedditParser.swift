@@ -88,11 +88,43 @@ struct RedditParser: VideoParser {
             switch r.status {
             case 404, 410: throw VideoParseError(.notFound, "帖子不存在（HTTP \(r.status)）")
             case 403, 429:
-                throw VideoParseError(.blocked, "Reddit 拒绝了匿名请求（HTTP \(r.status)），请稍后重试或切换网络")
+                if Self.hasLoginCookie(cookie) {
+                    throw VideoParseError(.blocked, "Reddit 拒绝了请求（HTTP \(r.status)），请稍后重试；若持续失败，请到「我的」页重新登录 Reddit")
+                }
+                throw VideoParseError(.blocked, "Reddit 拒绝了匿名请求（HTTP \(r.status)），请稍后重试或切换网络；到「我的」页登录 Reddit 后可避开游客限制")
             default: throw VideoParseError(.unknown, "Reddit 接口请求失败（HTTP \(r.status)）")
             }
         }
         return try Self.postData(json)
+    }
+
+    // MARK: 账号校验
+
+    static let meURL = "https://www.reddit.com/api/me.json"
+
+    static func hasLoginCookie(_ cookie: String) -> Bool {
+        OverseasAccount.looksLoggedIn(.reddit, cookie: cookie)
+    }
+
+    static func validate(cookie: String) async -> String? {
+        let headers: [(String, String)] = [
+            ("Accept", "application/json"), ("Accept-Language", "en-US,en;q=0.9"),
+            ("User-Agent", VideoHTTP.uaChrome), ("Cookie", cookie)
+        ]
+        let request = HTTPRequest.get(meURL, headers: headers)
+        return await OverseasAccount.probe(.reddit, cookie: cookie, request) { r in
+            Self.probeResult(status: r.status, json: r.json)
+        }
+    }
+
+    /// 登录后 `{"kind":"t2","data":{"name":…}}`；未登录返回空对象 `{}`
+    static func probeResult(status: Int, json: JSON?) -> OverseasAccount.Probe {
+        if status == 401 { return .invalid }
+        guard (200..<300).contains(status), let json, json.isObject else { return .unknown }
+        let name = json["data"]["name"].string
+        if !name.isEmpty { return .valid("u/" + name) }
+        let empty = json.dictionary?.isEmpty ?? false
+        return empty ? .invalid : .unknown
     }
 
     private func headers(jar: String) -> [(String, String)] {

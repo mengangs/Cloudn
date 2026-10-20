@@ -38,6 +38,8 @@ final class AppModel {
     var pendingTorrent: TorrentTarget?
     /// 自动检查发现的新版本（弹窗提示）
     var availableUpdate: AppRelease?
+    /// 批量解析下载任务（合集 / 多链接）；离开页面也继续
+    var batchJobs: [BatchJob] = []
 
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续

@@ -29,7 +29,15 @@ struct BilibiliParser: VideoParser {
         return try await parseVideo(link, cookie: cookie)
     }
 
-    private func parseVideo(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
+    private func parseVideo(_ link: DetectedVideoLink, cookie userCookie: String) async throws -> VideoParseResult {
+        // 匿名访问（尤其海外 IP）不带 buvid3 时 view 接口会直接 412：补一份匿名指纹，用户自己的 Cookie 原样保留
+        var cookie = userCookie
+        if (CookieUtil.value(of: "buvid3", in: cookie) ?? "").isEmpty, let ids = await Self.buvid() {
+            cookie = CookieUtil.setting("buvid3", ids.b3, in: cookie)
+            if !ids.b4.isEmpty && (CookieUtil.value(of: "buvid4", in: cookie) ?? "").isEmpty {
+                cookie = CookieUtil.setting("buvid4", ids.b4, in: cookie)
+            }
+        }
         let query = link.id.lowercased().hasPrefix("bv") ? "bvid=\(link.id)" : "aid=\(link.id.dropFirst(2))"
         let view = try await VideoHTTP.getJSON("\(Self.viewURL)?\(query)", headers: Self.headers(cookie), what: "B站视频信息")
         guard view["code"].int == 0 else {
@@ -38,7 +46,8 @@ struct BilibiliParser: VideoParser {
         let data = view["data"]
         let bvid = data["bvid"].string
         // 多 P 视频：按链接里的 ?p= 取对应分 P
-        let pageIndex = max(0, (Int(Rx(#"[?&]p=(\d+)"#).first(in: link.url) ?? "1") ?? 1) - 1)
+        let explicitPage = Rx(#"[?&]p=(\d+)"#).first(in: link.url)
+        let pageIndex = max(0, (Int(explicitPage ?? "1") ?? 1) - 1)
         let pages = data["pages"].array
         let page = pageIndex < pages.count ? pages[pageIndex] : pages.first ?? JSON(nil)
         let cid = page["cid"].int64 > 0 ? page["cid"].int64 : data["cid"].int64
@@ -72,9 +81,13 @@ struct BilibiliParser: VideoParser {
                                headers: Self.headers(cookie), quality: Self.qualityLabel(play["data"]["quality"].int))
         }
         let owner = data["owner"]
-        return VideoParseResult(platform: platform, title: title, author: owner["name"].string, avatar: owner["face"].string,
-                                cover: data["pic"].string, text: data["desc"].string, timestamp: data["pubdate"].int64,
-                                url: "https://www.bilibili.com/video/\(bvid)", medias: medias.isEmpty ? (media.map { [$0] } ?? []) : medias)
+        let collection = Self.collection(data, explicitPage: explicitPage != nil)
+        let subtitles = await subtitleTracks(bvid: bvid, cid: cid, cookie: cookie)
+        return VideoParseResult(platform: platform, title: collection.title ?? title, author: owner["name"].string,
+                                avatar: owner["face"].string, cover: data["pic"].string, text: data["desc"].string,
+                                timestamp: data["pubdate"].int64, url: "https://www.bilibili.com/video/\(bvid)",
+                                medias: medias.isEmpty ? (media.map { [$0] } ?? []) : medias, notice: collection.notice,
+                                entries: collection.entries, subtitles: subtitles)
     }
 
     struct DashChoice: Equatable {

@@ -164,7 +164,32 @@ struct FacebookParser: VideoParser {
         throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频（也可能需要登录 Facebook 才能查看）")
     }
 
-    private static func navigationHeaders(cookie: String) -> [String: String] {
+    // MARK: 账号校验
+
+    /// Facebook 没有轻量的网页账号接口：取首页，看 CurrentUserInitialData 里的 USER_ID 是否就是 Cookie 里的 c_user
+    static func validate(cookie: String) async -> String? {
+        let cUser = CookieUtil.value(of: "c_user", in: cookie) ?? ""
+        let request = HTTPRequest.get("https://www.facebook.com/", headers: navigationHeaders(cookie: cookie).sortedPairs)
+        return await OverseasAccount.probe(.facebook, cookie: cookie, request) { r in
+            Self.probeResult(status: r.status, html: r.text, finalURL: r.url, cUser: cUser)
+        }
+    }
+
+    /// 跳到登录 / 安全检查页，或 USER_ID 为 0（游客）算失效；拿不到页面数据（风控、改版）说不准
+    static func probeResult(status: Int, html: String, finalURL: String, cUser: String) -> OverseasAccount.Probe {
+        let lower = finalURL.lowercased()
+        if lower.contains("/login") || lower.contains("/checkpoint") { return .invalid }
+        guard (200..<300).contains(status) else { return .unknown }
+        let block = Rx(#""CurrentUserInitialData",\[\],(\{[^{}]*\})"#).first(in: html).flatMap { JSON(text: $0) }
+        var uid = block?["USER_ID"].string ?? ""
+        if uid.isEmpty { uid = Rx(#""USER_ID":"(\d+)""#).first(in: html) ?? "" }
+        if uid.isEmpty { return .unknown }
+        if uid == "0" { return .invalid }
+        guard uid == cUser else { return .unknown }
+        return .valid(block?["NAME"].string ?? "")
+    }
+
+    static func navigationHeaders(cookie: String) -> [String: String] {
         var h: [String: String] = [
             "User-Agent": VideoHTTP.uaChrome,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",

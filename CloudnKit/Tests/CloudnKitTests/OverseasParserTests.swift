@@ -207,4 +207,13 @@ final class OverseasParserTests: XCTestCase {
         XCTAssertEqual(fallback["code"].string, "PARENT")
         XCTAssertEqual(ThreadsParser.medias(fallback).map(\.url), ["https://t/l.jpg"])
     }
+
+    func testTwitterUnifiedCard() {
+        let card = JSON(text: #"""
+        {"legacy":{"binding_values":[{"key":"unified_card","value":{"string_value":"{\"media_entities\":{\"1\":{\"type\":\"video\",\"media_url_https\":\"https://pbs.twimg.com/c.jpg\",\"video_info\":{\"variants\":[{\"content_type\":\"video/mp4\",\"bitrate\":100,\"url\":\"https://video.twimg.com/lo.mp4\"},{\"content_type\":\"video/mp4\",\"bitrate\":900,\"url\":\"https://video.twimg.com/hi.mp4\"}]}}}}"}}]}}
+        """#)!
+        let medias = TwitterParser.cardMedias(card)
+        XCTAssertEqual(medias.map(\.url), ["https://video.twimg.com/hi.mp4"])
+        XCTAssertTrue(TwitterParser.cardMedias(JSON(text: "{}")!).isEmpty)
+    }
 }

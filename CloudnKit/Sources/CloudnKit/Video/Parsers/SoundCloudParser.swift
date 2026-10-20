@@ -2,7 +2,7 @@
 // 参考 yt-dlp（Unlicense）的 soundcloud 解析。
 import Foundation
 
-/// SoundCloud：单曲（不支持歌单/专辑）。
+/// SoundCloud：单曲；歌单 / 专辑（sets）列出曲目条目，逐条再解析。
 /// 1. client_id：首页内嵌的 `__sc_hydration`（apiClient）里直接有；没有再逐个下载站点 JS，正则抠 `client_id:"…"`；
 /// 2. `api-v2.soundcloud.com/resolve?url=` 把页面地址解析成曲目；
 /// 3. media.transcodings 里优先渐进式 mp3，其次 HLS（aac → mp3 → opus），请求其 url 拿真实地址。
@@ -43,7 +43,7 @@ struct SoundCloudParser: VideoParser {
 
         let kind = info["kind"].string
         if kind == "playlist" || kind == "system-playlist" {
-            throw VideoParseError(.unsupported, "暂不支持 SoundCloud 歌单/专辑，请复制单曲链接")
+            return try await parseSet(info, clientID: clientID)
         }
         if kind == "user" { throw VideoParseError(.unsupported, "这是 SoundCloud 用户主页，请复制单曲链接") }
         guard kind == "track" || kind.isEmpty else { throw VideoParseError(.unsupported, "暂不支持该类型的 SoundCloud 链接") }
@@ -71,6 +71,34 @@ struct SoundCloudParser: VideoParser {
                                 avatar: user["avatar_url"].string, cover: Self.artwork(info),
                                 text: info["description"].string, timestamp: Self.parseTime(info["created_at"].string),
                                 url: info["permalink_url"].string, medias: [media])
+    }
+
+    /// 歌单 / 专辑：响应里只有前几首是完整曲目，其余只有 id，按 50 个一批用 `/tracks?ids=` 补全
+    private func parseSet(_ info: JSON, clientID: String) async throws -> VideoParseResult {
+        let missing = Self.stubTrackIDs(info)
+        let playlistID = info["id"].string
+        let secret = info["secret_token"].string
+        var fetched: [String: JSON] = [:]
+        for batch in Self.batches(missing, size: 50) {
+            var extra: [(String, String)] = [("ids", batch.joined(separator: ","))]
+            if !playlistID.isEmpty { extra.append(("playlistId", playlistID)) }
+            if !secret.isEmpty { extra.append(("playlistSecretToken", secret)) }
+            guard let r = try? await api(Self.apiBase + "tracks", clientID: clientID, extra: extra), r.isSuccess,
+                  let json = r.json else { continue }
+            for t in json.array {
+                let id = t["id"].string
+                if !id.isEmpty { fetched[id] = t }
+            }
+        }
+        let entries = Self.setEntries(info, fetched: fetched)
+        guard !entries.isEmpty else { throw VideoParseError(.unsupported, "这个 SoundCloud 歌单/专辑里没有曲目") }
+        let title = info["title"].string
+        let user = info["user"]
+        return VideoParseResult(platform: platform, title: title.isEmpty ? "SoundCloud 歌单 \(playlistID)" : title,
+                                author: user["username"].string, avatar: user["avatar_url"].string,
+                                cover: Self.artwork(info), text: info["description"].string,
+                                timestamp: Self.parseTime(info["created_at"].string), url: info["permalink_url"].string,
+                                entries: entries)
     }
 
     private func api(_ url: String, clientID: String, extra: [(String, String)]) async throws -> HTTPResponse {
@@ -137,6 +165,45 @@ struct SoundCloudParser: VideoParser {
     /// 私密曲目分享链接里的 `s-xxxx` 段
     static func secretToken(in path: String) -> String {
         Rx(#"(?:^|/)(s-[A-Za-z0-9]+)$"#).first(in: path) ?? ""
+    }
+
+    /// 歌单里缺 permalink_url / title 的曲目 id（只有 id 的占位）
+    static func stubTrackIDs(_ info: JSON) -> [String] {
+        info["tracks"].array.filter { $0["permalink_url"].string.isEmpty || $0["title"].string.isEmpty }
+            .map { $0["id"].string }.filter { !$0.isEmpty }
+    }
+
+    static func batches(_ ids: [String], size: Int) -> [[String]] {
+        guard size > 0 else { return [ids] }
+        var out: [[String]] = []
+        var i = 0
+        while i < ids.count {
+            out.append(Array(ids[i..<min(i + size, ids.count)]))
+            i += size
+        }
+        return out
+    }
+
+    /// 歌单曲目 → 条目（补全过的优先）；没有页面地址时用 api-v2 曲目地址（链接规则 kind "api" 能识别）
+    static func setEntries(_ info: JSON, fetched: [String: JSON]) -> [VideoEntry] {
+        let secret = info["secret_token"].string
+        var out: [VideoEntry] = []
+        for stub in info["tracks"].array {
+            let id = stub["id"].string
+            let track = fetched[id] ?? stub
+            var url = track["permalink_url"].string
+            if url.isEmpty {
+                guard !id.isEmpty else { continue }
+                url = apiBase + "tracks/" + id
+                if !secret.isEmpty { url += "?secret_token=" + secret }
+            }
+            let title = track["title"].string.nilIfBlank ?? "SoundCloud \(id)"
+            let ms = track["duration"].double
+            let hasArt = !track["artwork_url"].string.isEmpty || !track["user"]["avatar_url"].string.isEmpty
+            out.append(VideoEntry(title: title, url: url, duration: ms > 0 ? ms / 1000 : nil,
+                                  cover: hasArt ? artwork(track) : ""))
+        }
+        return out
     }
 
     static func clientID(inHydration html: String) -> String? {

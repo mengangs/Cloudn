@@ -71,6 +71,11 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .pixiv: return .pixiv
         case .zhihu: return .zhihu
         case .wxchannels: return .yuanbao
+        case .twitter: return .twitter
+        case .instagram: return .instagram
+        case .tiktok: return .tiktok
+        case .reddit: return .reddit
+        case .facebook: return .facebook
         default: return nil
         }
     }
@@ -116,6 +121,51 @@ public struct VideoMedia: Hashable, Identifiable, Sendable {
     }
 }
 
+/// 合集 / 播放列表 / 多 P 里的一条：只记作品链接，下载时再逐条解析
+public struct VideoEntry: Hashable, Sendable, Identifiable {
+    public let id: UUID
+    public let title: String
+    /// 能被 VideoLinkParser 识别的作品链接
+    public let url: String
+    /// 秒；未知为 nil
+    public let duration: Double?
+    public let cover: String
+
+    public init(title: String, url: String, duration: Double? = nil, cover: String = "") {
+        self.id = UUID()
+        self.title = title
+        self.url = url
+        self.duration = duration
+        self.cover = cover
+    }
+}
+
+/// 字幕轨：下载时取回并统一转成 SRT（见 SubtitleConverter）
+public struct SubtitleTrack: Hashable, Sendable, Identifiable {
+    public enum Format: String, Sendable { case srt, vtt, biliJSON, youtubeJSON3 }
+
+    public let id: UUID
+    /// 显示名，如「中文（自动生成）」
+    public let name: String
+    /// 语言代码，用在文件名里，如 zh-Hans
+    public let language: String
+    public let url: String
+    public let format: Format
+    public let headers: [String: String]
+    /// 机器自动生成的字幕
+    public let automatic: Bool
+
+    public init(name: String, language: String, url: String, format: Format, headers: [String: String] = [:], automatic: Bool = false) {
+        self.id = UUID()
+        self.name = name
+        self.language = language
+        self.url = url
+        self.format = format
+        self.headers = headers
+        self.automatic = automatic
+    }
+}
+
 /// 一次解析的结果：一个作品（视频 / 图集）
 public struct VideoParseResult: Sendable, Identifiable {
     public let id = UUID()
@@ -130,9 +180,14 @@ public struct VideoParseResult: Sendable, Identifiable {
     public let medias: [VideoMedia]
     /// 给用户的附加提示（如部分图片只能拿到带水印的平台图）；空串表示没有
     public let notice: String
+    /// 合集 / 播放列表 / 多 P：各条作品（非空时界面按合集展示，可多选批量下载）
+    public let entries: [VideoEntry]
+    /// 可下载的字幕
+    public let subtitles: [SubtitleTrack]
 
     public init(platform: VideoPlatform, title: String, author: String = "", avatar: String = "", cover: String = "",
-                text: String = "", timestamp: Int64 = 0, url: String = "", medias: [VideoMedia] = [], notice: String = "") {
+                text: String = "", timestamp: Int64 = 0, url: String = "", medias: [VideoMedia] = [], notice: String = "",
+                entries: [VideoEntry] = [], subtitles: [SubtitleTrack] = []) {
         self.platform = platform
         self.title = title
         self.author = author
@@ -143,6 +198,17 @@ public struct VideoParseResult: Sendable, Identifiable {
         self.url = url
         self.medias = medias
         self.notice = notice
+        self.entries = entries
+        self.subtitles = subtitles
+    }
+
+    /// 「全部下载」的默认对象：每个清晰度组只取第一个（最高画质），其余媒体（独立视频、图片）全取
+    public var defaultDownloads: [VideoMedia] {
+        var seen = Set<String>()
+        return medias.filter { media in
+            guard !media.variantGroup.isEmpty else { return true }
+            return seen.insert(media.variantGroup).inserted
+        }
     }
 
     public var videoCount: Int { medias.filter { $0.kind == .video }.count }

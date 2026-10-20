@@ -165,6 +165,8 @@ public enum VideoLinkParser {
         Rule(platform: .snapchat, kind: "share", rx: Rx(#"snapchat\.com/t/[A-Za-z0-9]+"#, ignoreCase: true)),
         Rule(platform: .snapchat, kind: "spotlight", rx: Rx(#"snapchat\.com/(?:@[\w.\-]+/)?spotlight/([\w\-]+)"#, ignoreCase: true)),
 
+        // 播放列表排在视频规则前；watch?v=…&list=… 仍按单个视频解析
+        Rule(platform: .youtube, kind: "playlist", rx: Rx(#"(?<![A-Za-z0-9\-])(?:(?:www|m|music)\.)?youtube\.com/playlist/?\?(?:[^\s#]*?&)?list=([0-9A-Za-z_\-]+)"#, ignoreCase: true)),
         Rule(platform: .youtube, kind: "video", rx: Rx(#"(?<![A-Za-z0-9\-])youtu\.be/([0-9A-Za-z_\-]{11})(?![0-9A-Za-z_\-])"#, ignoreCase: true)),
         Rule(platform: .youtube, kind: "video", rx: Rx(#"(?<![A-Za-z0-9\-])(?:(?:www|m|music)\.)?youtube(?:-nocookie)?\.com/(?:shorts|live|embed|v|e)/([0-9A-Za-z_\-]{11})(?![0-9A-Za-z_\-])"#, ignoreCase: true)),
         Rule(platform: .youtube, kind: "video", rx: Rx(#"(?<![A-Za-z0-9\-])(?:(?:www|m|music)\.)?youtube\.com/watch/?\?(?:[^\s#]*?&)?v=([0-9A-Za-z_\-]{11})(?![0-9A-Za-z_\-])"#, ignoreCase: true)),

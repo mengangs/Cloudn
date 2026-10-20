@@ -94,6 +94,39 @@ struct TikTokParser: VideoParser {
                                 url: url, medias: medias)
     }
 
+    // MARK: 账号校验
+
+    /// 网页端 passport 账号信息接口：登录后 message=success、data 里有 username / screen_name
+    static let accountInfoURL = "https://www.tiktok.com/passport/web/account/info/?aid=1459&app_name=tiktok_web&device_platform=web_pc"
+
+    static func validate(cookie: String) async -> String? {
+        let headers: [(String, String)] = [
+            ("User-Agent", VideoHTTP.uaChrome), ("Accept", "application/json, text/plain, */*"),
+            ("Referer", "https://www.tiktok.com/"), ("Cookie", cookie)
+        ]
+        let request = HTTPRequest.get(accountInfoURL, headers: headers)
+        return await OverseasAccount.probe(.tiktok, cookie: cookie, request) { r in
+            Self.probeResult(status: r.status, json: r.json)
+        }
+    }
+
+    /// 只有明确的「会话过期 / 请登录」才算失效；限流、风控等其余错误说不准
+    static func probeResult(status: Int, json: JSON?) -> OverseasAccount.Probe {
+        if status == 401 { return .invalid }
+        guard (200..<300).contains(status), let json, json.isObject else { return .unknown }
+        let data = json["data"]
+        if json["message"].string == "success" {
+            let nick = data["screen_name"].string
+            if !nick.isEmpty { return .valid(nick) }
+            let user = data["username"].string
+            return .valid(user.isEmpty ? "" : "@" + user)
+        }
+        let desc = data["description"].string.lowercased()
+        let expired = desc.contains("session expired") || desc.contains("sign in") || desc.contains("log in")
+        if data["error_code"].int == 4 || expired { return .invalid }
+        return .unknown
+    }
+
     // MARK: 纯逻辑
 
     static func itemID(from url: String) -> String? {

@@ -55,7 +55,8 @@ struct SniffedMedia: Identifiable, Equatable {
 }
 
 /// 网页嗅探：在应用内打开网页，页面播放 / 请求到的音视频地址都列出来，点一下就能下载。
-/// 适合没有专门适配的网站；用 MSE 分段播放（blob: 地址）的网站抓不到完整文件。
+/// 适合没有专门适配的网站；用 MSE 分段播放（blob: 地址）的网站抓不到完整文件，
+/// 但可以「录制视频流」：边播放边把页面喂给播放器的数据存下来。
 struct SnifferView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -69,7 +70,12 @@ struct SnifferView: View {
         NavigationStack {
             SnifferWebView(browser: browser)
                 .ignoresSafeArea(edges: .bottom)
-                .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        if browser.mseDetected || browser.recording { recordBar }
+                        bottomBar
+                    }
+                }
                 .navigationTitle(browser.title.isEmpty ? "网页嗅探" : browser.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -93,6 +99,145 @@ struct SnifferView: View {
                     }
                 }
                 .sheet(isPresented: $browser.showingList) { mediaList.presentationDetents([.medium, .large]) }
+                .sheet(isPresented: $browser.showingRecorder) { recorderSheet.presentationDetents([.medium, .large]) }
+        }
+        // 关掉嗅探页时还在录制：丢弃（正在保存的不受影响）
+        .onDisappear { browser.cancelRecording() }
+    }
+
+    // MARK: 录制 MSE 视频流
+
+    private var recordBar: some View {
+        Button { browser.showingRecorder = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: browser.recording ? "record.circle.fill" : "record.circle")
+                    .foregroundStyle(browser.recording ? Color.red : Color.clayInk)
+                if browser.recording {
+                    Text("正在录制 · " + ByteFormat.string(browser.recordedBytes))
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.ink)
+                } else {
+                    Text("检测到 MSE 视频流（可录制）")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ink)
+                }
+                Spacer(minLength: 8)
+                Text(browser.recording ? "停止录制" : "录制视频流")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.clayInk)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(.bar)
+    }
+
+    private var recorderSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    recorderStatus
+                }
+                Section {
+                    tip("1", "点「开始录制」后回到网页，从头播放视频，一直播到结尾。视频已经播过一段的话，开始录制后先刷新网页，否则已缓冲的开头录不到。")
+                    tip("2", "只能录到网页实际加载的内容：拖动进度条跳过的部分不会被录下。")
+                    tip("3", "可以用网页播放器自带的倍速（如 2 倍速）加快录制；尽量不要中途切换清晰度。")
+                    tip("4", "播完后点「停止并保存」，视频会出现在下载列表里。单次最多录 2 GB。")
+                } header: {
+                    Text("怎么录")
+                } footer: {
+                    Text("这个网站用 MSE 分段播放，没有可直接下载的文件地址，只能边播边录。录制时可以关掉这个面板。")
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { recorderButtons }
+            .navigationTitle("录制视频流")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private var recorderStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if browser.savingRecording {
+                HStack(spacing: 8) {
+                    Spinner(size: 14)
+                    Text("正在保存…").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                }
+            } else if browser.recording {
+                HStack(spacing: 6) {
+                    Image(systemName: "record.circle.fill").foregroundStyle(Color.red)
+                    Text("已录制 " + ByteFormat.string(browser.recordedBytes))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.ink)
+                    if browser.recordedTracks > 0 {
+                        Text("· \(browser.recordedTracks) 条轨道").font(.subheadline).foregroundStyle(Color.ink2)
+                    }
+                }
+                if browser.recordCapped {
+                    Text("已达到 2 GB 上限，后面的内容不再录制，请停止并保存。")
+                        .font(.footnote)
+                        .foregroundStyle(Color.clayInk)
+                } else if browser.recordedBytes == 0 {
+                    Text("还没有数据：请在网页里播放视频。")
+                        .font(.footnote)
+                        .foregroundStyle(Color.ink2)
+                }
+            } else {
+                Text("检测到 MSE 视频流").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                if !browser.mseSummary.isEmpty {
+                    Text(browser.mseSummary).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(3)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func tip(_ number: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(number).font(.monoSmall).foregroundStyle(Color.clayInk)
+            Text(text).font(.subheadline).foregroundStyle(Color.ink)
+        }
+    }
+
+    private var recorderButtons: some View {
+        HStack(spacing: 12) {
+            if browser.recording {
+                Button("放弃") {
+                    browser.cancelRecording()
+                    app.show("已放弃录制")
+                }
+                .buttonStyle(PillButtonStyle(kind: .secondary, height: 44))
+                Button("停止并保存") { saveRecording() }
+                    .buttonStyle(PillButtonStyle(kind: .primary, height: 44))
+                    .frame(maxWidth: .infinity)
+            } else {
+                Button("开始录制") {
+                    browser.startRecording()
+                    browser.showingRecorder = false
+                    app.show("开始录制：请在网页里播放视频")
+                }
+                .buttonStyle(PillButtonStyle(kind: .primary, height: 44))
+                .frame(maxWidth: .infinity)
+                .disabled(browser.savingRecording)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func saveRecording() {
+        Task {
+            do {
+                let message = try await browser.stopRecording(into: app.downloads)
+                browser.showingRecorder = false
+                app.show(message)
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
         }
     }
 
@@ -198,6 +343,34 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     var showingList = false
     @ObservationIgnored private var seen = Set<String>()
 
+    /// 页面里出现过的 MSE 轨道：SourceBuffer 编号 → MIME
+    private(set) var mseTracks: [String: String] = [:]
+    private(set) var recording = false
+    private(set) var savingRecording = false
+    private(set) var recordedBytes: Int64 = 0
+    private(set) var recordedTracks = 0
+    private(set) var recordCapped = false
+    var showingRecorder = false
+    @ObservationIgnored private var recorder: MSERecorder?
+    /// 每次开始录制加一；页面脚本只在编号非 0 时回传数据
+    @ObservationIgnored private var recordSession = 0
+    /// 每个 SourceBuffer 所在的框架（开始 / 停止录制要通知到 iframe 里）
+    @ObservationIgnored private var mseFrames: [String: WKFrameInfo] = [:]
+    @ObservationIgnored private var recordPage = ""
+
+    var mseDetected: Bool { !mseTracks.isEmpty }
+
+    /// 检测到的轨道格式（去掉 codecs 参数、去重）
+    var mseSummary: String {
+        var kinds: [String] = []
+        for mime in mseTracks.values {
+            let base = mime.split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? mime
+            let name = base.isEmpty ? "未知格式" : base
+            if !kinds.contains(name) { kinds.append(name) }
+        }
+        return kinds.sorted().joined(separator: "、")
+    }
+
     init(url: String) {
         currentURL = url
         let config = WKWebViewConfiguration()
@@ -206,11 +379,13 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         config.allowsInlineMediaPlayback = true
         let controller = WKUserContentController()
         controller.addUserScript(WKUserScript(source: Self.sniffScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        controller.addUserScript(WKUserScript(source: Self.mseScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         config.userContentController = controller
         webView = WKWebView(frame: .zero, configuration: config)
         webView.allowsBackForwardNavigationGestures = true
         super.init()
         controller.add(WeakMessageHandler(self), name: "cloudnSniff")
+        controller.add(WeakMessageHandler(self), name: "cloudnMSE")
         webView.navigationDelegate = self
         if let target = URL(string: url) { webView.load(URLRequest(url: target)) }
     }
@@ -231,6 +406,10 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "cloudnMSE" {
+            if let body = message.body as? [String: Any] { handleMSE(body, frame: message.frameInfo) }
+            return
+        }
         guard let body = message.body as? [String: Any], let url = body["url"] as? String else { return }
         add(url: url, page: body["page"] as? String ?? "", title: body["title"] as? String ?? "")
     }
@@ -253,6 +432,106 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         medias[i].probing = false
     }
 
+    // MARK: MSE 录制
+
+    /// 页面脚本的消息：sb = 新的 SourceBuffer（或换了格式），data = 录制中追加的一片数据（base64）
+    private func handleMSE(_ body: [String: Any], frame: WKFrameInfo) {
+        guard let type = body["type"] as? String, let id = body["sb"] as? String else { return }
+        let mime = body["mime"] as? String ?? ""
+        switch type {
+        case "sb":
+            if mseTracks[id] != mime { mseTracks[id] = mime }
+            mseFrames[id] = frame
+            if recording {
+                recorder?.setMime(mime, track: id)
+                // 录制中新出现的 SourceBuffer（换了视频 / 新的 iframe）：让它也开始回传
+                if !recordCapped { setRecordFlag(recordSession, frames: [frame]) }
+            }
+        case "data":
+            guard recording, !recordCapped, let recorder, let data = body["data"] as? String else { return }
+            let part = body["part"] as? Int ?? 0
+            recorder.append(track: id, mime: mime, part: part, base64: data)
+        default:
+            break
+        }
+    }
+
+    /// 通知页面（主框架 + 有 MSE 的 iframe）开始 / 停止回传数据；0 = 停止
+    private func setRecordFlag(_ session: Int, frames: [WKFrameInfo]? = nil) {
+        let js = "window.__cloudnSetRecord && window.__cloudnSetRecord(\(session));"
+        guard let frames else {
+            webView.evaluateJavaScript(js, completionHandler: nil)
+            for frame in mseFrames.values where !frame.isMainFrame {
+                webView.evaluateJavaScript(js, in: frame, in: .page) { _ in }
+            }
+            return
+        }
+        for frame in frames {
+            webView.evaluateJavaScript(js, in: frame, in: .page) { _ in }
+        }
+    }
+
+    func startRecording() {
+        guard !recording, !savingRecording else { return }
+        recorder?.discard()
+        let recorder = MSERecorder()
+        recorder.onProgress = { [weak self] progress in
+            Task { @MainActor [weak self] in self?.applyRecordProgress(progress) }
+        }
+        self.recorder = recorder
+        recordSession += 1
+        recording = true
+        recordedBytes = 0
+        recordedTracks = 0
+        recordCapped = false
+        recordPage = currentURL
+        setRecordFlag(recordSession)
+    }
+
+    private func applyRecordProgress(_ progress: MSERecorder.Progress) {
+        guard recording else { return }
+        recordedBytes = progress.bytes
+        recordedTracks = progress.tracks
+        if progress.capped && !recordCapped {
+            recordCapped = true
+            setRecordFlag(0)
+        }
+    }
+
+    /// 放弃录制（没在录制时什么都不做）
+    func cancelRecording() {
+        guard recording else { return }
+        setRecordFlag(0)
+        recording = false
+        recorder?.discard()
+        recorder = nil
+        recordedBytes = 0
+        recordedTracks = 0
+        recordCapped = false
+    }
+
+    /// 停止录制并存入下载列表，返回给用户看的结果说明
+    func stopRecording(into downloads: DownloadStore) async throws -> String {
+        guard recording, let recorder else { throw CloudnError("当前没有在录制") }
+        setRecordFlag(0)
+        recording = false
+        savingRecording = true
+        defer {
+            savingRecording = false
+            recordedBytes = 0
+            recordedTracks = 0
+            recordCapped = false
+            // 保存成功的文件已移入下载目录，剩下的临时文件一并删除
+            recorder.discard()
+            if self.recorder === recorder { self.recorder = nil }
+        }
+        let results = await recorder.finish()
+        let page = recordPage.isEmpty ? currentURL : recordPage
+        let base = FileNames.base(title, fallback: URL(string: page)?.host ?? "video")
+        let outcome = try await MSERecordingSaver.save(results, base: base, page: page, workDirectory: recorder.directory, downloads: downloads)
+        return outcome.message
+    }
+
     private func refreshState() {
         title = webView.title ?? ""
         currentURL = webView.url?.absoluteString ?? currentURL
@@ -262,6 +541,11 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loading = true
+        // 换页面了：旧页面的 MSE 轨道作废（录制中保留，结束后再清）
+        if !recording && !mseTracks.isEmpty {
+            mseTracks = [:]
+            mseFrames = [:]
+        }
         refreshState()
     }
 
@@ -351,6 +635,127 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
       });
     })();
     """
+
+    /// 录制 MSE 视频流：钩住 MediaSource.addSourceBuffer / SourceBuffer.appendBuffer。
+    /// 平时只报告出现了哪些 SourceBuffer（并记住各自最近的初始化段）；应用开始录制后，
+    /// 每次追加的数据按 ≤512KB 一片转成 base64 发回（中途开始录制时先补发初始化段）。
+    /// 原始字符串：脚本里的反斜杠不需要转义
+    static let mseScript = #"""
+    (function(){
+      if (window.__cloudnMSE) return; window.__cloudnMSE = true;
+      var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cloudnMSE;
+      if (!handler) return;
+      var PIECE = 512 * 1024;
+      var frameKey = Math.random().toString(36).slice(2, 10);
+      var nextId = 1;
+      var session = 0;
+      function post(msg){ try { handler.postMessage(msg); } catch (e) {} }
+      function owner(proto, name){
+        while (proto && !Object.prototype.hasOwnProperty.call(proto, name)) proto = Object.getPrototypeOf(proto);
+        return proto;
+      }
+      function bytesOf(data){
+        try {
+          if (data instanceof ArrayBuffer) return new Uint8Array(data);
+          if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        } catch (e) {}
+        return null;
+      }
+      function isInit(u8){
+        if (u8.length >= 8) {
+          var t = String.fromCharCode(u8[4], u8[5], u8[6], u8[7]);
+          if (t === 'ftyp' || t === 'moov') return true;
+        }
+        return u8.length >= 4 && u8[0] === 0x1A && u8[1] === 0x45 && u8[2] === 0xDF && u8[3] === 0xA3;
+      }
+      function b64(u8){
+        var s = '', step = 0x8000;
+        for (var i = 0; i < u8.length; i += step) s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(u8.length, i + step)));
+        return btoa(s);
+      }
+      function announce(info){
+        post({type: 'sb', sb: info.id, mime: info.mime, page: location.href, title: document.title || ''});
+      }
+      function send(info, u8){
+        var parts = Math.max(1, Math.ceil(u8.length / PIECE));
+        for (var p = 0; p < parts; p++) {
+          var piece = u8.subarray(p * PIECE, Math.min(u8.length, (p + 1) * PIECE));
+          post({type: 'data', sb: info.id, mime: info.mime, seq: info.seq++, part: p, parts: parts, data: b64(piece)});
+        }
+      }
+      function onAppend(sb, data){
+        var info = sb.__cloudnInfo;
+        if (!info) return;
+        var u8 = bytesOf(data);
+        if (!u8 || !u8.length) return;
+        var init = isInit(u8);
+        // 记住最近的初始化段：录制中途开始时先补发它，否则录到的媒体段无法播放
+        if (init && u8.length <= 4 * 1024 * 1024) info.init = u8.slice();
+        if (!session) return;
+        if (info.session !== session) {
+          info.session = session;
+          if (!init && info.init) send(info, info.init);
+        }
+        send(info, u8);
+      }
+      function track(sb, mime){
+        if (!sb || sb.__cloudnInfo) return;
+        var info = {id: frameKey + '-' + (nextId++), mime: String(mime || ''), seq: 0, session: 0, init: null};
+        try { Object.defineProperty(sb, '__cloudnInfo', {value: info, enumerable: false}); } catch (e) { sb.__cloudnInfo = info; }
+        announce(info);
+      }
+      function patchAppend(proto){
+        if (!proto || typeof proto.appendBuffer !== 'function' || proto.appendBuffer.__cloudn) return;
+        var orig = proto.appendBuffer;
+        var wrapped = function(data){
+          // 先交给原方法：它抛错（如缓冲区满）时页面会重试，这次不能记
+          var result = orig.apply(this, arguments);
+          try { onAppend(this, data); } catch (e) {}
+          return result;
+        };
+        wrapped.__cloudn = true;
+        proto.appendBuffer = wrapped;
+      }
+      function patchChangeType(proto){
+        if (!proto || typeof proto.changeType !== 'function' || proto.changeType.__cloudn) return;
+        var orig = proto.changeType;
+        var wrapped = function(type){
+          var result = orig.apply(this, arguments);
+          try {
+            var info = this.__cloudnInfo;
+            if (info) { info.mime = String(type || ''); info.init = null; announce(info); }
+          } catch (e) {}
+          return result;
+        };
+        wrapped.__cloudn = true;
+        proto.changeType = wrapped;
+      }
+      function patchBuffer(proto){
+        patchAppend(owner(proto, 'appendBuffer'));
+        patchChangeType(owner(proto, 'changeType'));
+      }
+      function patchSource(proto){
+        proto = owner(proto, 'addSourceBuffer');
+        if (!proto || typeof proto.addSourceBuffer !== 'function' || proto.addSourceBuffer.__cloudn) return;
+        var orig = proto.addSourceBuffer;
+        var wrapped = function(mime){
+          var sb = orig.apply(this, arguments);
+          try { patchBuffer(Object.getPrototypeOf(sb)); track(sb, mime); } catch (e) {}
+          return sb;
+        };
+        wrapped.__cloudn = true;
+        proto.addSourceBuffer = wrapped;
+      }
+      ['MediaSource', 'ManagedMediaSource', 'WebKitMediaSource'].forEach(function(name){
+        try { if (window[name] && window[name].prototype) patchSource(window[name].prototype); } catch (e) {}
+      });
+      ['SourceBuffer', 'ManagedSourceBuffer'].forEach(function(name){
+        try { if (window[name] && window[name].prototype) patchBuffer(window[name].prototype); } catch (e) {}
+      });
+      // 应用通过它开始（录制编号）/ 停止（0）录制
+      window.__cloudnSetRecord = function(n){ session = Number(n) || 0; };
+    })();
+    """#
 }
 
 /// WKUserContentController 强引用消息处理者：中间隔一层弱引用，避免浏览器状态永远释放不掉

@@ -121,6 +121,8 @@ public struct DownloadLink: Sendable, Equatable {
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
+    /// 海外视频平台（可选登录：解析受限内容、避开游客限额）
+    case twitter, instagram, tiktok, reddit, facebook
 
     public var id: String { rawValue }
 
@@ -141,11 +143,18 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .pixiv: return "Pixiv"
         case .zhihu: return "知乎"
         case .yuanbao: return "腾讯元宝"
+        case .twitter: return "X"
+        case .instagram: return "Instagram"
+        case .tiktok: return "TikTok"
+        case .reddit: return "Reddit"
+        case .facebook: return "Facebook"
         }
     }
 
     /// 网盘账号（区别于视频平台账号）
-    public var isDrive: Bool { ![.bilibili, .xiaohongshu, .pixiv, .zhihu, .yuanbao].contains(self) }
+    public var isDrive: Bool {
+        ![.bilibili, .xiaohongshu, .pixiv, .zhihu, .yuanbao, .twitter, .instagram, .tiktok, .reddit, .facebook].contains(self)
+    }
 }
 
 /// 解析过程中给用户看的错误（文案即提示语）

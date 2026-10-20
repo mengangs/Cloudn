@@ -107,6 +107,14 @@ final class DownloadStore {
                                 expectedSize: media.size, source: result.platform.displayName, group: group, refresh: refresh))
     }
 
+    /// 把应用里生成好的本地文件（如网页录制的视频流）作为一条已完成的下载加入列表，文件会被移入下载目录。
+    /// page 记作任务的地址（列表里「复制地址」拿到的是来源网页）
+    @discardableResult
+    func importLocalFile(_ url: URL, name: String, source: String, page: String = "") async throws -> DownloadItem {
+        let request = DownloadRequest(url: page, fileName: name, kind: .file, source: source)
+        return try await engine.importFinishedFile(url, request: request)
+    }
+
     // 交给后台会话的分片要一并撤掉，否则会在任务暂停 / 删除后继续占用流量
     func pause(_ item: DownloadItem) {
         background.cancel(itemId: item.id)

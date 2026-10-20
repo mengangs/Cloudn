@@ -57,7 +57,7 @@ struct AccountsView: View {
                             }
                         }
                         .card()
-                        Text("小红书、知乎需要登录；Pixiv 未登录只能解析公开作品；其余平台无需登录。")
+                        Text("小红书、知乎需要登录；Pixiv 未登录只能解析公开作品；X、Instagram、TikTok、Reddit、Facebook 登录可选，登录后可解析受限内容并减少游客限流；其余平台无需登录。")
                             .font(.caption)
                             .foregroundStyle(Color.ink3)
                             .padding(.horizontal, 4)

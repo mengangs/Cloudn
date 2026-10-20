@@ -75,6 +75,7 @@ struct YouTubeParser: VideoParser {
     }
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
+        if link.kind == "playlist" { return try await parsePlaylist(link) }
         let id = Self.isVideoID(link.id) ? link.id : (Self.videoID(from: link.url) ?? "")
         guard Self.isVideoID(id) else { throw VideoParseError(.unsupported, "无法从链接中识别 YouTube 视频 ID") }
         let session = YouTubeSession(videoID: id)
@@ -135,10 +136,12 @@ struct YouTubeParser: VideoParser {
         if title.isEmpty { title = Self.text(micro["title"]) }
         let author = details["author"].string.nilIfBlank ?? micro["ownerChannelName"].string
         let date = micro["publishDate"].string.nilIfBlank ?? micro["uploadDate"].string
+        var subtitles = Self.subtitles(built.response)
+        if subtitles.isEmpty { subtitles = Self.subtitles(page) }
         return VideoParseResult(platform: platform, title: title.isEmpty ? "YouTube \(id)" : title, author: author,
                                 cover: Self.thumbnail(details, id: id), text: details["shortDescription"].string,
                                 timestamp: Self.parseDate(date), url: "https://www.youtube.com/watch?v=\(id)",
-                                medias: built.medias, notice: built.notice)
+                                medias: built.medias, notice: built.notice, subtitles: subtitles)
     }
 
     // MARK: 请求

@@ -78,7 +78,8 @@ public final class VideoParseService: Sendable {
         let result = try await parser.parse(resolved, cookie: cookie)
         return VideoParseResult(platform: result.platform, title: result.title, author: result.author, avatar: result.avatar,
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
-                                url: result.url, medias: result.medias.map { $0.withSecureURLs() }, notice: result.notice)
+                                url: result.url, medias: result.medias.map { $0.withSecureURLs() }, notice: result.notice,
+                                entries: result.entries, subtitles: result.subtitles)
     }
 
     /// 展开短链（最多 5 跳），终址能重新识别就用新的识别结果
@@ -132,6 +133,16 @@ public enum AccountValidator {
             return await ZhihuParser.validate(cookie: cookie)
         case .yuanbao:
             return await WxChannelsParser.validate(cookie: cookie)
+        case .twitter:
+            return await TwitterParser.validate(cookie: cookie)
+        case .instagram:
+            return await InstagramParser.validate(cookie: cookie)
+        case .tiktok:
+            return await TikTokParser.validate(cookie: cookie)
+        case .reddit:
+            return await RedditParser.validate(cookie: cookie)
+        case .facebook:
+            return await FacebookParser.validate(cookie: cookie)
         case .baidu:
             guard BaiduResolver.isValidCookie(cookie) else { return nil }
             return await BaiduResolver(credentials: NoCredentials()).fetchNickname(cookie: cookie)

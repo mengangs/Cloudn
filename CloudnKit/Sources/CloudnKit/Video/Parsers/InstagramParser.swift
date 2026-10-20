@@ -32,6 +32,9 @@ struct InstagramParser: VideoParser {
     /// 受限（需要登录）——匿名失败时才值得带 Cookie 重试
     struct Restricted: Error { let message: String }
 
+    /// 游客请求被限流（HTTP 429）——有 Cookie 时改用登录态重试
+    struct RateLimited: Error {}
+
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         let code = link.id.isEmpty ? (Self.shortcode(from: link.url) ?? "") : link.id
         guard !code.isEmpty else { throw VideoParseError(.unsupported, "Instagram 帖子链接无效") }
@@ -40,13 +43,25 @@ struct InstagramParser: VideoParser {
             post = try await fetch(code, cookie: "")
         } catch let r as Restricted {
             guard !cookie.isEmpty else { throw OverseasHTTP.loginRequired("Instagram", reason: r.message) }
-            do {
-                post = try await fetch(code, cookie: cookie)
-            } catch let again as Restricted {
-                throw VideoParseError(.unknown, "\(again.message)（Cookie 可能已失效）")
+            post = try await fetchLoggedIn(code, cookie: cookie)
+        } catch is RateLimited {
+            guard !cookie.isEmpty else {
+                throw VideoParseError(.blocked, "Instagram 游客请求过于频繁（HTTP 429），请稍后重试；到「我的」页登录 Instagram 后可避开游客限额")
             }
+            post = try await fetchLoggedIn(code, cookie: cookie)
         }
         return build(link, code: code, post: post)
+    }
+
+    /// 带登录 Cookie 再取一次：先匿名是为了少用账号请求，降低账号被风控的概率
+    private func fetchLoggedIn(_ code: String, cookie: String) async throws -> Post {
+        do {
+            return try await fetch(code, cookie: cookie)
+        } catch let again as Restricted {
+            throw VideoParseError(.unknown, "\(again.message)（登录可能已失效，请到「我的」页重新登录 Instagram）")
+        } catch is RateLimited {
+            throw VideoParseError(.blocked, "Instagram 请求过于频繁（HTTP 429），请稍后重试")
+        }
     }
 
     private func fetch(_ code: String, cookie: String) async throws -> Post {
@@ -66,7 +81,7 @@ struct InstagramParser: VideoParser {
         if (300..<400).contains(r.status) || r.status == 401 {
             throw Restricted(message: "Instagram 要求登录")
         }
-        if r.status == 429 { throw VideoParseError(.blocked, "Instagram 请求过于频繁（HTTP 429），请稍后重试") }
+        if r.status == 429 { throw RateLimited() }
         guard r.status == 200 else { throw VideoParseError(.unknown, "Instagram GraphQL 请求失败（HTTP \(r.status)）") }
         guard let payload = r.json, payload.isObject else {
             throw Restricted(message: "Instagram 返回了非 JSON 响应（多半是登录页）")
@@ -123,6 +138,33 @@ struct InstagramParser: VideoParser {
         return VideoParseResult(platform: platform, title: title.isEmpty ? "Instagram \(code)" : title, author: post.author,
                                 avatar: post.avatar, cover: cover, text: post.caption, timestamp: post.timestamp,
                                 url: "https://www.instagram.com/p/\(code)/", medias: medias)
+    }
+
+    // MARK: 账号校验
+
+    /// 网页「编辑资料」页用的当前用户接口：未登录时 302 到登录页或返回 login_required
+    static let currentUserURL = "https://www.instagram.com/api/v1/accounts/current_user/?edit=true"
+
+    static func validate(cookie: String) async -> String? {
+        var headers: [(String, String)] = [
+            ("Accept", "*/*"), ("User-Agent", userAgent), ("Referer", homeURL),
+            ("X-IG-App-ID", appID), ("X-Requested-With", "XMLHttpRequest"), ("Cookie", cookie)
+        ]
+        if let csrf = CookieUtil.value(of: "csrftoken", in: cookie), !csrf.isEmpty { headers.append(("X-CSRFToken", csrf)) }
+        let request = HTTPRequest.get(currentUserURL, headers: headers, followRedirects: false)
+        return await OverseasAccount.probe(.instagram, cookie: cookie, request) { r in
+            Self.probeResult(status: r.status, json: r.json)
+        }
+    }
+
+    static func probeResult(status: Int, json: JSON?) -> OverseasAccount.Probe {
+        if (300..<400).contains(status) || status == 401 { return .invalid }
+        let message = json?["message"].string ?? ""
+        // checkpoint_required：账号需要在官方应用里完成验证，登录态暂不可用
+        if message == "login_required" || message == "checkpoint_required" { return .invalid }
+        guard (200..<300).contains(status), let json, json.isObject else { return .unknown }
+        let name = json["user"]["username"].string
+        return name.isEmpty ? .unknown : .valid(name)
     }
 
     // MARK: 纯逻辑

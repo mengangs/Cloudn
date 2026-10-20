@@ -33,25 +33,20 @@ struct TwitterParser: VideoParser {
         let id = link.id.isEmpty ? (Self.tweetID(from: link.url) ?? "") : link.id
         guard !id.isEmpty else { throw VideoParseError(.unsupported, "无法从链接中识别推文 ID") }
         let loggedIn = Self.hasLoginCookie(cookie)
-        var headers: [(String, String)] = [
-            ("accept-language", "zh-CN,zh;q=0.9"), ("authorization", Self.bearer), ("content-type", "application/json"),
-            ("user-agent", VideoHTTP.uaChrome), ("x-twitter-active-user", "yes"), ("x-twitter-client-language", "zh-cn")
-        ]
-        if loggedIn {
-            headers.append(("x-csrf-token", CookieUtil.value(of: "ct0", in: cookie) ?? ""))
-            headers.append(("x-twitter-auth-type", "OAuth2Session"))
-            headers.append(("Cookie", cookie))
-        } else if let guest = try await guestToken() {
+        var headers = Self.apiHeaders(cookie: cookie)
+        if !loggedIn, let guest = try await guestToken() {
             headers.append(("x-guest-token", guest))
         }
         let r = try await OverseasHTTP.send(.get(Self.requestURL(id: id), headers: headers), site: "X")
         switch r.status {
         case 200: break
         case 401, 403:
-            if loggedIn { throw VideoParseError(.unknown, "X 拒绝了请求（HTTP \(r.status)），Cookie 可能已失效") }
+            if loggedIn { throw VideoParseError(.unknown, "X 拒绝了请求（HTTP \(r.status)），登录可能已失效，请到「我的」页重新登录 X") }
             throw OverseasHTTP.loginRequired("X")
         case 404: throw VideoParseError(.notFound, "推文不存在（HTTP 404）")
-        case 429: throw VideoParseError(.blocked, "X 接口请求过于频繁（HTTP 429），请稍后重试")
+        case 429:
+            if loggedIn { throw VideoParseError(.blocked, "X 接口请求过于频繁（HTTP 429），请稍后重试") }
+            throw VideoParseError(.blocked, "X 游客接口请求过于频繁（HTTP 429），请稍后重试；到「我的」页登录 X 后可避开游客限额")
         default: throw VideoParseError(.unknown, "X 接口请求失败（HTTP \(r.status)）")
         }
         guard let json = r.json else { throw VideoParseError(.unknown, "X 接口返回的不是合法 JSON") }
@@ -94,9 +89,51 @@ struct TwitterParser: VideoParser {
     }
 
     static func hasLoginCookie(_ cookie: String) -> Bool {
-        let ct0 = CookieUtil.value(of: "ct0", in: cookie) ?? ""
+        let ct0 = csrfToken(cookie) ?? ""
         let auth = CookieUtil.value(of: "auth_token", in: cookie) ?? ""
         return !ct0.isEmpty && !auth.isEmpty
+    }
+
+    /// 网页 Cookie 里的 ct0 即 CSRF 令牌，登录态请求须原样放进 x-csrf-token
+    static func csrfToken(_ cookie: String) -> String? {
+        guard let v = CookieUtil.value(of: "ct0", in: cookie)?.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")),
+              !v.isEmpty else { return nil }
+        return v
+    }
+
+    /// API 请求头：带登录 Cookie 时按网页登录态（Cookie + x-csrf-token + OAuth2Session），否则只带公共 Bearer
+    static func apiHeaders(cookie: String) -> [(String, String)] {
+        var headers: [(String, String)] = [
+            ("accept-language", "zh-CN,zh;q=0.9"), ("authorization", bearer), ("content-type", "application/json"),
+            ("user-agent", VideoHTTP.uaChrome), ("x-twitter-active-user", "yes"), ("x-twitter-client-language", "zh-cn")
+        ]
+        if hasLoginCookie(cookie) {
+            headers.append(("x-csrf-token", csrfToken(cookie) ?? ""))
+            headers.append(("x-twitter-auth-type", "OAuth2Session"))
+            headers.append(("Cookie", cookie))
+        }
+        return headers
+    }
+
+    // MARK: 账号校验
+
+    /// 网页客户端启动时就会请求的账号设置接口，返回 screen_name
+    static let settingsURL = "https://api.x.com/1.1/account/settings.json"
+
+    static func validate(cookie: String) async -> String? {
+        guard hasLoginCookie(cookie) else { return nil }
+        let request = HTTPRequest.get(settingsURL, headers: apiHeaders(cookie: cookie))
+        return await OverseasAccount.probe(.twitter, cookie: cookie, request) { r in
+            Self.probeResult(status: r.status, json: r.json)
+        }
+    }
+
+    /// 401/403（未登录 code 32/215、ct0 不匹配 code 353）算失效；其余（429、5xx）说不准
+    static func probeResult(status: Int, json: JSON?) -> OverseasAccount.Probe {
+        if status == 401 || status == 403 { return .invalid }
+        guard (200..<300).contains(status), let json, json.isObject else { return .unknown }
+        let screen = json["screen_name"].string
+        return screen.isEmpty ? .unknown : .valid("@" + screen)
     }
 
     static func requestURL(id: String) -> String {
@@ -162,6 +199,8 @@ struct TwitterParser: VideoParser {
         } else {
             tweet.text = fullText
         }
+        // 推广推文等把视频放在卡片（unified_card）里
+        if tweet.medias.isEmpty { tweet.medias = cardMedias(node["card"]) }
         // 自己没有媒体的引用推文：取被引用推文里的媒体
         let quoted = node["quoted_status_result"]["result"]
         if tweet.medias.isEmpty && allowQuote && quoted.isObject,
@@ -175,6 +214,21 @@ struct TwitterParser: VideoParser {
     static func legacyMedias(_ legacy: JSON) -> [Media] {
         var list = legacy["extended_entities"]["media"].array
         if list.isEmpty { list = legacy["entities"]["media"].array }
+        return mediaItems(list)
+    }
+
+    /// 卡片里的 unified_card（JSON 字符串）→ media_entities，结构与推文媒体相同
+    static func cardMedias(_ card: JSON) -> [Media] {
+        for binding in card["legacy"]["binding_values"].array where binding["key"].string == "unified_card" {
+            guard let unified = JSON(text: binding["value"]["string_value"].string) else { continue }
+            let entities = unified["media_entities"]
+            let medias = mediaItems(entities.keys.sorted().map { entities[$0] })
+            if !medias.isEmpty { return medias }
+        }
+        return []
+    }
+
+    static func mediaItems(_ list: [JSON]) -> [Media] {
         var out: [Media] = []
         for item in list {
             let type = item["type"].string
@@ -274,9 +328,13 @@ enum OverseasHTTP {
         VideoParseError(.unknown, "所在网络无法访问 \(site)，可在设置里配置网络代理")
     }
 
+    /// 支持在「我的」页登录的海外站点（与 OverseasAccount.kinds 的 displayName 对应）
+    static let accountSites: Set<String> = ["X", "Instagram", "TikTok", "Reddit", "Facebook"]
+
     static func loginRequired(_ site: String, reason: String = "") -> VideoParseError {
         let prefix = reason.isEmpty ? "" : reason + "。"
-        return VideoParseError(.unknown, "\(prefix)该内容需要登录 \(site) 后才能查看")
+        let action = accountSites.contains(site) ? "，请先到「我的」页登录 \(site)" : ""
+        return VideoParseError(.unknown, "\(prefix)该内容需要登录 \(site) 后才能查看\(action)")
     }
 
     /// 把响应里的 Set-Cookie 合进 Cookie 串（空值多为删除指令，忽略）

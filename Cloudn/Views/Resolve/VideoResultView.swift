@@ -13,6 +13,11 @@ struct VideoResultView: View {
     @State private var textExpanded = false
     /// 各清晰度组选中的那一个（没选过就是组内第一个，即最高画质）
     @State private var chosen: [String: UUID] = [:]
+    /// 合集里取消勾选的条目（默认全选）
+    @State private var unpicked = Set<UUID>()
+    @State private var batchJob: BatchJob?
+    /// 正在保存的字幕
+    @State private var savingSubtitle: UUID?
 
     private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image } }
 
@@ -58,6 +63,8 @@ struct VideoResultView: View {
                 }
                 if !videos.isEmpty { videoSection }
                 if !images.isEmpty { imageSection }
+                if !result.entries.isEmpty { entriesSection }
+                if !result.subtitles.isEmpty { subtitleSection }
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -90,6 +97,7 @@ struct VideoResultView: View {
         .sensoryFeedback(.selection, trigger: selected)
         .animation(.snappy(duration: 0.25), value: selecting)
         .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }
+        .sheet(item: $batchJob) { BatchView(job: $0) }
     }
 
     // MARK: 头部
@@ -312,10 +320,128 @@ struct VideoResultView: View {
         }
     }
 
+    // MARK: 合集
+
+    private var pickedEntries: [VideoEntry] { result.entries.filter { !unpicked.contains($0.id) } }
+
+    private var entriesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(title: "合集 \(result.entries.count) 个")
+                Spacer()
+                Button(unpicked.isEmpty ? "全不选" : "全选") {
+                    unpicked = unpicked.isEmpty ? Set(result.entries.map(\.id)) : []
+                }
+                .font(.footnote.weight(.medium))
+            }
+            LazyVStack(spacing: 0) {
+                ForEach(Array(result.entries.enumerated()), id: \.element.id) { index, entry in
+                    Button {
+                        if unpicked.contains(entry.id) { unpicked.remove(entry.id) } else { unpicked.insert(entry.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            SelectMark(on: !unpicked.contains(entry.id), size: 20)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.title.isEmpty ? entry.url : entry.title)
+                                    .font(.subheadline).foregroundStyle(Color.ink).lineLimit(2)
+                                if let d = entry.duration, d > 0 {
+                                    Text(Self.clock(d)).font(.monoSmall).foregroundStyle(Color.ink3)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if index < result.entries.count - 1 { RowDivider(leading: 46) }
+                }
+            }
+            .card()
+            Text("点「下载所选」后逐条解析，每条按最高画质加入下载。")
+                .font(.caption)
+                .foregroundStyle(Color.ink3)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    // MARK: 字幕
+
+    private var subtitleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(title: "字幕 \(result.subtitles.count) 个")
+            VStack(spacing: 0) {
+                ForEach(Array(result.subtitles.enumerated()), id: \.element.id) { index, track in
+                    HStack(spacing: 12) {
+                        IconView(.text, size: 18).foregroundStyle(Color.ink2).frame(width: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.name).font(.subheadline).foregroundStyle(Color.ink)
+                            Text(track.automatic ? "自动生成 · 存为 SRT" : "存为 SRT").font(.caption).foregroundStyle(Color.ink3)
+                        }
+                        Spacer(minLength: 0)
+                        if savingSubtitle == track.id {
+                            Spinner(size: 18)
+                        } else {
+                            Button { saveSubtitle(track) } label: { IconView(.download, size: 15) }
+                                .buttonStyle(CircleIconButtonStyle(size: 32))
+                                .accessibilityLabel("下载\(track.name)字幕")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    if index < result.subtitles.count - 1 { RowDivider(leading: 52) }
+                }
+            }
+            .card()
+        }
+    }
+
+    private func saveSubtitle(_ track: SubtitleTrack) {
+        savingSubtitle = track.id
+        Task {
+            defer { savingSubtitle = nil }
+            do {
+                let url = try await app.saveSubtitle(track, title: result.title.isEmpty ? result.platform.displayName : result.title)
+                app.show("字幕已保存：\(url.lastPathComponent)")
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
+        }
+    }
+
     // MARK: 底部
 
     @ViewBuilder
     private var bottomBar: some View {
+        if !result.entries.isEmpty && !selecting {
+            let picked = pickedEntries
+            Button {
+                let title = result.title.isEmpty ? result.platform.displayName : result.title
+                batchJob = app.startBatch(title: title, entries: picked.map { (title: $0.title, url: $0.url) })
+            } label: {
+                HStack(spacing: 6) {
+                    Image(icon: .download)
+                    Text(picked.isEmpty ? "选择要下载的条目" : "下载所选 · \(picked.count) 个").contentTransition(.numericText())
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PillButtonStyle(kind: .primary, height: 48))
+            .disabled(picked.isEmpty)
+            .opacity(picked.isEmpty ? 0.5 : 1)
+            .floatingShadow()
+        } else {
+            mediaBottomBar
+        }
+    }
+
+    @ViewBuilder
+    private var mediaBottomBar: some View {
         let targets = selecting ? images.filter { selected.contains($0.id) } : downloadAll
         let title = selecting ? (targets.isEmpty ? "选择要下载的图片" : "下载所选 · \(targets.count) 张")
             : (targets.count > 1 ? "全部下载 · \(targets.count) 项" : "下载")

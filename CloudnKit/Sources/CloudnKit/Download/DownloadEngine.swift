@@ -694,3 +694,25 @@ public actor DownloadEngine {
     private func index(_ id: UUID) -> Int? { items.firstIndex(where: { $0.id == id }) }
     private nonisolated func workDir(_ id: UUID) -> URL { workDirectory.appendingPathComponent(id.uuidString, isDirectory: true) }
 }
+
+// MARK: 导入本地文件
+
+extension DownloadEngine {
+    /// 把应用里已经生成好的本地文件（如网页嗅探录制的视频流）登记为一条已完成的下载：
+    /// 文件移入下载目录（按 request 的文件名 / 文件夹，重名自动编号），走正常的完成回调（通知、存相册等）。
+    /// 移动失败时不留下任务记录，错误抛给调用方。
+    @discardableResult
+    public func importFinishedFile(_ file: URL, request: DownloadRequest) async throws -> DownloadItem {
+        var item = DownloadItem(request: request)
+        // 不是 queued：调度器不会去下载它
+        item.status = .merging
+        items.insert(item, at: 0)
+        await finish(item.id, output: file)
+        guard let i = index(item.id) else { throw CloudnError("保存失败") }
+        if items[i].status == .completed { return items[i] }
+        let message = items[i].errorMessage ?? "保存失败"
+        items.remove(at: i)
+        changed(force: true)
+        throw CloudnError(message)
+    }
+}

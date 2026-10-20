@@ -15,7 +15,7 @@ final class LiveParseTests: XCTestCase {
 
     func testYouTube() async throws { try await check("https://www.youtube.com/watch?v=jNQXAC9IVRw") }
     func testBilibili() async throws { try await check("https://www.bilibili.com/video/BV13x41117TL") }
-    func testTwitter() async throws { try await check("https://twitter.com/starwars/status/665052190608723968") }
+    func testTwitter() async throws { try await check("https://twitter.com/s2FAKER/status/1621117700482416640") }
     func testTikTok() async throws { try await check("https://www.tiktok.com/@patroxofficial/video/6742501081818877190") }
     func testInstagram() async throws { try await check("https://www.instagram.com/p/BQ0eAlwhDrw/") }
     func testFacebook() async throws { try await check("https://www.facebook.com/radiokicksfm/videos/3676516585958356/") }

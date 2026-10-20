@@ -24,6 +24,7 @@ struct ResolveView: View {
     @State private var sniffTarget: SniffTarget?
     /// 平台解析失败后，询问是否改用网页嗅探
     @State private var sniffOffer: SniffOffer?
+    @State private var batchJob: BatchJob?
     /// 剪贴板里有链接、且这一条还没处理过
     @State private var clipboardOffer = false
     /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次
@@ -35,6 +36,20 @@ struct ResolveView: View {
     /// 识别不出链接、但像迅雷中文口令
     private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
     private var canSubmit: Bool { detected != nil || isKouling }
+    /// 一次粘贴了多个视频链接：批量解析下载
+    private var batchLinks: [String] { Self.videoLinks(in: input) }
+
+    /// 文本里所有能识别的视频 / 图集链接（去重，保持顺序）
+    static func videoLinks(in text: String) -> [String] {
+        guard text.count < 200_000, let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
+        var out: [String] = []
+        for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let url = match.url?.absoluteString, url.hasPrefix("http"), VideoLinkParser.parse(url) != nil,
+                  !out.contains(url) else { continue }
+            out.append(url)
+        }
+        return out
+    }
 
     var body: some View {
         NavigationStack {
@@ -85,6 +100,7 @@ struct ResolveView: View {
                 if let url = urls.first { app.openTorrentFile(url) }
             }
             .fullScreenCover(item: $sniffTarget) { SnifferView(url: $0.url) }
+            .sheet(item: $batchJob) { BatchView(job: $0) }
             .alert(sniffOffer?.message ?? "", isPresented: Binding(get: { sniffOffer != nil }, set: { if !$0 { sniffOffer = nil } })) {
                 Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
                 Button("取消", role: .cancel) {}
@@ -268,7 +284,10 @@ struct ResolveView: View {
     private var detectionText: String {
         switch detected {
         case .share(let s): return s.platform.displayName
-        case .video(let v): return v.platform.displayName + (input.count > v.url.count + 8 ? " · 已从文案里取出链接" : "")
+        case .video(let v):
+            let count = batchLinks.count
+            if count > 1 { return "识别到 \(count) 个视频链接 · 批量下载" }
+            return v.platform.displayName + (input.count > v.url.count + 8 ? " · 已从文案里取出链接" : "")
         case .github(.file): return "GitHub 文件 · 直接下载"
         case .github(.account(let owner)): return "GitHub · \(owner) 的仓库"
         case .github: return "GitHub 仓库"
@@ -490,6 +509,12 @@ struct ResolveView: View {
             if isKouling { resolveKouling() }
             return
         }
+        let links = batchLinks
+        if case .video = detected, links.count > 1 {
+            batchJob = app.startBatch(title: "批量下载 \(links.count) 个", entries: links.map { (title: "", url: $0) })
+            input = ""
+            return
+        }
         switch detected {
         case .share(let share):
             guard share.platform.isResolvable else {
@@ -507,7 +532,7 @@ struct ResolveView: View {
                 do {
                     let result = try await app.videoService.parse(link)
                     try Task.checkCancellation()
-                    guard !result.medias.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
+                    guard !result.medias.isEmpty || !result.entries.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
                     app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
                                          text: text, source: result.platform.displayName)
                     videoResult = result
