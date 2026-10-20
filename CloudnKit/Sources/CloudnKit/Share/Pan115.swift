@@ -644,3 +644,388 @@ extension Pan115Resolver: DriveManager {
         return DriveQuota(used: used, total: total)
     }
 }
+
+// MARK: - 上传到我的网盘（参考 SheltonZhu/115driver pkg/driver/upload.go 与 OpenList drivers/115，AGPL-3.0）
+
+extension Pan115Resolver: DriveUploader {
+    static let uploadInfoURL = "https://proapi.115.com/app/uploadinfo"
+    static let initUploadURL = "https://uplb.115.com/4.0/initupload.php"
+    static let ossTokenURL = "https://uplb.115.com/3.0/gettoken.php"
+    static let ossEndpoint = "oss-cn-shenzhen.aliyuncs.com"
+    static let ossUA = "aliyun-sdk-android/2.9.1"
+    static let uploadTokenSalt = "Qclm8MGWUv59TnrR0XPg"
+    /// 不超过 10MB 一次 PUT（同 OpenList），更大的走顺序分片
+    static let singlePutLimit: Int64 = 10 << 20
+    /// STS 凭证约 1 小时过期，分片途中每 50 分钟换一次
+    static let ossTokenRefresh: TimeInterval = 50 * 60
+
+    /// 整文件 SHA-1 → uploadinfo → initupload（ec115 加密；status 7 时补区间 SHA-1 重发）→ 秒传完成，
+    /// 或 gettoken 拿 STS 凭证 → OSS 单次 PUT / 顺序分片，合并时带 115 回调落库
+    public func upload(_ file: URL, name: String, to folderId: String, progress: UploadProgress) async throws {
+        let cookie = try await driveCookie()
+        let size = FileChunks.size(of: file)
+        // 先算摘要，之后几个请求背靠背发：115 秒传有时效，拖久了会报 sig invalid
+        var sha1 = SHA1Hasher()
+        try FileChunks.scan(file, progress: progress.hashing(total: size)) { _, d in sha1.update(d) }
+        let fileId = Crypto.hex(sha1.finalize()).uppercased()
+
+        // appversion、token、UA 三处的版本号必须一致，这里取一次快照
+        await refreshClientVersion()
+        let version = await state.clientVersion
+        let ua = "Mozilla/5.0 115Browser/\(version)"
+        let account = try await uploadAccount(cookie: cookie, ua: ua)
+        if account.sizeLimit > 0 && size > account.sizeLimit {
+            throw CloudnError("文件超过 115 单文件上传上限（\(Self.sizeText(account.sizeLimit))）")
+        }
+
+        let target = "U_1_" + (folderId.nilIfBlank ?? "0")
+        var signKey = ""
+        var signVal = ""
+        var accepted: InitUploadTicket?
+        for _ in 0..<5 {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let fields = Self.initUploadForm(account: account, name: name, size: size, fileId: fileId, target: target, version: version,
+                                             timestamp: String(now), signKey: signKey, signVal: signVal)
+            let result = try await initUpload(fields, timestamp: now, cookie: cookie, ua: ua)
+            if result.status != 7 {
+                accepted = result
+                break
+            }
+            // 服务端抽查文件中的一段：回传该区间的 SHA-1，换新的 t / token / k_ec 立即重发
+            guard let range = Self.parseSignCheck(result.signCheck), !result.signKey.isEmpty else {
+                throw CloudnError("115 上传校验参数异常（\(result.signCheck)）")
+            }
+            signKey = result.signKey
+            signVal = try Self.rangeSHA1(file, start: range.start, end: range.end)
+        }
+        guard let ticket = accepted else { throw CloudnError("115 上传校验未通过，请稍后重试") }
+        // 秒传：网盘里已有同样的文件
+        if ticket.status == 2 {
+            progress(.finishing, 1)
+            return
+        }
+        guard ticket.status == 1, !ticket.bucket.isEmpty, !ticket.object.isEmpty else {
+            throw CloudnError(ticket.statusMessage.nilIfBlank ?? "115 上传初始化失败（status \(ticket.status)）")
+        }
+
+        var signer = try await ossSigner(cookie: cookie, ua: ua)
+        var signedAt = Date()
+        let callback = Self.ossCallbackHeaders(ticket)
+        let bucket = ticket.bucket
+        let object = ticket.object
+
+        if size <= Self.singlePutLimit {
+            let request = Self.ossRequest(signer, method: "PUT", bucket: bucket, object: object, query: [],
+                                          contentType: "application/octet-stream", extra: callback)
+            let r = try await client.upload(request, body: .file(file, offset: 0, length: size)) { done in
+                progress(.uploading, size > 0 ? Double(done) / Double(size) : 1)
+            }
+            progress(.finishing, 0)
+            try Self.checkOSSCallback(status: r.status, body: r.body, fallback: "上传失败")
+            progress(.finishing, 1)
+            return
+        }
+
+        // 分片：必须带 sequential + x-oss-enable-sha1，OSS 才会算整文件 SHA-1 给 115 回调核对；因此只能按顺序一片片传
+        let initiateQuery: [(String, String)] = [("sequential", ""), ("uploads", ""), ("x-oss-enable-sha1", "")]
+        let initiate = try await client.upload(Self.ossRequest(signer, method: "POST", bucket: bucket, object: object, query: initiateQuery,
+                                                               contentType: "application/octet-stream"),
+                                               body: .data(Data()))
+        guard initiate.isSuccess, let uploadId = UploadUtil.xmlValue("UploadId", in: initiate.text), !uploadId.isEmpty else {
+            throw Self.ossError(status: initiate.status, body: initiate.body, fallback: "初始化分片上传失败")
+        }
+        let parts = Self.uploadParts(size: size)
+        var etags: [String] = []
+        etags.reserveCapacity(parts.count)
+        var sent: Int64 = 0
+        for (i, part) in parts.enumerated() {
+            let n = i + 1
+            let base = sent
+            var attempt = 0
+            while true {
+                if Date().timeIntervalSince(signedAt) > Self.ossTokenRefresh {
+                    signer = try await ossSigner(cookie: cookie, ua: ua)
+                    signedAt = Date()
+                }
+                let query: [(String, String)] = [("partNumber", String(n)), ("uploadId", uploadId)]
+                let request = Self.ossRequest(signer, method: "PUT", bucket: bucket, object: object, query: query,
+                                              contentType: "application/octet-stream")
+                let r = try await client.upload(request, body: .file(file, offset: part.offset, length: part.length)) { done in
+                    progress(.uploading, Double(base + done) / Double(max(1, size)))
+                }
+                if r.isSuccess, let etag = r.header("ETag"), !etag.isEmpty {
+                    etags.append(etag)
+                    break
+                }
+                attempt += 1
+                guard attempt < 3 else { throw Self.ossError(status: r.status, body: r.body, fallback: "115 第 \(n) 片上传失败") }
+            }
+            sent += part.length
+        }
+
+        progress(.finishing, 0)
+        if Date().timeIntervalSince(signedAt) > Self.ossTokenRefresh {
+            signer = try await ossSigner(cookie: cookie, ua: ua)
+        }
+        let xml = UploadUtil.completeXML(etags)
+        let complete = try await client.upload(Self.ossRequest(signer, method: "POST", bucket: bucket, object: object,
+                                                               query: [("uploadId", uploadId)], contentType: "application/xml",
+                                                               extra: callback),
+                                               body: .data(Data(xml.utf8)))
+        try Self.checkOSSCallback(status: complete.status, body: complete.body, fallback: "合并分片失败")
+        progress(.finishing, 1)
+    }
+
+    struct UploadAccount: Equatable {
+        let userId: String
+        let userKey: String
+        let sizeLimit: Int64
+    }
+
+    struct InitUploadTicket: Equatable {
+        /// 1 = 需要上传，2 = 秒传完成，7 = 需要回传区间校验
+        var status: Int
+        var statusMessage: String
+        var pickCode: String
+        var bucket: String
+        var object: String
+        var callback: String
+        var callbackVar: String
+        var signKey: String
+        var signCheck: String
+    }
+
+    /// POST proapi.115.com/app/uploadinfo：user_id、userkey（算 sig 用）与单文件上限
+    private func uploadAccount(cookie: String, ua: String) async throws -> UploadAccount {
+        var h = headers(cookie: cookie, referer: Self.referer, ua: ua)
+        h.append(("Content-Type", "application/x-www-form-urlencoded"))
+        let r = try await client.send(HTTPRequest(url: Self.uploadInfoURL, method: "POST", headers: h, body: Data()))
+        guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
+        return try Self.parseUploadInfo(json)
+    }
+
+    /// initupload：表单按 Go url.Values.Encode 编码后 ec115 加密作请求体，k_ec 放查询串；响应同样是密文
+    private func initUpload(_ fields: [(String, String)], timestamp: Int64, cookie: String, ua: String) async throws -> InitUploadTicket {
+        let body = EC115.encrypt(Array(Self.goFormEncode(fields).utf8))
+        let url = Self.initUploadURL + "?k_ec=" + Self.goQueryEscape(EC115.encodeToken(timestamp: timestamp))
+        var h = headers(cookie: cookie, referer: Self.referer, ua: ua)
+        h.append(("Content-Type", "application/x-www-form-urlencoded"))
+        let r = try await client.send(HTTPRequest(url: url, method: "POST", headers: h, body: Data(body)))
+        // 登录失效等错误有时直接回明文 JSON
+        var decoded: JSON?
+        if let plain = EC115.decrypt([UInt8](r.body)) { decoded = JSON(data: Data(plain)) }
+        if decoded?.isObject != true { decoded = r.json }
+        guard let json = decoded, json.isObject else { throw CloudnError("115 上传初始化响应解析失败（HTTP \(r.status)）") }
+        return try Self.parseInitUpload(json)
+    }
+
+    /// GET uplb.115.com/3.0/gettoken.php：OSS STS 临时凭证
+    private func ossSigner(cookie: String, ua: String) async throws -> OSSSigner {
+        let r = try await client.send(.get(Self.ossTokenURL, headers: headers(cookie: cookie, referer: Self.referer, ua: ua)))
+        guard let json = r.json, json.isObject else { throw CloudnError("获取 115 上传凭证失败（HTTP \(r.status)）") }
+        return try Self.parseOSSToken(json)
+    }
+
+    // MARK: 上传：签名 / 请求体 / 解析
+
+    /// sig = UPPER(sha1(userkey + sha1(user_id + fileid + target + "0") + "000000"))
+    static func uploadSig(userId: String, userKey: String, fileId: String, target: String) -> String {
+        let inner = Crypto.sha1Hex("\(userId)\(fileId)\(target)0")
+        return Crypto.sha1Hex("\(userKey)\(inner)000000").uppercased()
+    }
+
+    /// token = md5(盐 + fileid + 文件大小 + sign_key + sign_val + user_id + t + md5(user_id) + 版本号)
+    static func uploadToken(userId: String, fileId: String, size: Int64, signKey: String, signVal: String,
+                            timestamp: String, version: String) -> String {
+        let userMD5 = Crypto.md5Hex(userId)
+        let raw = "\(uploadTokenSalt)\(fileId)\(size)\(signKey)\(signVal)\(userId)\(timestamp)\(userMD5)\(version)"
+        return Crypto.md5Hex(raw)
+    }
+
+    /// initupload 的表单；sign_key / sign_val 只在回传区间校验时出现
+    static func initUploadForm(account: UploadAccount, name: String, size: Int64, fileId: String, target: String, version: String,
+                               timestamp: String, signKey: String, signVal: String) -> [(String, String)] {
+        let sig = uploadSig(userId: account.userId, userKey: account.userKey, fileId: fileId, target: target)
+        let token = uploadToken(userId: account.userId, fileId: fileId, size: size, signKey: signKey, signVal: signVal,
+                                timestamp: timestamp, version: version)
+        var fields: [(String, String)] = []
+        fields.append(("appid", "0"))
+        fields.append(("appversion", version))
+        fields.append(("userid", account.userId))
+        fields.append(("filename", name))
+        fields.append(("filesize", String(size)))
+        fields.append(("fileid", fileId))
+        fields.append(("target", target))
+        fields.append(("sig", sig))
+        fields.append(("topupload", "true"))
+        fields.append(("t", timestamp))
+        fields.append(("token", token))
+        if !signKey.isEmpty && !signVal.isEmpty {
+            fields.append(("sign_key", signKey))
+            fields.append(("sign_val", signVal))
+        }
+        return fields
+    }
+
+    /// Go url.QueryEscape：字母数字与 -_.~ 原样，空格写成 +，其余按 UTF-8 字节 %XX（大写）
+    static func goQueryEscape(_ s: String) -> String {
+        let digits: [UInt8] = Array("0123456789ABCDEF".utf8)
+        var out = [UInt8]()
+        out.reserveCapacity(s.utf8.count)
+        for b in s.utf8 {
+            switch b {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x2E, 0x5F, 0x7E:
+                out.append(b)
+            case 0x20:
+                out.append(0x2B)
+            default:
+                out.append(0x25)
+                out.append(digits[Int(b >> 4)])
+                out.append(digits[Int(b & 0x0F)])
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    /// Go url.Values.Encode：按键（字节序）排序，同键保持原顺序，键值都 QueryEscape
+    static func goFormEncode(_ fields: [(String, String)]) -> String {
+        let ordered = fields.enumerated().sorted { a, b in
+            if a.element.0 != b.element.0 { return a.element.0.utf8.lexicographicallyPrecedes(b.element.0.utf8) }
+            return a.offset < b.offset
+        }
+        var pairs: [String] = []
+        for item in ordered {
+            pairs.append(Self.goQueryEscape(item.element.0) + "=" + Self.goQueryEscape(item.element.1))
+        }
+        return pairs.joined(separator: "&")
+    }
+
+    /// 分片规则同 115driver SplitFile：小于 k GB 均分 k×1000 片（k = 1…9），更大均分 10000 片，最后一片吸收余数；
+    /// 每片不足 100KB 时改为固定 100KB 一片
+    static func uploadParts(size: Int64) -> [(offset: Int64, length: Int64)] {
+        guard size > 0 else { return [] }
+        let gb: Int64 = 1 << 30
+        var count: Int64 = 10_000
+        var k: Int64 = 1
+        while k < 10 {
+            if size < k * gb {
+                count = k * 1000
+                break
+            }
+            k += 1
+        }
+        let minPart: Int64 = 100 << 10
+        let each = size / count
+        if each < minPart { return UploadUtil.parts(size: size, partSize: minPart) }
+        var parts: [(offset: Int64, length: Int64)] = []
+        parts.reserveCapacity(Int(count))
+        let remainder = size % count
+        for i in 0..<count {
+            let length: Int64 = i == count - 1 ? each + remainder : each
+            parts.append((offset: i * each, length: length))
+        }
+        return parts
+    }
+
+    static func parseUploadInfo(_ json: JSON) throws -> UploadAccount {
+        if json.has("state") { try check(json, fallback: "获取上传信息失败") }
+        if json.has("upload_allowed") && !json["upload_allowed"].bool {
+            throw CloudnError(json["upload_allowed_msg"].string.nilIfBlank ?? "当前账号暂不能上传文件")
+        }
+        let userId = json["user_id"].string
+        let userKey = json["userkey"].string
+        guard !userId.isEmpty, userId != "0", !userKey.isEmpty else { throw CloudnError("获取上传信息失败，请重新登录 115 网盘") }
+        return UploadAccount(userId: userId, userKey: userKey, sizeLimit: json["size_limit"].int64)
+    }
+
+    /// statuscode 0 / 701 为正常；status 1 / 2 / 7 之外视为失败
+    static func parseInitUpload(_ json: JSON) throws -> InitUploadTicket {
+        if !json.has("status") && json.has("state") { try check(json, fallback: "上传初始化失败") }
+        let code = json["statuscode"].int
+        let message = json["statusmsg"].string
+        guard code == 0 || code == 701 else {
+            throw CloudnError(message.nilIfBlank ?? "上传初始化失败（\(code)）", code: code)
+        }
+        let status = json["status"].int
+        guard [1, 2, 7].contains(status) else {
+            throw CloudnError(message.nilIfBlank ?? "上传初始化失败（status \(status)）", code: code)
+        }
+        let cb = json["callback"]
+        return InitUploadTicket(status: status, statusMessage: message, pickCode: json["pickcode"].string,
+                                bucket: json["bucket"].string, object: json["object"].string,
+                                callback: cb["callback"].string, callbackVar: cb["callback_var"].string,
+                                signKey: json["sign_key"].string, signCheck: json["sign_check"].string)
+    }
+
+    /// sign_check 形如 "start-end"（闭区间）
+    static func parseSignCheck(_ text: String) -> (start: Int64, end: Int64)? {
+        let parts = text.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let start = Int64(parts[0].trimmingCharacters(in: .whitespaces)),
+              let end = Int64(parts[1].trimmingCharacters(in: .whitespaces)),
+              start >= 0, end >= start else { return nil }
+        return (start, end)
+    }
+
+    static func parseOSSToken(_ json: JSON) throws -> OSSSigner {
+        let id = json["AccessKeyID"].string
+        let secret = json["AccessKeySecret"].string
+        guard json["StatusCode"].string == "200", !id.isEmpty, !secret.isEmpty else { throw CloudnError("获取 115 上传凭证失败") }
+        return OSSSigner(accessKeyId: id, accessKeySecret: secret, securityToken: json["SecurityToken"].string)
+    }
+
+    /// 回调参数 Base64 后放进 x-oss-callback / x-oss-callback-var（属于 x-oss- 头，参与签名）；空值不发
+    static func ossCallbackHeaders(_ ticket: InitUploadTicket) -> [(String, String)] {
+        var out: [(String, String)] = []
+        if !ticket.callback.isEmpty { out.append(("x-oss-callback", Data(ticket.callback.utf8).base64EncodedString())) }
+        if !ticket.callbackVar.isEmpty { out.append(("x-oss-callback-var", Data(ticket.callbackVar.utf8).base64EncodedString())) }
+        return out
+    }
+
+    /// 签好名的 OSS 请求（虚拟主机域名；查询串值为空时只写键）
+    static func ossRequest(_ signer: OSSSigner, method: String, bucket: String, object: String, query: [(String, String)],
+                           contentType: String, extra: [(String, String)] = [], date: Date = Date()) -> HTTPRequest {
+        var signed = signer.headers(method: method, bucket: bucket, key: object, query: query, contentType: contentType,
+                                    extra: extra, date: date)
+        signed.append(("User-Agent", ossUA))
+        var url = "https://\(bucket).\(ossEndpoint)/\(UploadUtil.encodePath(object))"
+        var items: [String] = []
+        for (k, v) in query { items.append(v.isEmpty ? k : k + "=" + Self.goQueryEscape(v)) }
+        if !items.isEmpty { url += "?" + items.joined(separator: "&") }
+        return HTTPRequest(url: url, method: method, headers: signed)
+    }
+
+    /// 单次 PUT / 合并分片的响应体是 115 回调结果 {"state":true,"code":0,"data":{…}}；回调失败时 OSS 回 203 + XML
+    static func checkOSSCallback(status: Int, body: Data, fallback: String) throws {
+        guard (200..<300).contains(status), status != 203 else { throw ossError(status: status, body: body, fallback: fallback) }
+        guard let json = JSON(data: body), json.isObject else { return }
+        if json.has("state") && !json["state"].bool {
+            let msg = json.string("message", "error", "msg")
+            throw CloudnError(msg.isEmpty ? fallback : "\(fallback)：\(msg)", code: json["code"].int)
+        }
+    }
+
+    static func ossError(status: Int, body: Data, fallback: String) -> CloudnError {
+        let msg = UploadUtil.xmlValue("Message", in: String(decoding: body, as: UTF8.self)) ?? ""
+        return CloudnError(msg.isEmpty ? "\(fallback)（HTTP \(status)）" : "\(fallback)：\(msg)", code: status)
+    }
+
+    /// 文件 [start, end] 的 SHA-1（大写），1MB 一块读
+    static func rangeSHA1(_ file: URL, start: Int64, end: Int64) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(start))
+        var left = end - start + 1
+        var hasher = SHA1Hasher()
+        while left > 0 {
+            guard let d = try handle.read(upToCount: Int(min(left, 1 << 20))), !d.isEmpty else { break }
+            hasher.update(d)
+            left -= Int64(d.count)
+        }
+        return Crypto.hex(hasher.finalize()).uppercased()
+    }
+
+    static func sizeText(_ bytes: Int64) -> String {
+        bytes >= 1 << 30 ? "\(bytes >> 30)GB" : "\(bytes >> 20)MB"
+    }
+}
