@@ -32,6 +32,9 @@ public enum ShareLinkParser {
         urlRx.first(in: text.trimmed, group: 0)?.trimmingTrailing(trailing)
     }
 
+    /// 文字里写的提取码（「提取码：abcd」），不看链接参数
+    public static func textPassword(in text: String) -> String? { pwdInText.first(in: text) }
+
     public static func parse(_ text: String) -> ParsedShare? {
         guard let url = firstURL(in: text) else { return nil }
         let textPwd = pwdInText.first(in: text)

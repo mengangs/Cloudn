@@ -148,6 +148,28 @@ final class AppModel {
         }
     }
 
+    /// 网盘更新：打开发布说明里的网盘分享，找到最大的 .ipa 直接下载；做不到（要登录、要验证、没有安装包）就打开分享页让用户自己选
+    func startUpdateDownload(_ share: ParsedShare) async {
+        do {
+            guard let resolver = resolvers.resolver(for: share.platform) else { throw CloudnError("暂不支持\(share.platform.displayName)") }
+            let session = try await resolver.openSession(share, pwd: share.pwd)
+            guard let file = try await UpdatePackage.findPackage(resolver: resolver, session: session) else {
+                throw CloudnError("分享里没有找到 .ipa 安装包")
+            }
+            let link = try await resolver.downloadLink(session, file: file)
+            downloads.enqueue(link: link, platform: share.platform, folder: "",
+                              origin: ShareOrigin(platform: share.platform, shareURL: share.url, pwd: share.pwd ?? "", file: file))
+            selectedTab = .downloads
+            show("已开始下载 \(file.name)")
+        } catch {
+            var text = share.url
+            if let pwd = share.pwd, !pwd.isEmpty, ShareLinkParser.parse(text)?.pwd != pwd { text += " 提取码：\(pwd)" }
+            pendingInput = text
+            selectedTab = .resolve
+            show("没能自动下载：\(error.localizedDescription)，已打开分享页", error: true)
+        }
+    }
+
     static var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
     /// 启动 / 回到前台时的自动检查：每天最多一次，跳过用户忽略的版本，失败静默

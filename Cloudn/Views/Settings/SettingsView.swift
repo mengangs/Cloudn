@@ -179,6 +179,9 @@ struct UpdateSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @State private var busy: String?
+
+    private var shares: [ParsedShare] { UpdatePackage.shares(in: release.notes) }
 
     var body: some View {
         NavigationStack {
@@ -193,12 +196,43 @@ struct UpdateSheet: View {
                             Text(release.notes).font(.callout).textSelection(.enabled)
                         }
                     }
+                    if !release.ipaURL.isEmpty || !shares.isEmpty {
+                    Section {
+                        if !release.ipaURL.isEmpty {
+                            Button {
+                                let name = URL(string: release.ipaURL)?.lastPathComponent ?? "Cloudn.ipa"
+                                app.downloadGitHubFile(url: release.ipaURL, name: name.isEmpty ? "Cloudn.ipa" : name)
+                                app.selectedTab = .downloads
+                                dismiss()
+                            } label: { Label("从 GitHub 下载 IPA", glyph: .download) }
+                        }
+                        ForEach(shares, id: \.url) { share in
+                            Button {
+                                guard busy == nil else { return }
+                                busy = share.url
+                                Task {
+                                    await app.startUpdateDownload(share)
+                                    busy = nil
+                                    dismiss()
+                                }
+                            } label: {
+                                HStack {
+                                    Label("网盘下载 · \(share.platform.displayName)", glyph: .cloud)
+                                    Spacer()
+                                    if busy == share.url { Spinner(size: 16) }
+                                }
+                            }
+                            .disabled(busy != nil)
+                        }
+                    } header: {
+                        Text("下载更新")
+                    } footer: {
+                        Text("下载完成后在下载页长按安装包，用「分享」发送到 TrollStore、SideStore 等工具安装。GitHub 访问慢时可在设置里选择镜像，或改用网盘下载。")
+                    }
+                    }
                     Section {
                         if let url = URL(string: release.pageURL) {
                             Button { openURL(url) } label: { Label("前往发布页", glyph: .share) }
-                        }
-                        if let url = URL(string: release.ipaURL), !release.ipaURL.isEmpty {
-                            Button { openURL(url) } label: { Label("下载 IPA（需自行签名安装）", glyph: .download) }
                         }
                         Button("忽略此版本") {
                             app.settings.skippedVersion = release.tag

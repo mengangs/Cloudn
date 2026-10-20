@@ -37,3 +37,51 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertEqual(UpdateChecker.newest(list, includePrerelease: true)?.version, "1.10.0")
     }
 }
+
+/// 「网盘更新」：从发布说明里认出网盘分享、在分享里找安装包
+final class UpdatePackageTests: XCTestCase {
+    func testSharesInReleaseNotes() {
+        let notes = """
+        ## 更新内容
+        - 修复若干问题
+        夸克网盘：https://pan.quark.cn/s/abc123def 提取码：x1y2
+        百度 https://pan.baidu.com/s/1AbCdEf?pwd=ab12 ｜ 蓝奏 https://wwi.lanzoup.com/iXyz123
+        提取码：9z9z 迅雷：https://pan.xunlei.com/s/VNabcdef
+        重复：https://pan.quark.cn/s/abc123def
+        """
+        let shares = UpdatePackage.shares(in: notes)
+        XCTAssertEqual(shares.map(\.platform), [.quark, .baidu, .lanzou, .xunlei])
+        XCTAssertEqual(shares[0].pwd, "x1y2")
+        XCTAssertEqual(shares[1].pwd, "ab12")
+        XCTAssertNil(shares[2].pwd)
+        XCTAssertEqual(shares[3].pwd, "9z9z")
+        XCTAssertTrue(UpdatePackage.shares(in: "只有 GitHub：https://github.com/mengangs/Cloudn").isEmpty)
+    }
+
+    func testFindLargestIPAAcrossFolders() async throws {
+        let resolver = FakeTreeResolver(tree: [
+            "0": [ShareFile(fid: "readme", name: "说明.txt", size: 10, isDirectory: false),
+                  ShareFile(fid: "d1", name: "旧版本", size: 0, isDirectory: true),
+                  ShareFile(fid: "d2", name: "1.4.0", size: 0, isDirectory: true)],
+            "d1": [ShareFile(fid: "old", name: "Cloudn-1.3.ipa", size: 900, isDirectory: false)],
+            "d2": [ShareFile(fid: "new", name: "Cloudn-1.4.IPA", size: 1000, isDirectory: false),
+                   ShareFile(fid: "apk", name: "other.apk", size: 5000, isDirectory: false)]
+        ])
+        let session = ShareSession(platform: .quark, shareId: "s", stoken: "", title: "t")
+        let found = try await UpdatePackage.findPackage(resolver: resolver, session: session)
+        XCTAssertEqual(found?.fid, "new")
+        let none = try await UpdatePackage.findPackage(resolver: FakeTreeResolver(tree: ["0": []]), session: session)
+        XCTAssertNil(none)
+    }
+}
+
+private struct FakeTreeResolver: ShareResolver {
+    let tree: [String: [ShareFile]]
+    var platform: SharePlatform { .quark }
+    var supportsGuestDownload: Bool { true }
+    func openSession(_ share: ParsedShare, pwd: String?) async throws -> ShareSession {
+        ShareSession(platform: .quark, shareId: share.shareId, stoken: "", title: "")
+    }
+    func list(_ session: ShareSession, dirId: String) async throws -> [ShareFile] { tree[dirId] ?? [] }
+    func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink { throw CloudnError("unused") }
+}
