@@ -250,8 +250,16 @@ public struct DownloadSettings: Sendable {
         self.connectionsBySource = connectionsBySource
     }
 
+    /// 没单独设置时，对并发敏感的平台默认最多用几条连接：
+    /// 百度多连接下载会被判「异常下载」限速 / 风控，115 的 CDN 同一文件并发多了会 403
+    public static let defaultCaps: [String: Int] = [
+        SharePlatform.baidu.displayName: 2,
+        SharePlatform.pan115.displayName: 2,
+    ]
+
     public func connections(for source: String) -> Int {
-        max(1, connectionsBySource[source] ?? connectionsPerTask)
+        if let custom = connectionsBySource[source] { return max(1, custom) }
+        return max(1, min(connectionsPerTask, Self.defaultCaps[source] ?? connectionsPerTask))
     }
 }
 

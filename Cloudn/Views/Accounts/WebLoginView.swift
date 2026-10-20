@@ -128,6 +128,8 @@ struct LoginWebView: UIViewRepresentable {
             config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bouncesZoom = true
         webView.customUserAgent = kind.loginUserAgent
         store.webView = webView
         webView.allowsBackForwardNavigationGestures = true
@@ -150,6 +152,21 @@ struct LoginWebView: UIViewRepresentable {
         }catch(e){}})()
         """
     }
+
+    /// 桌面页面缩放到一屏宽：视口宽度取页面实际内容宽度（至少 1024），打开滚动；单页应用晚渲染，隔一会儿再量两次
+    static let fitToWidthScript = """
+    (function(){function fit(){try{
+      var d=document.documentElement,b=document.body;
+      var w=Math.max(d?d.scrollWidth:0,b?b.scrollWidth:0,1024);
+      var m=document.querySelector('meta[name="viewport"]');
+      if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');(document.head||d).appendChild(m);}
+      var c='width='+w+', user-scalable=yes';
+      if(m.getAttribute('content')!==c)m.setAttribute('content',c);
+      if(!document.getElementById('__cloudn_fit')){var s=document.createElement('style');s.id='__cloudn_fit';
+        s.textContent='html,body{overflow:auto !important;-webkit-overflow-scrolling:touch;}';(document.head||d).appendChild(s);}
+    }catch(e){}}
+    fit();setTimeout(fit,800);setTimeout(fit,2500);})()
+    """
 
     /// 固定较窄的桌面视口、隐藏宣传图、放宽 OAuth iframe（参考 YunX 的 DESKTOP_RENDER_FIX_JS）
     static let xunleiRenderFix = """

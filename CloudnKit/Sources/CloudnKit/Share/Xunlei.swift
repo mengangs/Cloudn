@@ -346,7 +346,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     private func pan(_ action: String, url: String, method: String? = nil, body: OrderedJSON? = nil, identity: Identity,
                      anonymous: Bool = false) async throws -> JSON {
         var id = identity
-        for attempt in 0..<2 {
+        for attempt in 0..<3 {
             var req = HTTPRequest(url: url, headers: panHeaders(id))
             if let body {
                 req.method = "POST"
@@ -357,11 +357,17 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
             guard let json = r.json, json.isObject else { throw CloudnError("迅雷响应解析失败（HTTP \(r.status)）") }
             let err = json["error"].string
             if r.isSuccess && !json.has("error") { return json["data"].isObject ? json["data"] : json }
-            if !anonymous && attempt == 0 && err == "captcha_invalid",
-               let fresh = await initCaptcha(action: action, identity: id) {
-                await state.setCaptcha(fresh)
-                id = Identity(token: id.token, deviceId: id.deviceId, captcha: fresh, userId: id.userId)
-                continue
+            // 验证码相关的错误（captcha_invalid / captcha_required / 验证码无效…）：第一次带旧 token 重新初始化，
+            // 还不行再从零初始化一个全新的
+            let captchaError = err.lowercased().contains("captcha") || json["error_description"].string.contains("验证码")
+            if !anonymous && attempt < 2 && captchaError {
+                Log.error("迅雷 \(action) 需要刷新验证：error=\(err) code=\(json["error_code"].string)")
+                let seed = attempt == 0 ? id : Identity(token: id.token, deviceId: id.deviceId, captcha: "", userId: id.userId)
+                if let fresh = await initCaptcha(action: action, identity: seed) {
+                    await state.setCaptcha(fresh)
+                    id = Identity(token: id.token, deviceId: id.deviceId, captcha: fresh, userId: id.userId)
+                    continue
+                }
             }
             if r.status == 401 || err == "unauthenticated" {
                 throw CloudnError(anonymous ? "迅雷拒绝了匿名访问，请稍后重试" : "迅雷登录已失效，请到「我的」页重新登录")

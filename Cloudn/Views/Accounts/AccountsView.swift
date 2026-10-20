@@ -15,6 +15,11 @@ struct AccountsView: View {
     @State private var importData: ImportData?
     @State private var quotas: [SharePlatform: DriveQuota] = [:]
 
+    /// 设置里勾选显示的网盘（默认全部）
+    private var visibleDrives: [AccountKind] {
+        AccountKind.allCases.filter { $0.isDrive && !app.settings.hiddenDrives.contains($0.rawValue) }
+    }
+
     private var loggedInSummary: String {
         let n = AccountKind.allCases.filter { $0.isDrive && app.accounts.accounts[$0] != nil }.count
         return n == 0 ? "未登录" : "已登录 \(n) 个"
@@ -27,7 +32,7 @@ struct AccountsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(title: "网盘", trailing: loggedInSummary)
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                            ForEach(AccountKind.allCases.filter(\.isDrive)) { driveTile($0) }
+                            ForEach(visibleDrives) { driveTile($0) }
                         }
                         Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号。")
                             .font(.caption)
@@ -258,6 +263,7 @@ struct AccountsView: View {
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
+        if kind.prefersPasswordLogin { passwordKind = kind; return }
         if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
     }
 }
@@ -267,7 +273,9 @@ struct LoginSheet: View {
     let kind: AccountKind
 
     var body: some View {
-        if kind.supportsWebLogin {
+        if kind.prefersPasswordLogin {
+            PasswordLoginView(kind: kind)
+        } else if kind.supportsWebLogin {
             WebLoginView(kind: kind)
         } else if kind.passwordLogin != nil {
             PasswordLoginView(kind: kind)

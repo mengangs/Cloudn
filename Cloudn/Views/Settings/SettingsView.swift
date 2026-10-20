@@ -69,6 +69,14 @@ struct SettingsView: View {
                         .pickerStyle(.segmented)
                         AccentPicker()
                         PlatformIconStylePicker()
+                        NavigationLink {
+                            DriveVisibilityView()
+                        } label: {
+                            LabeledContent("「我的」页显示的网盘") {
+                                let hidden = app.settings.hiddenDrives.count
+                                Text(hidden == 0 ? "全部" : "隐藏 \(hidden) 个").foregroundStyle(Color.ink2)
+                            }
+                        }
                     }
 
                     Section {
@@ -320,5 +328,57 @@ struct PlatformIconStylePicker: View {
         }
         .padding(.vertical, 4)
         .sensoryFeedback(.selection, trigger: app.settings.platformIconStyle)
+    }
+}
+
+/// 选择「我的」页显示哪些网盘：只影响展示，隐藏的网盘解析、下载照常
+struct DriveVisibilityView: View {
+    @Environment(AppModel.self) private var app
+
+    private var drives: [AccountKind] { AccountKind.allCases.filter(\.isDrive) }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(drives) { kind in
+                    Toggle(isOn: binding(kind)) {
+                        HStack(spacing: 12) {
+                            PlatformTile(mark: .account(kind), size: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(kind.displayName).foregroundStyle(Color.ink)
+                                if let account = app.accounts.accounts[kind] {
+                                    Text("已登录 · \(account.nickname)").font(.caption).foregroundStyle(Color.ink3).lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.surface)
+                }
+            } footer: {
+                Text("关掉的网盘不在「我的」页显示，登录状态保留，解析与下载照常。")
+            }
+        }
+        .paperList()
+        .navigationTitle("显示的网盘")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(app.settings.hiddenDrives.isEmpty ? "只显示已登录" : "全部显示") {
+                    if app.settings.hiddenDrives.isEmpty {
+                        app.settings.hiddenDrives = drives.filter { app.accounts.accounts[$0] == nil }.map(\.rawValue)
+                    } else {
+                        app.settings.hiddenDrives = []
+                    }
+                }
+            }
+        }
+    }
+
+    private func binding(_ kind: AccountKind) -> Binding<Bool> {
+        Binding(get: { !app.settings.hiddenDrives.contains(kind.rawValue) }, set: { show in
+            var hidden = app.settings.hiddenDrives.filter { $0 != kind.rawValue }
+            if !show { hidden.append(kind.rawValue) }
+            app.settings.hiddenDrives = hidden
+        })
     }
 }

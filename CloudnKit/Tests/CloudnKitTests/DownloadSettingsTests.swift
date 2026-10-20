@@ -21,6 +21,12 @@ final class DownloadSettingsTests: XCTestCase {
         let s = DownloadSettings(connectionsPerTask: 8, connectionsBySource: ["百度网盘": 2])
         XCTAssertEqual(s.connections(for: "百度网盘"), 2)
         XCTAssertEqual(s.connections(for: "夸克网盘"), 8)
+        // 没单独设置时百度、115 默认封顶 2 条；用户单独设置优先
+        let d = DownloadSettings(connectionsPerTask: 8)
+        XCTAssertEqual(d.connections(for: "百度网盘"), 2)
+        XCTAssertEqual(d.connections(for: "115 网盘"), 2)
+        XCTAssertEqual(DownloadSettings(connectionsPerTask: 1).connections(for: "115 网盘"), 1)
+        XCTAssertEqual(DownloadSettings(connectionsPerTask: 8, connectionsBySource: ["115 网盘": 6]).connections(for: "115 网盘"), 6)
     }
 
     func testResolverOptions() {

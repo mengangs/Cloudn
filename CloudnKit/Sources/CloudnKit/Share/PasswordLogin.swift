@@ -204,7 +204,10 @@ struct GuangYaLogin: PasswordLogin {
             path = "/v1/auth/signup"
             body = ["client_id": Self.clientId, "phone_number": phone, "name": name, "verification_code": code, "verification_token": token]
         }
-        let r = try await client.send(.postJSON(Self.accountBase + path, body, headers: Self.accountHeaders(device)))
+        // 登录 / 注册也要带人机验证令牌：缺了它服务端会按机密客户端处理，报「Please add client_secret field」
+        let captcha = try await initCaptcha(device: device, meta: ["phone_number": phone], action: "POST:" + path)
+        let headers = Self.accountHeaders(device) + [("X-Captcha-Token", captcha.token ?? "")]
+        let r = try await client.send(.postJSON(Self.accountBase + path, body, headers: headers))
         let json = r.json ?? JSON(nil)
         try Self.ensure(json, fallback: "短信验证码错误或已过期，请重新获取")
         return try Self.credential(json, device: device).serialized

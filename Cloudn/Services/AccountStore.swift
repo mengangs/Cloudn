@@ -352,7 +352,12 @@ extension AccountKind {
         switch self {
         case .xunlei: return LoginWebView.xunleiRenderFix
         case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
+        // 只有桌面版的登录页（百度、115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
+        case .baidu, .pan115, .pan123, .lanzou: return LoginWebView.fitToWidthScript
         default: return nil
         }
     }
+
+    /// 有应用内账号密码登录、且网页登录不好用的平台，点「登录」先走账号密码
+    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya].contains(self) && passwordLogin != nil }
 }

@@ -25,12 +25,12 @@ struct PlatformConnectionsView: View {
                 Section {
                     ForEach(sources, id: \.self) { source in
                         Picker(source, selection: binding(source)) {
-                            Text("跟随全局（\(app.settings.connectionsPerTask)）").tag(0)
+                            Text("默认（\(DownloadSettings(connectionsPerTask: app.settings.connectionsPerTask).connections(for: source))）").tag(0)
                             ForEach(1...16, id: \.self) { Text("\($0)").tag($0) }
                         }
                     }
                 } footer: {
-                    Text("部分网盘对并发连接数敏感（如百度、115），遇到 403 或频繁失败时可单独调低。")
+                    Text("默认跟随全局连接数；百度、115 对并发敏感，默认最多 2 条（百度多连接会被判异常下载，115 并发多了会 403）。遇到 403 或频繁失败时可单独调低。")
                 }
             }
             .listRowBackground(Color.surface)

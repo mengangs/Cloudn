@@ -84,6 +84,10 @@ final class AppSettings {
     var platformIconStyle: PlatformIconStyle {
         didSet { defaults.set(platformIconStyle.rawValue, forKey: PlatformIconStyle.key) }
     }
+    /// 「我的」页不显示的网盘（AccountKind.rawValue）；隐藏只影响展示，解析、下载照常
+    var hiddenDrives: [String] {
+        didSet { defaults.set(hiddenDrives, forKey: "hiddenDrives") }
+    }
     /// 启动时自动检查更新（每天最多一次）
     var autoCheckUpdates: Bool {
         didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") }
@@ -139,6 +143,7 @@ final class AppSettings {
         githubToken = Keychain.read("github.token").map { String(decoding: $0, as: UTF8.self) } ?? ""
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         platformIconStyle = PlatformIconStyle(rawValue: defaults.string(forKey: PlatformIconStyle.key) ?? "") ?? .line
+        hiddenDrives = defaults.stringArray(forKey: "hiddenDrives") ?? []
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         acceptPrerelease = defaults.bool(forKey: "acceptPrerelease")
         lastUpdateCheck = defaults.object(forKey: "lastUpdateCheck") as? Date
