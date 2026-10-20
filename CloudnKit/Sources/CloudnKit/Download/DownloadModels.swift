@@ -185,6 +185,8 @@ public struct DownloadItem: Codable, Identifiable, Sendable, Hashable {
     /// BT：已连接 / 已知的 peer 数（不落盘）
     public var peers = 0
     public var knownPeers = 0
+    /// BT：找节点的诊断信息（不落盘）
+    public var note: String?
 
     enum CodingKeys: String, CodingKey {
         case id, request, status, totalBytes, receivedBytes, errorMessage, createdAt, finishedAt, outputPath, chunks, phase, segmentsDone, segmentsTotal

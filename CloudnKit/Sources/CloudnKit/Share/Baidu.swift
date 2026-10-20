@@ -9,6 +9,9 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
     public var supportsGuestDownload: Bool { false }
 
     public static let loginURL = "https://pan.baidu.com/"
+    /// 手机版登录页（为手机键盘与屏幕设计，不必缩放桌面页面）；登录后同样写入 .baidu.com 的 BDUSS
+    public static let mobileLoginURL = "https://wappass.baidu.com/passport/?login&tpl=netdisk&u=https%3A%2F%2Fpan.baidu.com%2Fwap%2Fhome"
+    public static let mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     public static let webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     static let netdiskUA = "netdisk;12.24.6;piano;android-android;16;JSbridge4.4.0;jointBridge;1.1.0"
     static let appId = "250528"

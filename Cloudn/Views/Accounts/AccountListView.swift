@@ -14,8 +14,7 @@ struct AccountListView: View {
         let list = app.accounts.list(kind)
         NavigationStack {
             List {
-                Group {
-                    Section {
+                Section {
                         ForEach(Array(list.enumerated()), id: \.offset) { index, account in
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -28,8 +27,17 @@ struct AccountListView: View {
                                     Text("主账号").font(.caption.weight(.medium)).foregroundStyle(.tint)
                                 }
                             }
-                            .swipeActions {
-                                Button(role: .destructive) { removing = index } label: { Label("退出", systemImage: "rectangle.portrait.and.arrow.right") }
+                            // 每个账号自成一张圆角卡片：左滑时整张卡一起移动，右边不会露出直角的行底
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(Color.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            // 不用 destructive 角色：它会触发列表删除动画，确认框刚弹出就被收回
+                            .swipeActions(allowsFullSwipe: false) {
+                                Button { removing = index } label: { Label("退出", systemImage: "rectangle.portrait.and.arrow.right") }
+                                    .tint(Color.clayInk)
                                 if index > 0 {
                                     Button { Task { await app.accounts.makePrimary(index, for: kind) } } label: { Label("设为主账号", glyph: .star) }
                                         .tint(Color.ink2)
@@ -48,11 +56,10 @@ struct AccountListView: View {
                     } footer: {
                         Text("解析、转存与网盘管理使用主账号。在设置中开启「多账号下载」后，批量下载会按文件轮换使用这里的全部账号。")
                     }
-                    Section {
-                        Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }
-                    }
+                Section {
+                    Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }
+                        .listRowBackground(Color.surface)
                 }
-                .listRowBackground(Color.surface)
             }
             .paperList()
             .navigationTitle("\(kind.displayName)账号")

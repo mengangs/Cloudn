@@ -85,33 +85,3 @@ private struct FakeTreeResolver: ShareResolver {
     func list(_ session: ShareSession, dirId: String) async throws -> [ShareFile] { tree[dirId] ?? [] }
     func downloadLink(_ session: ShareSession, file: ShareFile) async throws -> DownloadLink { throw CloudnError("unused") }
 }
-
-/// 应用内公告：解析、按时间 / 版本筛选、排序与启动弹窗候选
-final class AnnouncementTests: XCTestCase {
-    func testParseFilterSortAndPopup() throws {
-        let json = """
-        {"announcements": [
-          {"id": "old", "title": "旧公告", "publishedAt": "2026-01-01T00:00:00Z"},
-          {"id": "pin", "title": "置顶", "pinned": true, "publishedAt": "2025-06-01"},
-          {"id": "new", "title": "新功能", "content": "# 标题\\n**BT** 下载 ![](https://x/a.png)", "publishedAt": "2026-10-01T08:00:00.500Z", "cover": "https://x/c.png", "images": ["https://x/c.png", "https://x/d.png"]},
-          {"id": "future", "title": "未来", "publishedAt": "2099-01-01T00:00:00Z"},
-          {"id": "expired", "title": "过期", "expiresAt": "2020-01-01T00:00:00Z"},
-          {"id": "tooNew", "title": "只给新版", "minVersion": "9.0"},
-          {"id": "quiet", "title": "不弹", "popup": false, "publishedAt": "2026-11-01T00:00:00Z"},
-          {"title": "缺 id"}
-        ]}
-        """
-        let all = try Announcements.parse(Data(json.utf8))
-        XCTAssertEqual(all.count, 7)
-        let now = ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z")!
-        let list = Announcements.visible(all, currentVersion: "1.4.0", now: now)
-        XCTAssertEqual(list.map(\.id), ["pin", "quiet", "new", "old"])
-        XCTAssertEqual(list.first { $0.id == "new" }?.gallery, ["https://x/c.png", "https://x/d.png"])
-        XCTAssertEqual(list.first { $0.id == "new" }?.preview, "标题 BT 下载")
-        // 置顶未读优先；置顶已读后弹最新的未读，popup = false 的不弹
-        XCTAssertEqual(Announcements.popupCandidate(list, read: [])?.id, "pin")
-        XCTAssertEqual(Announcements.popupCandidate(list, read: ["pin"])?.id, "new")
-        XCTAssertNil(Announcements.popupCandidate(list, read: ["pin", "new", "old"]))
-        XCTAssertTrue(Announcements.sourceURL(mirror: "https://ghfast.top/").hasPrefix("https://ghfast.top/https://raw.githubusercontent.com/"))
-    }
-}

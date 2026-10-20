@@ -17,6 +17,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 网盘直链、BT tracker 等常有 http 地址 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

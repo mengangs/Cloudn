@@ -77,8 +77,8 @@ struct ResolveView: View {
                 }
             }
             .navigationDestination(item: $torrentTarget) { TorrentView(target: $0) }
-            .fileImporter(isPresented: $importingTorrent, allowedContentTypes: [.torrent, .data]) { result in
-                if case .success(let url) = result { app.openTorrentFile(url) }
+            .documentPicker(isPresented: $importingTorrent, types: [.torrent, .data]) { urls in
+                if let url = urls.first { app.openTorrentFile(url) }
             }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in

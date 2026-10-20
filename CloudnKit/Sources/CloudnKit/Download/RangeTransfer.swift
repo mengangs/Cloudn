@@ -15,6 +15,7 @@ final class TransferProgress: @unchecked Sendable {
     private var _title: String?
     private var _peers = 0
     private var _knownPeers = 0
+    private var _note: String?
 
     init(chunks: [DownloadChunk], total: Int64) {
         _chunks = chunks
@@ -35,6 +36,9 @@ final class TransferProgress: @unchecked Sendable {
     /// BT：已连接 / 已知的 peer 数
     var peers: (connected: Int, known: Int) { lock.lock(); defer { lock.unlock() }; return (_peers, _knownPeers) }
     func setPeers(_ connected: Int, known: Int) { lock.lock(); _peers = connected; _knownPeers = known; lock.unlock() }
+    /// BT：找节点的诊断信息（界面展示）
+    var note: String? { lock.lock(); defer { lock.unlock() }; return _note }
+    func setNote(_ n: String) { lock.lock(); _note = n; lock.unlock() }
 
     var segments: (done: Int, total: Int) { lock.lock(); defer { lock.unlock() }; return (_segmentsDone, _segmentsTotal) }
 

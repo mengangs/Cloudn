@@ -630,7 +630,7 @@ struct DownloadRow: View {
 
     private var statusText: String {
         if case .torrent = item.request.kind, item.status == .running {
-            if item.totalBytes <= 0 { return "获取种子信息 · \(item.peers) 个节点" }
+            if item.totalBytes <= 0 { return "获取种子信息 · " + (item.note ?? "已连接 \(item.peers) 个节点") }
             let eta = item.totalBytes > item.receivedBytes && item.speed > 0
                 ? " · " + Humanize.eta(Double(item.totalBytes - item.receivedBytes) / item.speed) : ""
             return ByteFormat.speed(item.speed) + " · \(item.peers) 个节点" + eta

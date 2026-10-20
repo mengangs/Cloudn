@@ -21,6 +21,7 @@ struct TorrentView: View {
     @State private var info: TorrentInfo?
     @State private var errorMessage: String?
     @State private var peers = (connected: 0, known: 0)
+    @State private var note = ""
     @State private var selected = Set<Int>()
     @State private var attempt = 0
 
@@ -114,6 +115,9 @@ struct TorrentView: View {
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(Color.ink2)
                 .contentTransition(.numericText())
+            if !note.isEmpty {
+                Text(note).font(.caption.monospacedDigit()).foregroundStyle(Color.ink3)
+            }
             Text("热门资源通常几秒内就绪；冷门资源可能要等几分钟，可以先离开此页，回来时继续。")
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
@@ -205,8 +209,11 @@ struct TorrentView: View {
         let cache = app.downloads.engine.torrentCacheDirectory
         let trackers = app.settings.useExtraTrackers ? TorrentDefaults.publicTrackers : []
         do {
-            let result = try await TorrentMetadata.fetch(target.magnet, cacheDirectory: cache, extraTrackers: trackers) { connected, known in
-                Task { @MainActor in peers = (connected, known) }
+            let result = try await TorrentMetadata.fetch(target.magnet, cacheDirectory: cache, extraTrackers: trackers) { connected, known, status in
+                Task { @MainActor in
+                    peers = (connected, known)
+                    note = status
+                }
             }
             try Task.checkCancellation()
             info = result

@@ -54,6 +54,11 @@ actor TorrentSwarm {
     private var connected = Set<PeerAddress>()
     private var failures: [PeerAddress: Int] = [:]
     private var nextPeer = 0
+    // 诊断：哪一步找不到节点，界面与日志里都能看到
+    private var trackerOK = 0
+    private var trackerFailed = 0
+    private var dhtResponded = 0
+    private var handshakes = 0
     private(set) var trackers: [String]
 
     init(infoHash: [UInt8], selection: [Int]?, trackers: [String], workRoot: URL, stateURL: URL,
@@ -318,6 +323,33 @@ actor TorrentSwarm {
         if !out.isEmpty { progress.setPeers(connected.count, known: seen.count) }
         return out
     }
+
+    func recordTracker(ok: Bool) {
+        if ok { trackerOK += 1 } else { trackerFailed += 1 }
+        publishNote()
+    }
+
+    func recordDHT(_ responded: Int) {
+        dhtResponded = max(dhtResponded, responded)
+        publishNote()
+    }
+
+    func recordHandshake() {
+        handshakes += 1
+        publishNote()
+    }
+
+    /// 「Tracker 2/9 有响应 · DHT 35 个节点回应 · 已发现 120 · 已握手 8」
+    var statusNote: String {
+        var parts: [String] = []
+        if trackerOK + trackerFailed > 0 { parts.append("Tracker \(trackerOK)/\(trackerOK + trackerFailed) 有响应") }
+        parts.append("DHT \(dhtResponded) 个节点回应")
+        parts.append("已发现 \(seen.count)")
+        parts.append("已握手 \(handshakes)")
+        return parts.joined(separator: " · ")
+    }
+
+    private func publishNote() { progress.setNote(statusNote) }
 
     func registerPeer() -> Int {
         nextPeer += 1

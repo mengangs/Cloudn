@@ -209,7 +209,7 @@ extension AccountKind {
         switch self {
         case .quark: return URL(string: QuarkFamilyConfig.quark.loginURL)!
         case .uc: return URL(string: QuarkFamilyConfig.uc.loginURL)!
-        case .baidu: return URL(string: BaiduResolver.loginURL)!
+        case .baidu: return URL(string: BaiduResolver.mobileLoginURL)!
         case .xunlei: return URL(string: XunleiCredential.loginURL)!
         case .pan123: return URL(string: Pan123Resolver.loginURL)!
         case .pan115: return URL(string: Pan115Resolver.loginURL)!
@@ -228,7 +228,8 @@ extension AccountKind {
         switch self {
         case .quark: return QuarkFamilyConfig.quark.loginUserAgent
         case .uc: return QuarkFamilyConfig.uc.loginUserAgent
-        case .baidu: return BaiduResolver.webUA
+        // 桌面版登录弹窗在键盘弹出时会重新居中、页面乱跳：用手机版登录页
+        case .baidu: return BaiduResolver.mobileUA
         // 网页版登录态只在桌面版页面写入
         case .xunlei: return XunleiCredential.desktopUA
         case .pan123: return Pan123Resolver.webUA
@@ -352,12 +353,12 @@ extension AccountKind {
         switch self {
         case .xunlei: return LoginWebView.xunleiRenderFix
         case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
-        // 只有桌面版的登录页（百度、115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
-        case .baidu, .pan115, .pan123, .lanzou: return LoginWebView.fitToWidthScript
+        // 只有桌面版的登录页（115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
+        case .pan115, .pan123, .lanzou: return LoginWebView.fitToWidthScript
         default: return nil
         }
     }
 
     /// 有应用内账号密码登录、且网页登录不好用的平台，点「登录」先走账号密码
-    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya].contains(self) && passwordLogin != nil }
+    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya, .xunlei].contains(self) && passwordLogin != nil }
 }

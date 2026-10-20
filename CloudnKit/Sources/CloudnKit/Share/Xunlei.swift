@@ -142,6 +142,12 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         let deviceId: String
         let captcha: String
         let userId: String
+        /// 网页登录拿到的 token（属于网页 client_id）：验证 token 也得按网页 client 申请
+        var web = false
+
+        func with(captcha: String) -> Identity {
+            Identity(token: token, deviceId: deviceId, captcha: captcha, userId: userId, web: web)
+        }
     }
 
     public init(credentials: CredentialStore, client: HTTPClient = .shared,
@@ -241,7 +247,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         let device = cred.deviceId.nilIfBlank ?? guestDevice
         let captcha = await state.captcha ?? cred.captchaToken
         return Identity(token: cred.accessToken, deviceId: device, captcha: captcha,
-                        userId: XunleiCredential.jwtClaim(cred.accessToken, "sub").string)
+                        userId: XunleiCredential.jwtClaim(cred.accessToken, "sub").string, web: cred.source != "app")
     }
 
     /// 网页 token 只能用网页 client_id 刷新：JSON + 桌面 UA + Origin，且不能带 client_secret；
@@ -362,12 +368,16 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
             let captchaError = err.lowercased().contains("captcha") || json["error_description"].string.contains("验证码")
             if !anonymous && attempt < 2 && captchaError {
                 Log.error("迅雷 \(action) 需要刷新验证：error=\(err) code=\(json["error_code"].string)")
-                let seed = attempt == 0 ? id : Identity(token: id.token, deviceId: id.deviceId, captcha: "", userId: id.userId)
+                let seed = attempt == 0 ? id : id.with(captcha: "")
                 if let fresh = await initCaptcha(action: action, identity: seed) {
                     await state.setCaptcha(fresh)
-                    id = Identity(token: id.token, deviceId: id.deviceId, captcha: fresh, userId: id.userId)
+                    id = id.with(captcha: fresh)
                     continue
                 }
+            }
+            if !anonymous && captchaError && id.web {
+                // 网页登录的凭据：验证 token 要由网页端脚本签名申请，应用里续不上
+                throw CloudnError("迅雷网页登录的验证已过期。请到「我的」页退出迅雷后改用「账号密码登录」，之后可长期使用")
             }
             if r.status == 401 || err == "unauthenticated" {
                 throw CloudnError(anonymous ? "迅雷拒绝了匿名访问，请稍后重试" : "迅雷登录已失效，请到「我的」页重新登录")
@@ -379,6 +389,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     }
 
     private func initCaptcha(action: String, identity: Identity) async -> String? {
+        if identity.web { return await initWebCaptcha(action: action, identity: identity) }
         let ts = String(Int64(Date().timeIntervalSince1970 * 1000))
         let body = OrderedJSON.object([
             ("client_id", .string(Self.appClientId)), ("action", .string(action)), ("device_id", .string(identity.deviceId)),
@@ -393,6 +404,23 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
             ("X-Client-Id", Self.appClientId), ("X-Device-Id", identity.deviceId), ("X-Client-Version", Self.appClientVersion)
         ], body: Data(body.text.utf8))
         return (try? await client.send(req))?.json?["captcha_token"].string.nilIfBlank
+    }
+
+    /// 网页 client 的验证 token：不带 captcha_sign（网页端的签名盐未知），服务端可能只给受限 token，拿不到就交给上层提示
+    private func initWebCaptcha(action: String, identity: Identity) async -> String? {
+        let body = OrderedJSON.object([
+            ("client_id", .string(XunleiCredential.webClientId)), ("action", .string(action)), ("device_id", .string(identity.deviceId)),
+            ("meta", .object([("package_name", .string("pan.xunlei.com")), ("user_id", .string(identity.userId)),
+                              ("timestamp", .string(String(Int64(Date().timeIntervalSince1970 * 1000))))])),
+            ("captcha_token", .string(identity.captcha))
+        ])
+        let req = HTTPRequest(url: authBase + "/v1/shield/captcha/init", method: "POST", headers: [
+            ("User-Agent", XunleiCredential.desktopUA), ("Content-Type", "application/json"), ("Origin", "https://pan.xunlei.com"),
+            ("Referer", "https://pan.xunlei.com/"), ("X-Client-Id", XunleiCredential.webClientId), ("X-Device-Id", identity.deviceId)
+        ], body: Data(body.text.utf8))
+        let r = try? await client.send(req)
+        if let json = r?.json, json.has("error") { Log.error("迅雷网页验证初始化失败：\(json["error"].string) \(json["error_description"].string)") }
+        return r?.json?["captcha_token"].string.nilIfBlank
     }
 
     /// captcha_sign = "1." + 依次 md5(上一轮 + salt)，初值为 client_id + version + package + device_id + 毫秒时间戳

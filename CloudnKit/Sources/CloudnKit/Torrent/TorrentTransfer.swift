@@ -10,7 +10,10 @@ public enum TorrentDefaults {
         "udp://exodus.desync.com:6969/announce",
         "udp://open.demonii.com:1337/announce",
         "udp://tracker.tiny-vps.com:6969/announce",
-        "https://tracker.tamersunion.org:443/announce"
+        "https://tracker.tamersunion.org:443/announce",
+        // 有的网络屏蔽 UDP：同一批 tracker 的 HTTP(S) 入口
+        "http://tracker.opentrackr.org:1337/announce",
+        "https://tracker.gbitt.info:443/announce"
     ]
 }
 
@@ -105,16 +108,25 @@ struct TorrentTransfer {
                         group.addTask { [network, client] in
                             do {
                                 let peers = try await TrackerClient.announce(t, announce, network: network, client: client)
+                                await swarm.recordTracker(ok: true)
                                 await swarm.addPeers(peers)
+                                Log.info("tracker 返回 \(peers.count) 个节点：\(t)")
                             } catch {
+                                await swarm.recordTracker(ok: false)
                                 Log.info("tracker 无响应：\(t)（\(error.localizedDescription)）")
                             }
                         }
                     }
                     if dhtDue {
-                        group.addTask { await dht.findPeers { await swarm.addPeers($0) } }
+                        group.addTask {
+                            let responded = await dht.findPeers { await swarm.addPeers($0) }
+                            await swarm.recordDHT(responded)
+                            Log.info("DHT 查找：\(responded) 个节点回应")
+                        }
                     }
                 }
+                let note = await swarm.statusNote
+                Log.info("BT 找节点：\(note)")
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
@@ -132,6 +144,7 @@ struct TorrentTransfer {
             defer { stream.close() }
             try await stream.send(PeerWire.handshake(infoHash: magnet.infoHash, peerId: peerId))
             let supportsExtensions = try PeerWire.parseHandshake(try await stream.receive(exactly: 68, timeout: 15), infoHash: magnet.infoHash)
+            await swarm.recordHandshake()
             if supportsExtensions {
                 let size = await swarm.metadataSizeIfKnown
                 try await stream.send(PeerMessage.extended(id: 0, payload: PeerWire.extendedHandshake(metadataSize: size)).encoded())
@@ -248,10 +261,10 @@ struct TorrentTransfer {
 
 /// 解析页用：拿种子信息、列出文件
 public enum TorrentMetadata {
-    /// onStatus 回报已连接 / 已知的 peer 数
+    /// onStatus 回报已连接 / 已知的 peer 数，以及找节点的诊断信息
     public static func fetch(_ magnet: MagnetLink, cacheDirectory: URL, extraTrackers: [String] = [],
                              network: TorrentNetwork = TorrentNetworks.system, client: HTTPClient = .shared,
-                             onStatus: (@Sendable (Int, Int) -> Void)? = nil) async throws -> TorrentInfo {
+                             onStatus: (@Sendable (Int, Int, String) -> Void)? = nil) async throws -> TorrentInfo {
         if let cached = TorrentMetadataCache.load(in: cacheDirectory, infoHash: magnet.infoHash) { return cached }
         let progress = TransferProgress(chunks: [], total: -1)
         let transfer = TorrentTransfer(magnet: magnet, selection: nil, workDir: cacheDirectory, cacheDir: cacheDirectory, progress: progress,
@@ -259,7 +272,7 @@ public enum TorrentMetadata {
         let reporter = Task {
             while !Task.isCancelled {
                 let p = progress.peers
-                onStatus?(p.connected, p.known)
+                onStatus?(p.connected, p.known, progress.note ?? "")
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }

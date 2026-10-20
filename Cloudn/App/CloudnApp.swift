@@ -41,7 +41,6 @@ struct RootView: View {
                 .tag(AppTab.downloads)
             AccountsView()
                 .tabItem { Label { Text("我的") } icon: { Image(icon: .user) } }
-                .badge(model.announcements.unreadCount)
                 .tag(AppTab.me)
         }
         .background(Color.paper)
@@ -54,19 +53,6 @@ struct RootView: View {
         .sheet(item: Binding(get: { model.settings.acceptedNotice ? model.availableUpdate : nil },
                              set: { model.availableUpdate = $0 })) {
             UpdateSheet(release: $0).presentationDetents([.medium, .large])
-        }
-        // 公告弹窗排在须知与更新之后
-        .sheet(item: Binding(get: { model.settings.acceptedNotice && model.availableUpdate == nil ? model.announcements.popup : nil },
-                             set: { if $0 == nil, let shown = model.announcements.popup { model.announcements.markRead(shown.id); model.announcements.popup = nil } })) { a in
-            AnnouncementPopup(announcement: a) {
-                model.announcements.markRead(a.id)
-                model.announcements.popup = nil
-                model.selectedTab = .me
-                model.openAnnouncement = a
-            } onClose: {
-                model.announcements.markRead(a.id)
-                model.announcements.popup = nil
-            }
         }
     }
 }

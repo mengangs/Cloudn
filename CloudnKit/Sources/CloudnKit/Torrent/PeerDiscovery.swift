@@ -107,7 +107,8 @@ actor DHTLookup {
     }
 
     static let bootstrap = [PeerAddress(host: "router.bittorrent.com", port: 6881), PeerAddress(host: "dht.transmissionbt.com", port: 6881),
-                            PeerAddress(host: "router.utorrent.com", port: 6881), PeerAddress(host: "dht.libtorrent.org", port: 25401)]
+                            PeerAddress(host: "router.utorrent.com", port: 6881), PeerAddress(host: "dht.libtorrent.org", port: 25401),
+                            PeerAddress(host: "router.bitcomet.com", port: 6881), PeerAddress(host: "dht.aelitis.com", port: 6881)]
 
     private let network: TorrentNetwork
     private let target: [UInt8]
@@ -122,12 +123,15 @@ actor DHTLookup {
     }
 
     /// 一次迭代查找：每轮并发问 8 个离目标最近、还没问过的节点；查到的 peer 边找边回调
-    func findPeers(rounds: Int = 12, onPeers: @escaping @Sendable ([PeerAddress]) async -> Void) async {
+    /// 返回本次有回应的节点数（诊断用）
+    @discardableResult
+    func findPeers(rounds: Int = 12, onPeers: @escaping @Sendable ([PeerAddress]) async -> Void) async -> Int {
+        var responded = 0
         var candidates = known
         var asked = Set<PeerAddress>()
         var bootstrapUsed = false
         for _ in 0..<rounds {
-            if Task.isCancelled { return }
+            if Task.isCancelled { return responded }
             candidates.sort { Self.closer($0.id, than: $1.id, to: target) }
             var batch = candidates.filter { !asked.contains($0.address) }.prefix(8).map(\.address)
             if batch.isEmpty {
@@ -152,6 +156,7 @@ actor DHTLookup {
             var progressed = false
             for (_, response) in results {
                 guard let response else { continue }
+                responded += 1
                 peers += response.peers
                 for n in response.nodes where !candidates.contains(n) {
                     candidates.append(n)
@@ -163,6 +168,7 @@ actor DHTLookup {
         }
         candidates.sort { Self.closer($0.id, than: $1.id, to: target) }
         known = Array(candidates.prefix(32))
+        return responded
     }
 
     struct DHTResponse {

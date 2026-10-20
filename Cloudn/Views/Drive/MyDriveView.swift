@@ -121,8 +121,8 @@ struct DriveFolderView: View {
                 }
             }
         }
-        .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result, !urls.isEmpty else { return }
+        .documentPicker(isPresented: $importingFiles, types: [.item], multiple: true) { urls in
+            guard !urls.isEmpty else { return }
             let files: [(url: URL, temporary: Bool, scoped: Bool)] = urls.map { (url: $0, temporary: false, scoped: true) }
             app.uploads.enqueue(files, platform: platform, folderId: folderId)
         }

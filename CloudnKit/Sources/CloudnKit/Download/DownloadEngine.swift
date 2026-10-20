@@ -661,6 +661,7 @@ public actor DownloadEngine {
         let peers = box.peers
         items[i].peers = peers.connected
         items[i].knownPeers = peers.known
+        if let note = box.note { items[i].note = note }
         if let title = box.title, !title.isEmpty, items[i].request.fileName != title { items[i].request.fileName = title }
         let seg = box.segments
         if seg.total > 0 {

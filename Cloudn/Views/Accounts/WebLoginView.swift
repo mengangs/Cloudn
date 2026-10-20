@@ -163,7 +163,8 @@ struct LoginWebView: UIViewRepresentable {
       var c='width='+w+', user-scalable=yes';
       if(m.getAttribute('content')!==c)m.setAttribute('content',c);
       if(!document.getElementById('__cloudn_fit')){var s=document.createElement('style');s.id='__cloudn_fit';
-        s.textContent='html,body{overflow:auto !important;-webkit-overflow-scrolling:touch;}';(document.head||d).appendChild(s);}
+        s.textContent='html,body{overflow:auto !important;-webkit-overflow-scrolling:touch;}'+
+          'input,select,textarea{font-size:16px !important;}';(document.head||d).appendChild(s);}
     }catch(e){}}
     fit();setTimeout(fit,800);setTimeout(fit,2500);})()
     """
