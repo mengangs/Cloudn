@@ -33,7 +33,26 @@ final class TransferProgress: @unchecked Sendable {
     }
 
     func add(_ index: Int, _ bytes: Int64) {
-        lock.lock(); _chunks[index].received += bytes; lock.unlock()
+        lock.lock()
+        _chunks[index].received += bytes
+        // 被切走后半段时，正在写的这一笔可能越过新的终点：已收字节不超过分片长度，免得和新分片重复计数
+        let c = _chunks[index]
+        if c.end >= 0 { _chunks[index].received = min(c.received, c.end - c.start + 1) }
+        lock.unlock()
+    }
+
+    /// 弹性分片：把第 index 个分片还没下的部分对半切开，后半段作为新分片追加，返回新分片序号；剩余不够切返回 nil
+    func split(_ index: Int, minPiece: Int64) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        let c = _chunks[index]
+        guard c.end >= 0 else { return nil }
+        let cur = c.start + c.received
+        let remaining = c.end - cur + 1
+        guard remaining >= minPiece * 2 else { return nil }
+        let mid = cur + remaining / 2
+        _chunks.append(DownloadChunk(start: mid, end: c.end, received: 0))
+        _chunks[index].end = mid - 1
+        return _chunks.count - 1
     }
 
     func setReceived(_ index: Int, _ value: Int64) {
@@ -83,22 +102,40 @@ struct RangeTransfer {
     }
 
     static let minChunkSize: Int64 = 2 * 1024 * 1024
+    /// 弹性分片切出来的每一半至少这么大（太碎了建连开销比省下的时间还多）
+    static let minStealPiece: Int64 = 1024 * 1024
 
     func run() async throws {
         let fm = FileManager.default
         if progress.chunks.isEmpty || !fm.fileExists(atPath: destination.path) {
             try await plan()
         }
-        let pending = progress.chunks.indices.filter { !progress.chunk($0).isDone }
+        // 只有按 Range 规划成多段的任务才能切分片、换连接（单流可能是服务端不支持 Range）
+        let splittable = progress.chunks.count > 1
+        let scheduler = ChunkScheduler()
+        let workers = max(1, connections)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            var iterator = pending.makeIterator()
-            for _ in 0..<max(1, min(connections, pending.count)) {
-                guard let index = iterator.next() else { break }
-                group.addTask { try await self.runChunk(index) }
+            for _ in 0..<workers {
+                scheduler.workerStarted()
+                group.addTask {
+                    defer { scheduler.workerFinished() }
+                    // 空闲连接先领没开始的分片，领完了就把剩余最多的分片切一半接着下：不会出现别的连接都闲着、只剩一条慢连接在磨尾巴
+                    while let index = scheduler.claim(progress: self.progress, splittable: splittable, minPiece: Self.minStealPiece) {
+                        defer { scheduler.release(index) }
+                        try await self.runChunk(index, scheduler: scheduler)
+                    }
+                }
             }
-            while try await group.next() != nil {
-                if let index = iterator.next() { group.addTask { try await self.runChunk(index) } }
+            if splittable {
+                group.addTask {
+                    // 看门狗：每 2 秒采样各连接速度，明显慢的连接断开重连（已写入的字节保留，从断点续传）
+                    while scheduler.hasWorkers, !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        scheduler.sample(progress: self.progress, now: Date())
+                    }
+                }
             }
+            try await group.waitForAll()
         }
         // 长度已知时校验写入总量，避免服务端提前断流留下残缺文件
         let total = progress.total
@@ -150,12 +187,15 @@ struct RangeTransfer {
         progress.reset(chunks: chunks, total: total)
     }
 
-    private func runChunk(_ index: Int) async throws {
+    private func runChunk(_ index: Int, scheduler: ChunkScheduler? = nil) async throws {
         var attempt = 0
         while true {
             do {
-                try await fetchChunk(index, source: Self.sourceIndex(chunk: index, attempt: attempt, count: sources.count))
+                try await fetchChunk(index, source: Self.sourceIndex(chunk: index, attempt: attempt, count: sources.count), scheduler: scheduler)
                 return
+            } catch is ChunkScheduler.Preempted {
+                // 慢连接被换掉：已写入的保留，立即从断点重连，不算失败、不退避
+                scheduler?.restarted(index, received: progress.chunk(index).received)
             } catch let e as TransferError where e.message.hasPrefix("HTTP 4") {
                 // 多源时某条链接被拒绝，换下一条；每条都试过仍被拒绝才放弃
                 attempt += 1
@@ -169,7 +209,7 @@ struct RangeTransfer {
         }
     }
 
-    private func fetchChunk(_ index: Int, source: Int = 0) async throws {
+    private func fetchChunk(_ index: Int, source: Int = 0, scheduler: ChunkScheduler? = nil) async throws {
         let chunk = progress.chunk(index)
         if chunk.isDone { return }
         let single = progress.chunks.count == 1
@@ -201,17 +241,24 @@ struct RangeTransfer {
                 }
                 return true
             }, onData: { data in
+                if let scheduler, scheduler.shouldStop(index) { throw ChunkScheduler.Preempted() }
                 var payload = data
-                if chunk.end >= 0 {
-                    // 不写出分片边界（个别 CDN 会多给）
-                    let remaining = chunk.end - offset + 1
-                    if remaining <= 0 { return }
+                // 终点每次现读：下载途中后半段可能被空闲连接切走
+                let end = chunk.end >= 0 ? self.progress.chunk(index).end : -1
+                if end >= 0 {
+                    // 不写出分片边界（个别 CDN 会多给、或后半段已被切走）
+                    let remaining = end - offset + 1
+                    if remaining <= 0 { throw ChunkScheduler.Reached() }
                     if Int64(payload.count) > remaining { payload = payload.prefix(Int(remaining)) }
                 }
                 try handle.write(contentsOf: payload)
                 offset += Int64(payload.count)
                 self.progress.add(index, Int64(payload.count))
+                // 写到（可能变短了的）终点就主动断开，不再白收后面的数据
+                if end >= 0 && offset > end { throw ChunkScheduler.Reached() }
             })
+        } catch is ChunkScheduler.Reached {
+            // 到达终点主动断开，属正常结束
         } catch {
             throw failure ?? error
         }
@@ -243,5 +290,112 @@ struct RangeTransfer {
         case 0: return "网络连接失败"
         default: return "HTTP \(status)"
         }
+    }
+}
+
+/// 弹性分片调度与慢连接抢占（参考 YunX 的任务池 + 弹性区与慢连接抢占）
+final class ChunkScheduler: @unchecked Sendable {
+    /// 慢连接被换掉
+    struct Preempted: Error {}
+    /// 分片写到终点，主动断开
+    struct Reached: Error {}
+
+    private struct Active {
+        var startedAt: Date
+        var lastBytes: Int64
+        var lastAt: Date
+        var speed: Double = -1
+        var stop = false
+    }
+
+    /// 绝对下限：低于 12KB/s 才可能算慢（正常连接几十到几百 KB/s 以上）
+    static let minBytesPerSecond: Double = 12 * 1024
+    /// 每个分片最多换 3 次连接（整站都慢时防止反复重连）
+    static let maxPreempts = 3
+
+    private let lock = NSLock()
+    private var claimed = Set<Int>()
+    private var active: [Int: Active] = [:]
+    private var preempts: [Int: Int] = [:]
+    private var lastPreemptAt: [Int: Date] = [:]
+    private var workers = 0
+    private var peakWorkers = 0
+
+    func workerStarted() { lock.lock(); workers += 1; peakWorkers = max(peakWorkers, workers); lock.unlock() }
+    func workerFinished() { lock.lock(); workers -= 1; lock.unlock() }
+    var hasWorkers: Bool { lock.lock(); defer { lock.unlock() }; return workers > 0 }
+
+    /// 领一个分片：先领没开始的；都在下了就把剩余最多的切一半
+    func claim(progress: TransferProgress, splittable: Bool, minPiece: Int64, now: Date = Date()) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        let chunks = progress.chunks
+        if let i = chunks.indices.first(where: { !claimed.contains($0) && !chunks[$0].isDone }) {
+            begin(i, received: chunks[i].received, now: now)
+            return i
+        }
+        guard splittable else { return nil }
+        let candidates = claimed.sorted { remaining(chunks[$0]) > remaining(chunks[$1]) }
+        for i in candidates {
+            if let new = progress.split(i, minPiece: minPiece) {
+                begin(new, received: 0, now: now)
+                return new
+            }
+        }
+        return nil
+    }
+
+    func release(_ index: Int) {
+        lock.lock(); claimed.remove(index); active[index] = nil; lock.unlock()
+    }
+
+    func shouldStop(_ index: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return active[index]?.stop ?? false
+    }
+
+    func restarted(_ index: Int, received: Int64, now: Date = Date()) {
+        lock.lock(); begin(index, received: received, now: now); lock.unlock()
+    }
+
+    /// 采样各连接速度；比「本任务单连接平均速度的一半」与绝对下限都慢的，标记换连接。
+    /// 平时要跑满 15 秒、剩余 ≥128KB 才判；已有连接领不到活退出（真正收尾）时放宽到 3 秒、剩余 ≥16KB
+    func sample(progress: TransferProgress, now: Date) {
+        lock.lock(); defer { lock.unlock() }
+        let chunks = progress.chunks
+        for (i, a) in active where i < chunks.count {
+            let received = chunks[i].received
+            let dt = now.timeIntervalSince(a.lastAt)
+            guard dt > 0.5 else { continue }
+            active[i]?.speed = Double(max(0, received - a.lastBytes)) / dt
+            active[i]?.lastBytes = received
+            active[i]?.lastAt = now
+        }
+        let known = active.values.filter { $0.speed >= 0 }.map(\.speed)
+        guard !known.isEmpty else { return }
+        let average = known.reduce(0, +) / Double(known.count)
+        let threshold = max(Self.minBytesPerSecond, average / 2)
+        let pendingUnclaimed = chunks.indices.contains { !claimed.contains($0) && !chunks[$0].isDone }
+        let endgame = !pendingUnclaimed && workers < peakWorkers
+        var marked = 0
+        for (i, a) in active.sorted(by: { $0.value.speed < $1.value.speed }) where marked < 2 && i < chunks.count {
+            guard a.speed >= 0, a.speed < threshold, !a.stop, (preempts[i] ?? 0) < Self.maxPreempts,
+                  now.timeIntervalSince(lastPreemptAt[i] ?? .distantPast) > 10 else { continue }
+            let age = now.timeIntervalSince(a.startedAt)
+            let left = remaining(chunks[i])
+            guard endgame ? (age >= 3 && left >= 16 * 1024) : (age >= 15 && left >= 128 * 1024) else { continue }
+            active[i]?.stop = true
+            preempts[i, default: 0] += 1
+            lastPreemptAt[i] = now
+            marked += 1
+            Log.info("换掉慢连接：分片 \(i) \(Int(a.speed / 1024))KB/s（阈值 \(Int(threshold / 1024))KB/s），剩余 \(left / 1024)KB")
+        }
+    }
+
+    private func begin(_ index: Int, received: Int64, now: Date) {
+        claimed.insert(index)
+        active[index] = Active(startedAt: now, lastBytes: received, lastAt: now)
+    }
+
+    private func remaining(_ c: DownloadChunk) -> Int64 {
+        c.end < 0 ? 0 : max(0, c.end - (c.start + c.received) + 1)
     }
 }

@@ -255,6 +255,8 @@ public struct DownloadSettings: Sendable {
     public static let defaultCaps: [String: Int] = [
         SharePlatform.baidu.displayName: 2,
         SharePlatform.pan115.displayName: 2,
+        // 迅雷 CDN 同一文件并发超过约 8 条会忽略 Range、整文件返回，整任务只能退回单流
+        SharePlatform.xunlei.displayName: 8,
     ]
 
     public func connections(for source: String) -> Int {
