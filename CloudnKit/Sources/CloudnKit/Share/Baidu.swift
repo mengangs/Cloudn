@@ -354,8 +354,9 @@ extension BaiduResolver: DriveManager {
                               filelist: Self.pathList(files.map(\.fid)))
     }
 
-    /// share/set：永久有效（period=0）+ 随机 4 位提取码
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// share/set：period 为天数（0 = 永久）+ 随机 4 位提取码
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
+        try expiry.require(in: shareExpiryOptions)
         let fsIds = files.map(\.token).filter { !$0.isEmpty }
         guard !fsIds.isEmpty, fsIds.count == files.count else { throw CloudnError("请刷新列表后重试分享") }
         guard let cookie = await loginCookie() else { throw SharePlatform.baidu.loginRequired }
@@ -363,7 +364,7 @@ extension BaiduResolver: DriveManager {
         let pwd = Self.randomSharePwd()
         let setURL = "https://pan.baidu.com/share/set?channel=chunlei&web=1&app_id=\(Self.appId)&bdstoken=\(bdstoken)&clienttype=0"
         let r = try await client.send(.postForm(setURL, [("fid_list", Self.shareFidList(fsIds)), ("schannel", "4"), ("channel_list", "[]"),
-                                                         ("period", "0"), ("pwd", pwd)],
+                                                         ("period", String(expiry.days)), ("pwd", pwd)],
                                                 headers: [("Cookie", cookie), ("User-Agent", Self.netdiskUA), ("Referer", Self.diskReferer)]))
         guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
         try Self.check(json, fallback: "创建分享失败")

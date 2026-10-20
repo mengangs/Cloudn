@@ -28,6 +28,27 @@ public struct DriveShareLink: Equatable, Sendable {
     public var text: String { pwd.isEmpty ? url : "\(url) 提取码：\(pwd)" }
 }
 
+/// 分享有效期（按天）；0 = 永久。各平台字段语义不同，在各自的 createShare 里换算（参考 YunX §3.20）
+public struct ShareExpiry: Hashable, Sendable, Identifiable {
+    public let days: Int
+    public init(days: Int) { self.days = days }
+
+    public var id: Int { days }
+    public var isForever: Bool { days == 0 }
+    public var label: String { isForever ? "永久有效" : "\(days) 天" }
+
+    public static let forever = ShareExpiry(days: 0)
+    /// 夸克 / UC / 百度 / 迅雷 / 123 / 139 / 光鸭
+    public static let standard = [0, 1, 7, 30].map(ShareExpiry.init(days:))
+    /// 115 只有这几档
+    public static let pan115 = [0, 1, 3, 7, 15].map(ShareExpiry.init(days:))
+
+    /// 不在平台档位里的有效期直接报错，不悄悄换成别的档位
+    func require(in options: [ShareExpiry]) throws {
+        guard options.contains(self) else { throw CloudnError("该网盘不支持「\(label)」的分享有效期") }
+    }
+}
+
 /// 平台支持的管理操作
 public struct DriveCapabilities: OptionSet, Sendable {
     public let rawValue: Int
@@ -55,7 +76,9 @@ public protocol DriveManager: Sendable {
     func rename(_ file: ShareFile, to name: String) async throws
     func move(_ files: [ShareFile], to folderId: String) async throws
     func delete(_ files: [ShareFile]) async throws
-    func createShare(_ files: [ShareFile]) async throws -> DriveShareLink
+    /// 可选的分享有效期，第一项为默认
+    var shareExpiryOptions: [ShareExpiry] { get }
+    func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink
     /// 容量；拿不到返回 nil
     func quota() async -> DriveQuota?
 }
@@ -66,6 +89,9 @@ public extension DriveManager {
     func rename(_ file: ShareFile, to name: String) async throws { throw CloudnError("该网盘暂不支持重命名") }
     func move(_ files: [ShareFile], to folderId: String) async throws { throw CloudnError("该网盘暂不支持移动") }
     func delete(_ files: [ShareFile]) async throws { throw CloudnError("该网盘暂不支持删除") }
-    func createShare(_ files: [ShareFile]) async throws -> DriveShareLink { throw CloudnError("该网盘暂不支持创建分享") }
+    var shareExpiryOptions: [ShareExpiry] { ShareExpiry.standard }
+    func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink { throw CloudnError("该网盘暂不支持创建分享") }
+    /// 永久有效的分享
+    func createShare(_ files: [ShareFile]) async throws -> DriveShareLink { try await createShare(files, expiry: .forever) }
     func quota() async -> DriveQuota? { nil }
 }

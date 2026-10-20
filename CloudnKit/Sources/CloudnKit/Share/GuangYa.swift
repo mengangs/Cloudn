@@ -282,11 +282,12 @@ extension GuangYaResolver: DriveManager {
         try await runTask("file/delete_file", .object([("fileIds", Self.idArray(files))]), fallback: "删除失败")
     }
 
-    /// 永久有效、无提取码的分享
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// 无提取码的分享；validateDuration 为天数（0 = 永久）
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        try expiry.require(in: shareExpiryOptions)
         let cred = try await credential()
-        let data = try await call("share_file", Self.shareBody(files, code: ""), fallback: "创建分享失败", cred: cred)
+        let data = try await call("share_file", Self.shareBody(files, code: "", days: expiry.days), fallback: "创建分享失败", cred: cred)
         guard let link = Self.parseShare(data, code: "") else { throw CloudnError("创建分享失败") }
         return link
     }

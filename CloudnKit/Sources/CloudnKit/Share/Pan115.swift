@@ -546,8 +546,11 @@ extension Pan115Resolver: DriveManager {
         }
     }
 
-    /// share/send 建分享（先确认分享协议、ignore_warn=0 预检）→ updateshare 设为长期（创建接口没有有效期字段，默认 15 天）
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    public var shareExpiryOptions: [ShareExpiry] { ShareExpiry.pan115 }
+
+    /// share/send 建分享（先确认分享协议、ignore_warn=0 预检）→ updateshare 设有效期（创建接口没有有效期字段，默认 15 天）
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
+        try expiry.require(in: shareExpiryOptions)
         let cookie = try await driveCookie()
         guard let userId = Self.userId(fromCookie: cookie) else { throw CloudnError("登录态缺少用户标识，请重新登录 115 网盘") }
         let ids = files.map(\.fid).filter { !$0.isEmpty }
@@ -561,7 +564,7 @@ extension Pan115Resolver: DriveManager {
         try Self.check(json, fallback: "创建分享失败")
         guard let link = Self.parseShareLink(json) else { throw CloudnError("创建分享失败：响应缺少分享编号") }
         // 有效期改失败不影响已建好的分享（按服务端默认档位）
-        _ = try? await post(apiBase + "/share/updateshare", [("share_code", link.code), ("share_duration", "-1")], cookie: cookie)
+        _ = try? await post(apiBase + "/share/updateshare", [("share_code", link.code), ("share_duration", Self.shareDuration(expiry))], cookie: cookie)
         return link.link
     }
 
@@ -619,6 +622,9 @@ extension Pan115Resolver: DriveManager {
     }
 
     /// share/send 的分享信息在 data 内层（顶层只有 state/errno），两层都读
+    /// share_duration：字符串天数，"-1" = 永久
+    static func shareDuration(_ expiry: ShareExpiry) -> String { expiry.isForever ? "-1" : String(expiry.days) }
+
     static func parseShareLink(_ json: JSON) -> (code: String, link: DriveShareLink)? {
         let data = json["data"]
         func field(_ name: String) -> String { data[name].string.nilIfBlank ?? json[name].string }

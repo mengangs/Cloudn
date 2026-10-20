@@ -385,13 +385,14 @@ extension C139Resolver: DriveManager {
         try await waitTask(json["data"]["taskId"].string, authorization: authorization)
     }
 
-    /// orchestration getOutLink：需 Cookie + mcloud-skey；永久有效，提取码由服务端生成
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// orchestration getOutLink：需 Cookie + mcloud-skey；提取码由服务端生成
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        try expiry.require(in: shareExpiryOptions)
         let (cookie, authorization) = try await driveAuth()
         guard let account = Self.account(in: cookie) else { throw SharePlatform.c139.loginRequired }
         let name = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
-        let body = Self.outLinkBody(account: account, files: files, name: name)
+        let body = Self.outLinkBody(account: account, files: files, name: name, days: expiry.isForever ? nil : expiry.days)
         let json = try await personalPost(Self.outLinkURL, body, authorization: authorization, cookie: cookie, skey: true, fallback: "创建分享失败")
         guard let link = Self.parseOutLink(json["data"]) else { throw CloudnError("创建分享失败：未返回链接") }
         return link
@@ -488,16 +489,21 @@ extension C139Resolver: DriveManager {
                  ("type", .string("folder")), ("fileRenameMode", .string("force_rename"))])
     }
 
-    /// 文件进 coIDLst、文件夹进 caIDLst；不传 period = 永久
-    static func outLinkBody(account: String, files: [ShareFile], name: String) -> OrderedJSON {
-        .object([("getOutLinkReq", .object([
+    /// 文件进 coIDLst、文件夹进 caIDLst；period 为天数，不传 = 永久（传 0 不是永久）
+    static func outLinkBody(account: String, files: [ShareFile], name: String, days: Int? = nil) -> OrderedJSON {
+        var fields: [(String, OrderedJSON)] = [
             ("subLinkType", .int(0)), ("encrypt", .int(1)),
             ("coIDLst", .array(files.filter { !$0.isDirectory }.map { OrderedJSON.string($0.fid) })),
             ("caIDLst", .array(files.filter(\.isDirectory).map { OrderedJSON.string($0.fid) })),
-            ("pubType", .int(1)), ("dedicatedName", .string(name)), ("periodUnit", .int(1)), ("viewerLst", .array([])),
+            ("pubType", .int(1)), ("dedicatedName", .string(name)), ("periodUnit", .int(1))
+        ]
+        if let days { fields.append(("period", .int(Int64(days)))) }
+        fields += [
+            ("viewerLst", .array([])),
             ("extInfo", .object([("isWatermark", .int(0)), ("shareChannel", .string("3001"))])),
             ("commonAccountInfo", .object([("account", .string(account)), ("accountType", .int(1))]))
-        ]))])
+        ]
+        return .object([("getOutLinkReq", .object(fields))])
     }
 
     /// data.getOutLinkRes.getOutLinkResSet[0] → linkUrl / passwd

@@ -349,14 +349,15 @@ extension Pan123Resolver: DriveManager {
         try await drivePost("/b/api/file/trash", Self.trashBody(files), fallback: "删除失败")
     }
 
-    /// 永久有效、随机 4 位提取码
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// 随机 4 位提取码；有效期为到期的绝对时间
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        try expiry.require(in: shareExpiryOptions)
         let token = try await driveToken()
         let pwd = String((0..<4).map { _ in "abcdefghijkmnpqrstuvwxyz23456789".randomElement()! })
         let name = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
         let path = "/b/api/share/create"
-        let body = Self.shareCreateBody(fileIds: files.map(\.fid), name: name, pwd: pwd)
+        let body = Self.shareCreateBody(fileIds: files.map(\.fid), name: name, pwd: pwd, expiration: Self.shareExpiration(expiry))
         let json = try await callJSON(.postJSON(apiBase + path, body, headers: jsonAuthHeaders(path: path, token: token)))
         try Self.check(json, fallback: "创建分享失败")
         guard let url = Self.shareURL(from: json["data"]) else { throw CloudnError("创建分享失败：未返回 ShareKey") }
@@ -420,9 +421,21 @@ extension Pan123Resolver: DriveManager {
         return ["driveId": 0, "fileTrashInfoList": list, "operation": true, "event": "intoRecycle", "operatePlace": 1, "safeBox": false]
     }
 
+    static let foreverExpiration = "2099-12-12T08:00:00+08:00"
+
+    /// 永久用 2099 哨兵；否则为 now + 天数，带本地时区偏移（yyyy-MM-dd'T'HH:mm:ss+08:00）
+    static func shareExpiration(_ expiry: ShareExpiry, now: Date = Date(), timeZone: TimeZone = .current) -> String {
+        guard !expiry.isForever else { return foreverExpiration }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssxxx"
+        return f.string(from: now.addingTimeInterval(TimeInterval(expiry.days) * 86_400))
+    }
+
     /// 永久分享过期时间固定 2099-12-12T08:00:00+08:00；单文件 fileIdList 为标量，多文件为数组
     static func shareCreateBody(fileIds: [String], name: String, pwd: String,
-                                expiration: String = "2099-12-12T08:00:00+08:00") -> [String: Any] {
+                                expiration: String = foreverExpiration) -> [String: Any] {
         let ids = fileIds.map { Int64($0) ?? 0 }
         var body: [String: Any] = [
             "driveId": 0, "expiration": expiration, "shareName": name, "event": "shareCreate", "fileNum": ids.count,

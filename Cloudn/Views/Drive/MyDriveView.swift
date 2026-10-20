@@ -138,7 +138,16 @@ struct DriveFolderView: View {
                 Button { download(item) } label: { Label("下载", glyph: .download) }
             }
             if caps.contains(.share) {
-                Button { share(item) } label: { Label("创建分享并复制", glyph: .link) }
+                let options = manager.shareExpiryOptions
+                if options.count > 1 {
+                    Menu {
+                        ForEach(options) { expiry in
+                            Button(expiry.label) { share(item, expiry: expiry) }
+                        }
+                    } label: { Label("创建分享并复制", glyph: .link) }
+                } else {
+                    Button { share(item, expiry: options.first ?? .forever) } label: { Label("创建分享并复制", glyph: .link) }
+                }
             }
             if caps.contains(.rename) {
                 Button { nameText = item.name; naming = .rename(item) } label: { Label("重命名", glyph: .pencil) }
@@ -195,11 +204,11 @@ struct DriveFolderView: View {
         }
     }
 
-    private func share(_ file: ShareFile) {
+    private func share(_ file: ShareFile, expiry: ShareExpiry) {
         perform(nil) {
-            let link = try await manager.createShare([file])
+            let link = try await manager.createShare([file], expiry: expiry)
             UIPasteboard.general.string = link.text
-            app.show("分享链接已复制")
+            app.show(expiry.isForever ? "分享链接已复制" : "分享链接已复制 · \(expiry.label)有效")
         }
     }
 

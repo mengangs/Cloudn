@@ -522,11 +522,12 @@ extension QuarkFamilyResolver: DriveManager {
         _ = try await waitTask(data["task_id"].string, cookie: cookie, attempts: 10)
     }
 
-    /// 永久有效、无提取码的分享
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// 无提取码的分享
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        let expiredType = try Self.expiredType(expiry)
         guard let cookie = await freshCookie() else { throw config.platform.loginRequired }
-        let shareId = try await createShareId(files, expiredType: 1, cookie: cookie)
+        let shareId = try await createShareId(files, expiredType: expiredType, cookie: cookie)
         let info = try await shareInfo(shareId, cookie: cookie)
         let link = info["share_url"].string
         guard !link.isEmpty else { throw CloudnError("未返回分享链接") }
@@ -565,6 +566,17 @@ extension QuarkFamilyResolver: DriveManager {
     }
 
     /// /1/clouddrive/share 请求体；url_type 1=无提取码，expired_type 1永久/2一天/3七天/4三十天
+    /// expired_type：1 永久、2 一天、3 七天、4 三十天
+    static func expiredType(_ expiry: ShareExpiry) throws -> Int {
+        switch expiry.days {
+        case 0: return 1
+        case 1: return 2
+        case 7: return 3
+        case 30: return 4
+        default: throw CloudnError("该网盘不支持「\(expiry.label)」的分享有效期")
+        }
+    }
+
     static func shareCreateBody(_ platform: SharePlatform, fids: [String], title: String, expiredType: Int) -> [String: Any] {
         var body: [String: Any] = ["fid_list": fids, "title": title.nilIfBlank ?? "分享文件", "url_type": 1, "expired_type": expiredType]
         if platform == .uc {

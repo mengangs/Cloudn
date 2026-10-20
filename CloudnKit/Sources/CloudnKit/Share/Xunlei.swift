@@ -486,13 +486,14 @@ extension XunleiResolver: DriveManager {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
     }
 
-    /// POST /drive/v1/share：永久有效，提取码由服务端生成并直接返回
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    /// POST /drive/v1/share：提取码由服务端生成并直接返回
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard !files.isEmpty else { throw CloudnError("请选择要分享的文件") }
+        try expiry.require(in: shareExpiryOptions)
         let id = try await driveIdentity()
         let title = files.count == 1 ? files[0].name : "分享 \(files.count) 个文件"
         let data = try await pan("POST:/drive/v1/share", url: panBase + "/drive/v1/share",
-                                 body: Self.shareBody(ids: files.map(\.fid), title: title), identity: id)
+                                 body: Self.shareBody(ids: files.map(\.fid), title: title, days: expiry.isForever ? -1 : expiry.days), identity: id)
         guard let link = Self.parseShareLink(data) else { throw CloudnError("迅雷创建分享失败") }
         return link
     }
@@ -536,13 +537,13 @@ extension XunleiResolver: DriveManager {
         .object([("ids", .array(ids.map { .string($0) })), ("space", .string(""))])
     }
 
-    /// expiration_days "-1" = 永久；restore_limit "-1" = 不限转存次数
-    static func shareBody(ids: [String], title: String) -> OrderedJSON {
+    /// expiration_days 为字符串天数，"-1" = 永久；restore_limit "-1" = 不限转存次数
+    static func shareBody(ids: [String], title: String, days: Int = -1) -> OrderedJSON {
         let params = OrderedJSON.object([("subscribe_push", .string("false")), ("WithPassCodeInLink", .string("true")),
                                          ("with_pass_code_in_link", .string("true"))])
         return .object([("file_ids", .array(ids.map { .string($0) })), ("share_to", .string("copy")), ("params", params),
                         ("title", .string(title.nilIfBlank ?? "分享文件")), ("restore_limit", .string("-1")),
-                        ("expiration_days", .string("-1"))])
+                        ("expiration_days", .string(String(days)))])
     }
 
     static func parseShareLink(_ data: JSON) -> DriveShareLink? {

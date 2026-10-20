@@ -507,9 +507,13 @@ extension LanzouResolver: DriveManager {
         }
     }
 
+    /// 蓝奏的分享链接没有有效期
+    public var shareExpiryOptions: [ShareExpiry] { [.forever] }
+
     /// 文件 task=22、文件夹 task=18（参数名都是 file_id）；一次只能分享一项
-    public func createShare(_ files: [ShareFile]) async throws -> DriveShareLink {
+    public func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink {
         guard let file = files.first else { throw CloudnError("请选择要分享的文件") }
+        try expiry.require(in: shareExpiryOptions)
         guard files.count == 1 else { throw CloudnError("蓝奏一次只能分享一个文件或文件夹") }
         let json = try await doupload([("task", file.isDirectory ? "18" : "22"), ("file_id", Self.rawId(file.fid))])
         guard let info = Self.parseShareInfo(json, folder: file.isDirectory) else { throw CloudnError("蓝奏未返回分享链接") }
