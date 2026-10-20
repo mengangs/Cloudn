@@ -13,10 +13,6 @@ struct CloudnWidgetBundle: WidgetBundle {
 
 /// 与主应用「纸与陶土」一致的几种颜色（小组件拿不到主应用的设计令牌，这里各写一份）
 private enum Palette {
-    static let paper = dynamic(0xF7F5EF, 0x1C1A18)
-    static let ink = dynamic(0x1F1E1B, 0xEDEAE3)
-    static let ink2 = dynamic(0x66625A, 0xA8A397)
-    static let track = dynamic(0xE3DED3, 0x3A3833)
     static let clay = dynamic(0xB4532F, 0xE08A66)
     static let success = dynamic(0x3F7D52, 0x7FB38E)
     /// 灵动岛始终是黑底，用深色那一套
@@ -41,17 +37,16 @@ private extension Color {
 struct DownloadLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: DownloadActivityAttributes.self) { context in
+            // 不自定义底色：锁屏会把浅色底渲染成发黄的玻璃、浅灰字看不清。用系统底色 + 语义文字颜色
             LockScreenView(state: context.state)
                 .padding(16)
-                .activityBackgroundTint(Palette.paper)
-                .activitySystemActionForegroundColor(Palette.ink)
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
-                        Ring(fraction: state.fraction, done: state.active == 0, tint: Palette.clayOnBlack, size: 26)
-                        Text(state.active > 0 ? "\(state.active) 个" : "完成").font(.subheadline.weight(.semibold))
+                        Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 26)
+                        Text(state.active > 0 ? "\(state.active) 个" : (state.isPaused ? "已暂停" : "完成")).font(.subheadline.weight(.semibold))
                     }
                     .padding(.leading, 4)
                 }
@@ -62,19 +57,20 @@ struct DownloadLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(state.title).font(.footnote).lineLimit(1).foregroundStyle(.secondary)
-                        if state.fraction >= 0 { Bar(fraction: state.fraction, tint: Palette.clayOnBlack, track: .white.opacity(0.15)) }
+                        if !state.note.isEmpty { Text(state.note).font(.caption2).foregroundStyle(.secondary) }
+                        if state.fraction >= 0 && state.active > 0 { Bar(fraction: state.fraction, tint: Palette.clayOnBlack, track: .white.opacity(0.15)) }
                     }
                     .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                Ring(fraction: state.fraction, done: state.active == 0, tint: Palette.clayOnBlack, size: 18)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 18)
             } compactTrailing: {
-                Text(state.fraction >= 0 ? "\(Int(state.fraction * 100))%" : "\(state.active)")
+                Text(state.compactText)
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.clayOnBlack)
             } minimal: {
-                Ring(fraction: state.fraction, done: state.active == 0, tint: Palette.clayOnBlack, size: 18)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 18)
             }
             .keylineTint(Palette.clayOnBlack)
         }
@@ -85,23 +81,41 @@ struct DownloadLiveActivity: Widget {
     }
 }
 
-/// 圆环进度；完成后变成对勾
+extension DownloadActivityAttributes.ContentState {
+    /// 没有进行中的任务、但不是全部完成（被暂停 / 失败）
+    var isPaused: Bool { active == 0 && !note.isEmpty }
+
+    /// 灵动岛右侧：知道进度显示百分比，否则显示速度，再不然显示任务数
+    var compactText: String {
+        if active == 0 { return isPaused ? "暂停" : "完成" }
+        if fraction >= 0 { return "\(Int(fraction * 100))%" }
+        if speed > 0 { return ByteCountFormatter.string(fromByteCount: speed, countStyle: .file) }
+        return "\(active) 个"
+    }
+}
+
+/// 圆环进度；完成后变成对勾、暂停显示暂停符号；进度未知时只画底环（不画假的进度）
 private struct Ring: View {
     let fraction: Double
     let done: Bool
+    var paused = false
     let tint: Color
     var size: CGFloat
 
     var body: some View {
         ZStack {
             Circle().stroke(tint.opacity(0.25), lineWidth: size * 0.13)
-            if done {
+            if paused {
+                Image(systemName: "pause.fill").font(.system(size: size * 0.38, weight: .bold)).foregroundStyle(tint)
+            } else if done {
                 Image(systemName: "checkmark").font(.system(size: size * 0.45, weight: .bold)).foregroundStyle(tint)
             } else {
-                Circle()
-                    .trim(from: 0, to: fraction >= 0 ? max(0.04, min(1, fraction)) : 0.25)
-                    .stroke(tint, style: StrokeStyle(lineWidth: size * 0.13, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+                if fraction >= 0 {
+                    Circle()
+                        .trim(from: 0, to: max(0.04, min(1, fraction)))
+                        .stroke(tint, style: StrokeStyle(lineWidth: size * 0.13, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
                 Image(systemName: "arrow.down").font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(tint)
             }
         }
@@ -129,31 +143,38 @@ private struct Bar: View {
 private struct LockScreenView: View {
     let state: DownloadActivityAttributes.ContentState
 
+    private var headline: String {
+        if state.active > 0 { return "正在下载 \(state.active) 个文件" }
+        return state.isPaused ? "下载已暂停" : "下载完成"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                Ring(fraction: state.fraction, done: state.active == 0, tint: state.active == 0 ? Palette.success : Palette.clay, size: 34)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused,
+                     tint: state.active == 0 && !state.isPaused ? Palette.success : Palette.clay, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.active > 0 ? "正在下载 \(state.active) 个文件" : "下载完成")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Palette.ink)
+                    Text(headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     if !state.title.isEmpty {
-                        Text(state.title).font(.footnote).lineLimit(1).foregroundStyle(Palette.ink2)
+                        Text(state.title).font(.footnote).lineLimit(1).foregroundStyle(.secondary)
+                    }
+                    if !state.note.isEmpty {
+                        Text(state.note).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
                     if state.fraction >= 0 && state.active > 0 {
-                        Text("\(Int(state.fraction * 100))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Palette.ink)
+                        Text("\(Int(state.fraction * 100))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
                     }
-                    Text(DownloadLiveActivity.speed(state.speed)).font(.caption).monospacedDigit().foregroundStyle(Palette.ink2)
+                    Text(DownloadLiveActivity.speed(state.speed)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
             if state.fraction >= 0 && state.active > 0 {
-                Bar(fraction: state.fraction, tint: Palette.clay, track: Palette.track)
+                Bar(fraction: state.fraction, tint: Palette.clay, track: Color.secondary.opacity(0.25))
             }
             if state.finished > 0 {
-                Text("已完成 \(state.finished) 个").font(.caption2).foregroundStyle(Palette.ink2)
+                Text("已完成 \(state.finished) 个").font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

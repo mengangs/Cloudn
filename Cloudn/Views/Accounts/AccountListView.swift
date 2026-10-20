@@ -31,7 +31,7 @@ struct AccountListView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 12)
                             .background(Color.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             // 不用 destructive 角色：它会触发列表删除动画，确认框刚弹出就被收回

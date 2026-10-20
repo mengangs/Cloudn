@@ -44,6 +44,9 @@ final class DownloadStore {
         }
     }
 
+    /// 切到后台时更新实时活动的说明
+    func enterBackground() { activity.enterBackground(items) }
+
     private func apply(_ list: [DownloadItem]) {
         items = list
         activity.update(with: list)

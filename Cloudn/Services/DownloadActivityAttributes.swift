@@ -15,5 +15,7 @@ struct DownloadActivityAttributes: ActivityAttributes {
         var speed: Int64
         /// 当前主要任务的文件名
         var title: String
+        /// 补充说明（「正在获取种子信息」「已暂停，回到应用继续」等）；为空不显示
+        var note: String = ""
     }
 }

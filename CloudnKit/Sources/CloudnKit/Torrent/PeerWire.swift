@@ -106,6 +106,8 @@ enum PeerWire {
     static let protocolName = Array("BitTorrent protocol".utf8)
     /// 本客户端的 ut_metadata 扩展编号（对方发元数据给我们时用这个编号）
     static let localMetadataId: UInt8 = 1
+    /// ut_pex（BEP 11）：对方把它连着的 peer 告诉我们，DHT 不通时尤其有用
+    static let localPexId: UInt8 = 2
     static let blockSize = 16 * 1024
     static let metadataPieceSize = 16 * 1024
 
@@ -134,8 +136,8 @@ enum PeerWire {
 
     /// 扩展握手：声明 ut_metadata；已知元数据大小时一并告诉对方
     static func extendedHandshake(metadataSize: Int?) -> Data {
-        var pairs: [(String, BValue)] = [("m", .dict([("ut_metadata", .int(Int64(localMetadataId)))])), ("v", BValue("Cloudn")),
-                                         ("reqq", .int(250))]
+        let m = BValue.dict([("ut_metadata", .int(Int64(localMetadataId))), ("ut_pex", .int(Int64(localPexId)))])
+        var pairs: [(String, BValue)] = [("m", m), ("v", BValue("Cloudn")), ("reqq", .int(250))]
         if let metadataSize { pairs.append(("metadata_size", .int(Int64(metadataSize)))) }
         return Bencode.encode(.dict(pairs))
     }
@@ -152,6 +154,15 @@ enum PeerWire {
         case request(piece: Int)
         case data(piece: Int, totalSize: Int, payload: Data)
         case reject(piece: Int)
+    }
+
+    /// ut_pex 消息里新增的 peer（IPv4 added + IPv6 added6）
+    static func parsePex(_ payload: Data) -> [PeerAddress] {
+        guard let (v, _) = try? Bencode.decodePrefix(payload) else { return [] }
+        var out: [PeerAddress] = []
+        if let d = v["added"]?.data { out += PeerAddress.compact(d) }
+        if let d = v["added6"]?.data { out += PeerAddress.compact(d, ipv6: true) }
+        return out
     }
 
     static func parseMetadataMessage(_ payload: Data) throws -> MetadataMessage {

@@ -224,7 +224,14 @@ struct TorrentTransfer {
                     if let (head, _) = try? Bencode.decodePrefix(payload) {
                         if let id = head["m"]?["ut_metadata"]?.int, id > 0, id < 256 { metadataId = UInt8(id) }
                         if let size = head["metadata_size"]?.int { await swarm.setMetadataSize(Int(size)) }
+                        if info == nil {
+                            Log.info("BT peer \(address)：\(head["v"]?.string ?? "未知客户端")，ut_metadata=\(metadataId.map { "\($0)" } ?? "无")，" +
+                                     "metadata_size=\(head["metadata_size"]?.int ?? 0)")
+                        }
                     }
+                case .extended(PeerWire.localPexId, let payload):
+                    let found = PeerWire.parsePex(payload)
+                    if !found.isEmpty { await swarm.addPeers(found) }
                 case .extended(PeerWire.localMetadataId, let payload):
                     switch try PeerWire.parseMetadataMessage(payload) {
                     case .data(let piece, let total, let data):
@@ -234,6 +241,7 @@ struct TorrentTransfer {
                         lastUseful = Date()
                         useful = true
                     case .reject(let piece):
+                        Log.info("BT peer \(address) 拒绝提供种子信息（第 \(piece) 块）")
                         await swarm.metadataRejected(piece)
                         metadataPiece = nil
                         metadataId = nil

@@ -58,6 +58,7 @@ actor TorrentSwarm {
     private var trackerOK = 0
     private var trackerFailed = 0
     private var dhtResponded = 0
+    private var dhtLookups = 0
     private var handshakes = 0
     private(set) var trackers: [String]
 
@@ -331,6 +332,7 @@ actor TorrentSwarm {
 
     func recordDHT(_ responded: Int) {
         dhtResponded = max(dhtResponded, responded)
+        dhtLookups += 1
         publishNote()
     }
 
@@ -346,7 +348,10 @@ actor TorrentSwarm {
         parts.append("DHT \(dhtResponded) 个节点回应")
         parts.append("已发现 \(seen.count)")
         parts.append("已握手 \(handshakes)")
-        return parts.joined(separator: " · ")
+        var note = parts.joined(separator: " · ")
+        // 引导节点也一个都没回：多半是所在网络或代理（VPN）不转发 UDP
+        if dhtLookups > 0 && dhtResponded == 0 { note += "。DHT 无回应，可能是网络或代理不转发 UDP，可关闭代理后重试" }
+        return note
     }
 
     private func publishNote() { progress.setNote(statusNote) }

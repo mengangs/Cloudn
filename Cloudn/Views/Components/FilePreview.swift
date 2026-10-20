@@ -12,6 +12,8 @@ struct FilePreviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var chromeVisible = true
     @State private var player: AVPlayer?
+    /// 下滑关闭：手指往下拖的距离
+    @State private var dragY: CGFloat = 0
 
     enum Mode { case player, image, text, document, unsupported }
 
@@ -33,22 +35,34 @@ struct FilePreviewView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            (immersive ? Color.black : Color.paper).ignoresSafeArea()
+            // 下拉时背景逐渐透明，露出下面的页面
+            (immersive ? Color.black.opacity(DismissDrag.backdrop(dragY)) : Color.paper).ignoresSafeArea()
             if mode == .image {
                 // 图片铺满全屏，操作栏浮在上面，轻点切换
-                content
-                if chromeVisible { topBar.transition(.opacity) }
+                content.dismissDragEffect(dragY)
+                if chromeVisible && dragY == 0 { topBar.transition(.opacity) }
             } else {
                 // 播放器顶部有它自己的画中画 / 音量按钮，操作栏放在画面之外，不叠在一起
                 VStack(spacing: 0) {
-                    topBar
-                    content.frame(maxHeight: .infinity)
+                    topBar.opacity(dragY > 0 ? 0 : 1)
+                    content.frame(maxHeight: .infinity).dismissDragEffect(dragY)
                 }
             }
         }
         .statusBarHidden(mode == .image && !chromeVisible)
         .animation(.easeInOut(duration: 0.2), value: chromeVisible)
         .preferredColorScheme(immersive ? .dark : nil)
+        .presentationBackground(.clear)
+    }
+
+    private var dismissDrag: DismissDrag {
+        DismissDrag(onChange: { dragY = $0 }, onEnd: { distance, velocity in
+            if DismissDrag.shouldDismiss(distance, velocity) {
+                dismiss()
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
+            }
+        })
     }
 
     @ViewBuilder
@@ -56,12 +70,12 @@ struct FilePreviewView: View {
         switch mode {
         case .player:
             if let player {
-                PlayerController(player: player).ignoresSafeArea(edges: .bottom)
+                PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
             } else {
                 Color.black.onAppear { player = PlayerController.makePlayer(url) }
             }
         case .image:
-            ZoomableImageFile(url: url) { chromeVisible.toggle() }.ignoresSafeArea()
+            ZoomableImageFile(url: url, onTap: { chromeVisible.toggle() }, drag: dismissDrag).ignoresSafeArea()
         case .text:
             LocalTextView(url: url)
         case .document:
@@ -185,6 +199,7 @@ struct PreviewBarButtonStyle: ButtonStyle {
 /// 系统播放器（AVPlayerViewController）：自带进度、画中画、隔空播放、倍速
 struct PlayerController: UIViewControllerRepresentable {
     let player: AVPlayer
+    var drag: DismissDrag?
 
     /// 本地文件或带请求头的直链
     static func makePlayer(_ url: URL, headers: [String: String] = [:]) -> AVPlayer {
@@ -195,21 +210,25 @@ struct PlayerController: UIViewControllerRepresentable {
         return AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
     }
 
+    func makeCoordinator() -> DismissPanCoordinator { DismissPanCoordinator(drag: drag) }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
-        controller.view.backgroundColor = .black
+        controller.view.backgroundColor = .clear
+        if drag != nil { context.coordinator.attach(to: controller.view) }
         player.play()
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        context.coordinator.drag = drag
         if controller.player !== player { controller.player = player; player.play() }
     }
 
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: DismissPanCoordinator) {
         controller.player?.pause()
     }
 }
@@ -220,8 +239,9 @@ struct PlayerController: UIViewControllerRepresentable {
 struct ZoomableImageFile: UIViewRepresentable {
     let url: URL
     var onTap: () -> Void = {}
+    var drag: DismissDrag?
 
-    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
+    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap, drag: drag) }
 
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = UIScrollView()
@@ -231,7 +251,7 @@ struct ZoomableImageFile: UIViewRepresentable {
         scroll.showsVerticalScrollIndicator = false
         scroll.showsHorizontalScrollIndicator = false
         scroll.contentInsetAdjustmentBehavior = .never
-        scroll.backgroundColor = .black
+        scroll.backgroundColor = .clear
         let imageView = UIImageView(image: UIImage(contentsOfFile: url.path))
         imageView.contentMode = .scaleAspectFit
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -251,15 +271,30 @@ struct ZoomableImageFile: UIViewRepresentable {
         single.require(toFail: double)
         scroll.addGestureRecognizer(double)
         scroll.addGestureRecognizer(single)
+        // 未放大时往下拖关闭；放大后交给滚动视图平移
+        context.coordinator.scroll = scroll
+        if drag != nil { context.coordinator.attach(to: scroll) }
         return scroll
     }
 
-    func updateUIView(_ scroll: UIScrollView, context: Context) { context.coordinator.onTap = onTap }
+    func updateUIView(_ scroll: UIScrollView, context: Context) {
+        context.coordinator.onTap = onTap
+        context.coordinator.drag = drag
+    }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    final class Coordinator: DismissPanCoordinator, UIScrollViewDelegate {
         var onTap: () -> Void
         weak var imageView: UIImageView?
-        init(onTap: @escaping () -> Void) { self.onTap = onTap }
+        weak var scroll: UIScrollView?
+        init(onTap: @escaping () -> Void, drag: DismissDrag?) {
+            self.onTap = onTap
+            super.init(drag: drag)
+        }
+
+        override func canBegin() -> Bool {
+            guard let scroll else { return true }
+            return scroll.zoomScale <= scroll.minimumZoomScale + 0.01
+        }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
@@ -335,5 +370,55 @@ struct QuickLookContent: UIViewControllerRepresentable {
         init(url: URL) { self.url = url }
         func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
         func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
+    }
+}
+
+// MARK: - 下滑关闭
+
+/// 下滑关闭的回调：拖动距离；松手时的距离与速度
+struct DismissDrag {
+    var onChange: (CGFloat) -> Void
+    var onEnd: (CGFloat, CGFloat) -> Void
+
+    static func shouldDismiss(_ distance: CGFloat, _ velocity: CGFloat) -> Bool { distance > 120 || velocity > 900 }
+    static func backdrop(_ distance: CGFloat) -> Double { Double(max(0.15, 1 - distance / 420)) }
+}
+
+extension View {
+    /// 跟手下移并略微缩小
+    func dismissDragEffect(_ distance: CGFloat) -> some View {
+        offset(y: distance).scaleEffect(1 - min(distance, 400) / 1600)
+    }
+}
+
+/// UIKit 层的下滑手势：只在明显向下拖时开始，不抢横向拖动（进度条、翻页）
+class DismissPanCoordinator: NSObject, UIGestureRecognizerDelegate {
+    var drag: DismissDrag?
+
+    init(drag: DismissDrag?) { self.drag = drag }
+
+    func attach(to view: UIView) {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handle(_:)))
+        pan.delegate = self
+        view.addGestureRecognizer(pan)
+    }
+
+    /// 子类可加条件（如图片放大时不响应）
+    func canBegin() -> Bool { true }
+
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let pan = g as? UIPanGestureRecognizer, drag != nil, canBegin() else { return false }
+        let v = pan.velocity(in: pan.view)
+        return v.y > 0 && v.y > abs(v.x) * 1.5
+    }
+
+    @objc func handle(_ pan: UIPanGestureRecognizer) {
+        let y = max(0, pan.translation(in: pan.view).y)
+        switch pan.state {
+        case .changed: drag?.onChange(y)
+        case .ended: drag?.onEnd(y, pan.velocity(in: pan.view).y)
+        case .cancelled, .failed: drag?.onEnd(0, 0)
+        default: break
+        }
     }
 }

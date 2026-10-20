@@ -240,6 +240,7 @@ final class AppModel {
             return
         case .background:
             QuickActions.refresh(self)
+            downloads.enterBackground()
         default:
             return
         }

@@ -18,6 +18,18 @@ struct MediaPreviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
     @State private var failure: String?
+    /// 下滑关闭：手指往下拖的距离
+    @State private var dragY: CGFloat = 0
+
+    private var dismissDrag: DismissDrag {
+        DismissDrag(onChange: { dragY = $0 }, onEnd: { distance, velocity in
+            if DismissDrag.shouldDismiss(distance, velocity) {
+                dismiss()
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
+            }
+        })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +49,7 @@ struct MediaPreviewView: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 10)
+            .opacity(dragY > 0 ? 0 : 1)
             ZStack {
                 switch item.kind {
                 case .video, .audio:
@@ -53,16 +66,18 @@ struct MediaPreviewView: View {
                         .foregroundStyle(.white)
                         .padding(32)
                     } else if let player {
-                        PlayerController(player: player).ignoresSafeArea(edges: .bottom)
+                        PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
                     }
                 case .image:
-                    ZoomableImage(url: item.url, headers: item.headers)
+                    ZoomableImage(url: item.url, headers: item.headers, drag: dismissDrag)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .dismissDragEffect(dragY)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Color.black.opacity(DismissDrag.backdrop(dragY)).ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .presentationBackground(.clear)
         .onAppear(perform: startPlayer)
         .onDisappear { player?.pause() }
     }
@@ -93,6 +108,8 @@ struct MediaPreviewView: View {
 struct ZoomableImage: View {
     let url: String
     var headers: [String: String] = [:]
+    /// 未放大时往下拖关闭
+    var drag: DismissDrag?
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -108,10 +125,20 @@ struct ZoomableImage: View {
                     .onEnded { _ in lastScale = scale; if scale == 1 { offset = .zero; lastOffset = .zero } }
                     .simultaneously(with: DragGesture()
                         .onChanged { v in
-                            guard scale > 1 else { return }
+                            guard scale > 1 else {
+                                if v.translation.height > 0 && v.translation.height > abs(v.translation.width) { drag?.onChange(v.translation.height) }
+                                return
+                            }
                             offset = CGSize(width: lastOffset.width + v.translation.width, height: lastOffset.height + v.translation.height)
                         }
-                        .onEnded { _ in lastOffset = offset })
+                        .onEnded { v in
+                            guard scale > 1 else {
+                                let velocity = (v.predictedEndTranslation.height - v.translation.height) * 4
+                                drag?.onEnd(max(0, v.translation.height), velocity)
+                                return
+                            }
+                            lastOffset = offset
+                        })
             )
             .onTapGesture(count: 2) {
                 withAnimation(.spring) {

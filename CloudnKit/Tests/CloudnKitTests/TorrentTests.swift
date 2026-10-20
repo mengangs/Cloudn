@@ -80,6 +80,15 @@ final class TorrentTests: XCTestCase {
         XCTAssertEqual(try PeerWire.parseMetadataMessage(PeerWire.metadataReject(piece: 1)), .reject(piece: 1))
     }
 
+    func testPexAndExtendedHandshake() throws {
+        let pex = Bencode.encode(.dict([("added", .bytes(Data([1, 2, 3, 4, 0x1a, 0xe1]))), ("dropped", .bytes(Data()))]))
+        XCTAssertEqual(PeerWire.parsePex(pex), [PeerAddress(host: "1.2.3.4", port: 6881)])
+        XCTAssertTrue(PeerWire.parsePex(Data("garbage".utf8)).isEmpty)
+        let hs = try Bencode.decode(PeerWire.extendedHandshake(metadataSize: nil))
+        XCTAssertEqual(hs["m"]?["ut_metadata"]?.int, 1)
+        XCTAssertEqual(hs["m"]?["ut_pex"]?.int, 2)
+    }
+
     func testBitfield() {
         var b = Bitfield(data: Data([0b1010_0000, 0xff]), count: 10)
         XCTAssertTrue(b[0]); XCTAssertFalse(b[1]); XCTAssertTrue(b[2])

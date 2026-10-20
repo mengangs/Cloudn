@@ -360,5 +360,5 @@ extension AccountKind {
     }
 
     /// 有应用内账号密码登录、且网页登录不好用的平台，点「登录」先走账号密码
-    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya, .xunlei].contains(self) && passwordLogin != nil }
+    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya].contains(self) && passwordLogin != nil }
 }
