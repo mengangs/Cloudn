@@ -17,6 +17,7 @@ struct MediaPreviewView: View {
     let item: MediaPreviewItem
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
+    @State private var failure: String?
 
     var body: some View {
         NavigationStack {
@@ -24,7 +25,19 @@ struct MediaPreviewView: View {
                 Color.black.ignoresSafeArea()
                 switch item.kind {
                 case .video, .audio:
-                    if let player {
+                    if let failure {
+                        // 直链过期、403 等：说清楚，给重试，而不是一块黑屏
+                        VStack(spacing: 12) {
+                            IconView(.warning, size: 26)
+                            Text("无法播放").font(.cardTitle)
+                            Text(failure).font(.footnote).opacity(0.7).multilineTextAlignment(.center)
+                            Button("重试") { startPlayer() }
+                                .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                                .padding(.top, 4)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(32)
+                    } else if let player {
                         VideoPlayer(player: player)
                             .ignoresSafeArea(edges: .bottom)
                     }
@@ -34,24 +47,44 @@ struct MediaPreviewView: View {
             }
             .navigationTitle(item.title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
                 }
             }
         }
-        .onAppear {
-            guard item.kind != .image, let url = URL(string: item.url) else { return }
-            var options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": item.headers]
-            if let ua = item.headers["User-Agent"] { options[AVURLAssetHTTPUserAgentKey] = ua }
-            let asset = AVURLAsset(url: url, options: options)
-            let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            player = p
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            p.play()
-        }
+        .onAppear(perform: startPlayer)
         .onDisappear { player?.pause() }
+    }
+
+    private func startPlayer() {
+        guard item.kind != .image, let url = URL(string: item.url) else { return }
+        failure = nil
+        var options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": item.headers]
+        if let ua = item.headers["User-Agent"] { options[AVURLAssetHTTPUserAgentKey] = ua }
+        let asset = AVURLAsset(url: url, options: options)
+        let playerItem = AVPlayerItem(asset: asset)
+        let p = AVPlayer(playerItem: playerItem)
+        player = p
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        p.play()
+        // 盯一会儿播放状态：失败时换成说明 + 重试
+        Task { @MainActor in
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard player === p else { return }
+                switch playerItem.status {
+                case .readyToPlay: return
+                case .failed:
+                    failure = playerItem.error?.localizedDescription ?? "链接可能已过期，请回到上一页重新获取"
+                    return
+                default: continue
+                }
+            }
+        }
     }
 }
 

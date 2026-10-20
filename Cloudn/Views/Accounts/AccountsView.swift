@@ -54,6 +54,7 @@ struct AccountsView: View {
                         RowDivider(leading: 52)
                         Button { exporting = true } label: { linkRow(.share, "导出登录凭据（加密备份）") }
                             .disabled(app.accounts.accounts.isEmpty)
+                            .opacity(app.accounts.accounts.isEmpty ? 0.4 : 1)
                         RowDivider(leading: 52)
                         Button { importing = true } label: { linkRow(.save, "从备份导入") }
                     }
@@ -306,7 +307,7 @@ struct ManualCookieView: View {
                     Section {
                         TextField(kind.manualPlaceholder, text: $cookie, axis: .vertical)
                             .lineLimit(4...10)
-                            .font(.system(.footnote, design: .monospaced))
+                            .font(.mono)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     } footer: {
@@ -319,12 +320,12 @@ struct ManualCookieView: View {
                 .listRowBackground(Color.surface)
             }
             .paperList()
-            .navigationTitle("\(kind.displayName) 凭据")
+            .navigationTitle("\(kind.displayName)凭据")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if saving { ProgressView() } else {
+                    if saving { Spinner() } else {
                         Button("保存") {
                             saving = true
                             Task {

@@ -90,7 +90,7 @@ struct SaveToDriveView: View {
             }
             .paperList()
             .listStyle(.insetGrouped)
-            .overlay { if loading && folders.isEmpty { ProgressView() } }
+            .overlay { if loading && folders.isEmpty { Spinner(size: 28) } }
             .navigationTitle("转存到\(platformName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -101,8 +101,8 @@ struct SaveToDriveView: View {
                     Task { await save() }
                 } label: {
                     HStack(spacing: 8) {
-                        if saving { ProgressView().tint(.white) } else { Image(icon: .save) }
-                        Text(saving ? "正在转存…" : "保存到「\(path.last?.name ?? "我的网盘")」").lineLimit(1)
+                        if saving { Spinner(size: 18, usesForeground: true) } else { Image(icon: .save) }
+                        Text(saving ? "正在转存…" : (notEnoughSpace ? "空间可能不足，仍要转存" : "保存到「\(path.last?.name ?? "我的网盘")」")).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -122,6 +122,8 @@ struct SaveToDriveView: View {
         guard let saver = model.saver else { return }
         loading = true
         errorMessage = nil
+        // 进入新目录时先清掉上一层的列表，免得加载期间点到旧的文件夹
+        folders = []
         defer { loading = false }
         let target = current
         do {
