@@ -92,9 +92,12 @@ public struct VideoMedia: Hashable, Identifiable, Sendable {
     public let quality: String
     /// 分轨音频（B 站 DASH）；非空时下载完需与视频合轨
     public let audioURL: String
+    /// 同一个视频的不同清晰度共用一个组名（空串表示独立媒体）。组内排在最前的是默认选择（最高画质），
+    /// 界面上合成一行供挑选，「全部下载」每组只下选中的那一个；各清晰度的文件名必须不同
+    public let variantGroup: String
 
     public init(url: String, kind: MediaKind, fileName: String, size: Int64 = -1, isHLS: Bool = false,
-                headers: [String: String] = [:], quality: String = "", audioURL: String = "") {
+                headers: [String: String] = [:], quality: String = "", audioURL: String = "", variantGroup: String = "") {
         self.id = UUID()
         self.url = url
         self.kind = kind
@@ -104,11 +107,12 @@ public struct VideoMedia: Hashable, Identifiable, Sendable {
         self.headers = headers
         self.quality = quality
         self.audioURL = audioURL
+        self.variantGroup = variantGroup
     }
 
     func withSecureURLs() -> VideoMedia {
         VideoMedia(url: VideoHTTP.secureURL(url), kind: kind, fileName: fileName, size: size, isHLS: isHLS,
-                   headers: headers, quality: quality, audioURL: VideoHTTP.secureURL(audioURL))
+                   headers: headers, quality: quality, audioURL: VideoHTTP.secureURL(audioURL), variantGroup: variantGroup)
     }
 }
 

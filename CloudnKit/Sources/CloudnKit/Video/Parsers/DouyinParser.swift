@@ -17,7 +17,7 @@ struct DouyinParser: VideoParser {
                                               documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type),
                                               extractScript: Self.extractJS, timeout: 40),
            let payload = JSON(text: text), payload["error"].string.isEmpty {
-            if let result = build(link, payload) { return result }
+            if let result = await build(link, payload) { return result }
         }
         return try await parseSSR(link, type: type)
     }
@@ -26,7 +26,7 @@ struct DouyinParser: VideoParser {
         ["User-Agent": VideoHTTP.uaIPhone, "Referer": "https://www.douyin.com/"]
     }
 
-    private func build(_ link: DetectedVideoLink, _ p: JSON) -> VideoParseResult? {
+    private func build(_ link: DetectedVideoLink, _ p: JSON) async -> VideoParseResult? {
         var images = p["images"].array.map { $0.string }.filter { !$0.isEmpty }
         if images.isEmpty { images = p["domImages"].array.map { $0.string }.filter { !$0.isEmpty } }
         let video = p["video"].string
@@ -39,7 +39,7 @@ struct DouyinParser: VideoParser {
                 VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1)\(Self.imageExtension(url))", headers: mediaHeaders)
             }
         } else {
-            medias = [VideoMedia(url: video, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders)]
+            medias = await videoMedias(base: base, bitRates: p["bitRates"].array, fallback: video, uri: p["uri"].string)
         }
         let cover = p["cover"].string
         return VideoParseResult(platform: platform, title: title, author: p["author"].string,
@@ -70,17 +70,78 @@ struct DouyinParser: VideoParser {
             }
         } else {
             let play = item["video"].object("play_addr", "playAddr")
-            if let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) {
-                // playwm → play：去水印的关键一步
-                medias.append(VideoMedia(url: url.replacingOccurrences(of: "playwm", with: "play"), kind: .video,
-                                         fileName: "\(base).mp4", headers: mediaHeaders))
-            }
+            // playwm → play：去水印的关键一步
+            let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) ?? ""
+            medias += await videoMedias(base: base, bitRates: item["video"].arrayValue("bit_rate", "bitRate"),
+                                        fallback: url.replacingOccurrences(of: "playwm", with: "play"), uri: play["uri"].string)
             cover = item["video"]["cover"]["url_list"][0].string
         }
         let author = item["author"]
         return VideoParseResult(platform: platform, title: title, author: author["nickname"].string,
                                 avatar: author.object("avatar_thumb", "avatar_medium")["url_list"][0].string,
                                 cover: cover, timestamp: item["create_time"].int64, url: link.url, medias: medias)
+    }
+
+    struct Quality: Equatable {
+        let url: String
+        let shortSide: Int
+        let bitrate: Int
+        let size: Int64
+        let hevc: Bool
+
+        var label: String { (shortSide > 0 ? "\(shortSide)P" : "原画") + (hevc ? " · HEVC" : "") }
+    }
+
+    /// 作品数据里的 bit_rate 列表 → 各档清晰度（最高在前）。同一分辨率只留一条：优先 H.264（兼容最好），同编码取码率高的
+    static func qualities(_ bitRates: [JSON]) -> [Quality] {
+        var best: [Int: Quality] = [:]
+        for item in bitRates {
+            let play = item.object("play_addr", "playAddr")
+            guard let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) else { continue }
+            let side = min(play["width"].int, play["height"].int)
+            let hevc = item["is_bytevc1"].int == 1 || item["is_h265"].int == 1
+            let q = Quality(url: url.replacingOccurrences(of: "playwm", with: "play"), shortSide: side,
+                            bitrate: item.has("bit_rate") ? item["bit_rate"].int : item["bitRate"].int,
+                            size: play.has("data_size") ? play["data_size"].int64 : play["dataSize"].int64, hevc: hevc)
+            if let current = best[side] {
+                let better = (!q.hevc && current.hevc) || (q.hevc == current.hevc && q.bitrate > current.bitrate)
+                if !better { continue }
+            }
+            best[side] = q
+        }
+        return best.keys.sorted(by: >).compactMap { best[$0] }
+    }
+
+    /// 视频的各档清晰度：有 bit_rate 列表就全列出来（最高画质默认选中）；
+    /// 没有时按分辨率逐档探测播放接口，取文件最大的那一档（参考 ParseHub）
+    private func videoMedias(base: String, bitRates: [JSON], fallback: String, uri: String) async -> [VideoMedia] {
+        let list = Self.qualities(bitRates)
+        if !list.isEmpty {
+            return list.enumerated().map { i, q in
+                VideoMedia(url: q.url, kind: .video, fileName: i == 0 ? "\(base).mp4" : "\(base)_\(q.shortSide)P.mp4",
+                           size: q.size > 0 ? q.size : -1, headers: mediaHeaders, quality: q.label, variantGroup: "video")
+            }
+        }
+        if !uri.isEmpty, let probed = await Self.probeBest(uri: uri) {
+            return [VideoMedia(url: probed.url, kind: .video, fileName: "\(base).mp4", size: probed.size, headers: mediaHeaders,
+                               quality: "最高画质")]
+        }
+        guard !fallback.isEmpty else { return [] }
+        return [VideoMedia(url: fallback, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders)]
+    }
+
+    /// 逐档 HEAD 探测无水印播放接口，取 Content-Length 最大的
+    static func probeBest(uri: String) async -> (url: String, size: Int64)? {
+        var best: (url: String, size: Int64)?
+        for ratio in ["1080p", "720p", "540p"] {
+            let url = "https://aweme.snssdk.com/aweme/v1/play/?video_id=\(uri.formEncoded)&ratio=\(ratio)&line=0"
+            guard let r = try? await HTTPClient.shared.send(HTTPRequest(url: url, method: "HEAD", headers: [
+                ("User-Agent", VideoHTTP.uaChrome), ("Referer", "https://www.douyin.com/")
+            ], timeout: 10)), r.isSuccess else { continue }
+            let size = Int64(r.header("Content-Length") ?? "") ?? 0
+            if size > (best?.size ?? 0) { best = (url, size) }
+        }
+        return best
     }
 
     static func imageExtension(_ url: String) -> String {
@@ -177,7 +238,9 @@ struct DouyinParser: VideoParser {
         return JSON.stringify({
           title: title, author: (d && d.author && (d.author.nickname || d.author.unique_id)) || '',
           video: video, images: images, domImages: domImages,
-          cover: (v && (firstUrl(v.cover) || firstUrl(v.origin_cover))) || ''
+          cover: (v && (firstUrl(v.cover) || firstUrl(v.origin_cover))) || '',
+          bitRates: (v && (v.bit_rate || v.bitRate)) || [],
+          uri: (v && v.play_addr && v.play_addr.uri) || ''
         });
       } catch (e) { return JSON.stringify({ error: 'js: ' + e }); }
     })()

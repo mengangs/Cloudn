@@ -48,12 +48,18 @@ struct BilibiliParser: VideoParser {
         if pages.count > 1 { title += " P\(pageIndex + 1) \(page["part"].string)" }
         let base = FileNames.base(title, fallback: "bilibili_\(bvid)")
 
-        var media: VideoMedia?
-        if !cookie.isEmpty, let dash = try? await dashStream(bvid: bvid, cid: cid, cookie: cookie) {
-            media = VideoMedia(url: dash.video, kind: .video, fileName: "\(base).mp4", headers: Self.headers(cookie),
-                               quality: "\(Self.qualityLabel(dash.quality))（分轨，下载后合并）", audioURL: dash.audio)
+        // DASH 分轨：列出每档清晰度（最高档在前，作为默认），下载后合并；未登录时最高通常只有 480P / 720P
+        var medias: [VideoMedia] = []
+        if let choices = try? await dashChoices(bvid: bvid, cid: cid, cookie: cookie) {
+            for (i, c) in choices.enumerated() {
+                let label = Self.qualityLabel(c.quality) + (c.hevc ? " · HEVC" : "")
+                let name = i == 0 ? "\(base).mp4" : "\(base)_\(FileNames.base(label, fallback: "\(c.quality)")).mp4"
+                medias.append(VideoMedia(url: c.video, kind: .video, fileName: name, headers: Self.headers(cookie),
+                                         quality: label, audioURL: c.audio, variantGroup: "video"))
+            }
         }
-        if media == nil {
+        var media: VideoMedia?
+        if medias.isEmpty {
             let play = try await VideoHTTP.getJSON(
                 "\(Self.playURL)?bvid=\(bvid)&cid=\(cid)&qn=80&fnval=1&fnver=0&fourk=1&platform=html5&high_quality=1",
                 headers: Self.headers(cookie), what: "B站取直链")
@@ -68,22 +74,49 @@ struct BilibiliParser: VideoParser {
         let owner = data["owner"]
         return VideoParseResult(platform: platform, title: title, author: owner["name"].string, avatar: owner["face"].string,
                                 cover: data["pic"].string, text: data["desc"].string, timestamp: data["pubdate"].int64,
-                                url: "https://www.bilibili.com/video/\(bvid)", medias: media.map { [$0] } ?? [])
+                                url: "https://www.bilibili.com/video/\(bvid)", medias: medias.isEmpty ? (media.map { [$0] } ?? []) : medias)
     }
 
-    private func dashStream(bvid: String, cid: Int64, cookie: String) async throws -> (video: String, audio: String, quality: Int)? {
-        let json = try await VideoHTTP.getJSON("\(Self.playURL)?bvid=\(bvid)&cid=\(cid)&qn=120&fnval=4048&fnver=0&fourk=1",
+    struct DashChoice: Equatable {
+        let video: String
+        let audio: String
+        let quality: Int
+        let hevc: Bool
+    }
+
+    /// fnval=4048 一次要齐 HDR / 4K / 杜比视界 / 8K / AV1 各档；qn=127 表示要最高档
+    private func dashChoices(bvid: String, cid: Int64, cookie: String) async throws -> [DashChoice] {
+        let json = try await VideoHTTP.getJSON("\(Self.playURL)?bvid=\(bvid)&cid=\(cid)&qn=127&fnval=4048&fnver=0&fourk=1",
                                                headers: Self.headers(cookie), what: "B站取 DASH 直链")
-        let dash = json["data"]["dash"]
-        // 优先 H.264（codecid 7）：AVFoundation 对 AV1 的支持依赖机型；同档内取最高清晰度
-        let videos = dash["video"].array
-        let preferred = videos.filter { $0["codecid"].int == 7 }
-        guard let video = (preferred.isEmpty ? videos : preferred).max(by: { $0["id"].int < $1["id"].int }),
-              let audio = dash["audio"].array.max(by: { $0["id"].int < $1["id"].int }) else { return nil }
-        let v = video.string("baseUrl", "base_url")
-        let a = audio.string("baseUrl", "base_url")
-        guard !v.isEmpty, !a.isEmpty else { return nil }
-        return (v, a, video["id"].int)
+        return Self.dashChoices(json["data"]["dash"])
+    }
+
+    /// 每档清晰度一条：同档优先 H.264（codecid 7，兼容最好），没有才用 HEVC（codecid 12，4K / HDR 常常只有它）。
+    /// AV1（codecid 13）不选：iOS 的合轨与播放只在新机型上支持。音轨取码率最高的 AAC
+    static func dashChoices(_ dash: JSON) -> [DashChoice] {
+        let audios = dash["audio"].array
+        guard let audio = audios.max(by: { $0["bandwidth"].int < $1["bandwidth"].int }) else { return [] }
+        let audioURL = audio.string("baseUrl", "base_url")
+        guard !audioURL.isEmpty else { return [] }
+        var best: [Int: (codec: Int, url: String, bandwidth: Int)] = [:]
+        for v in dash["video"].array {
+            let codec = v["codecid"].int
+            guard codec == 7 || codec == 12 else { continue }
+            let url = v.string("baseUrl", "base_url")
+            guard !url.isEmpty else { continue }
+            let id = v["id"].int
+            let bandwidth = v["bandwidth"].int
+            if let current = best[id] {
+                // 同档：H.264 优先；同编码取码率高的
+                let better = (codec == 7 && current.codec != 7) || (codec == current.codec && bandwidth > current.bandwidth)
+                if !better { continue }
+            }
+            best[id] = (codec, url, bandwidth)
+        }
+        return best.keys.sorted(by: >).compactMap { id in
+            guard let v = best[id] else { return nil }
+            return DashChoice(video: v.url, audio: audioURL, quality: id, hevc: v.codec == 12)
+        }
     }
 
     static func qualityLabel(_ qn: Int) -> String {
@@ -97,6 +130,9 @@ struct BilibiliParser: VideoParser {
         case 112: return "1080P+"
         case 116: return "1080P60"
         case 120: return "4K"
+        case 125: return "HDR"
+        case 126: return "杜比视界"
+        case 127: return "8K"
         default: return qn > 0 ? "画质 \(qn)" : ""
         }
     }

@@ -11,8 +11,35 @@ struct VideoResultView: View {
     @State private var selected = Set<UUID>()
     @State private var selecting = false
     @State private var textExpanded = false
+    /// 各清晰度组选中的那一个（没选过就是组内第一个，即最高画质）
+    @State private var chosen: [String: UUID] = [:]
 
     private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image } }
+
+    /// 视频区的行：同一清晰度组合成一行
+    private var videoRows: [[VideoMedia]] {
+        var rows: [[VideoMedia]] = []
+        var index: [String: Int] = [:]
+        for media in videos {
+            if media.variantGroup.isEmpty {
+                rows.append([media])
+            } else if let i = index[media.variantGroup] {
+                rows[i].append(media)
+            } else {
+                index[media.variantGroup] = rows.count
+                rows.append([media])
+            }
+        }
+        return rows
+    }
+
+    private func selection(_ options: [VideoMedia]) -> VideoMedia {
+        let group = options[0].variantGroup
+        return options.first { $0.id == chosen[group] } ?? options[0]
+    }
+
+    /// 「全部下载」的对象：图片 + 每行选中的视频
+    private var downloadAll: [VideoMedia] { videoRows.map(selection) + images }
     private var images: [VideoMedia] { result.medias.filter { $0.kind == .image } }
 
     var body: some View {
@@ -146,15 +173,18 @@ struct VideoResultView: View {
 
     private var videoSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(title: (videos.allSatisfy { $0.kind == .audio } ? "音频" : "视频") + (videos.count > 1 ? " \(videos.count) 个" : ""))
+            let rows = videoRows
+            SectionLabel(title: (videos.allSatisfy { $0.kind == .audio } ? "音频" : "视频") + (rows.count > 1 ? " \(rows.count) 个" : ""))
             VStack(spacing: 0) {
-                ForEach(Array(videos.enumerated()), id: \.element.id) { index, media in
+                ForEach(Array(rows.enumerated()), id: \.element[0].id) { index, options in
+                    let media = selection(options)
                     HStack(spacing: 12) {
                         FileIcon(name: media.fileName)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(media.fileName).lineLimit(2).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
+                            if options.count > 1 { qualityPicker(options, selected: media) }
                             HStack(spacing: 6) {
-                                if !media.quality.isEmpty { Text(media.quality) }
+                                if !media.quality.isEmpty && options.count == 1 { Text(media.quality) }
                                 if media.size > 0 { Text(ByteFormat.string(media.size)) }
                                 if media.isHLS { Text("m3u8") }
                                 if !media.audioURL.isEmpty { Text("音视频分轨") }
@@ -170,7 +200,7 @@ struct VideoResultView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    if index < videos.count - 1 { RowDivider(leading: 64) }
+                    if index < rows.count - 1 { RowDivider(leading: 64) }
                 }
             }
             .card()
@@ -181,6 +211,40 @@ struct VideoResultView: View {
                     .padding(.horizontal, 4)
             }
         }
+    }
+
+    /// 清晰度选择：组内第一个是最高画质
+    private func qualityPicker(_ options: [VideoMedia], selected: VideoMedia) -> some View {
+        Menu {
+            ForEach(options) { option in
+                Button {
+                    chosen[option.variantGroup] = option.id
+                } label: {
+                    if option.id == selected.id {
+                        Label(optionTitle(option), systemImage: "checkmark")
+                    } else {
+                        Text(optionTitle(option))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selected.quality.isEmpty ? "选择清晰度" : selected.quality)
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Color.clayInk)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.claySoft, in: Capsule())
+        }
+        .accessibilityLabel("清晰度：\(selected.quality)")
+    }
+
+    private func optionTitle(_ media: VideoMedia) -> String {
+        var parts = [media.quality.isEmpty ? media.fileName : media.quality]
+        if media.size > 0 { parts.append(ByteFormat.string(media.size)) }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: 图集
@@ -252,9 +316,9 @@ struct VideoResultView: View {
 
     @ViewBuilder
     private var bottomBar: some View {
-        let targets = selecting ? images.filter { selected.contains($0.id) } : result.medias
+        let targets = selecting ? images.filter { selected.contains($0.id) } : downloadAll
         let title = selecting ? (targets.isEmpty ? "选择要下载的图片" : "下载所选 · \(targets.count) 张")
-            : (result.medias.count > 1 ? "全部下载 · \(result.medias.count) 项" : "下载")
+            : (targets.count > 1 ? "全部下载 · \(targets.count) 项" : "下载")
         Button {
             download(targets)
             selecting = false

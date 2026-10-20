@@ -171,33 +171,35 @@ final class YouTubeTests: XCTestCase {
     func testChooseAndResolve() throws {
         let parsed = YouTubeParser.formats(try XCTUnwrap(JSON(text: Self.streamingData)))
         let choices = YouTubeParser.choose(parsed.list)
-        XCTAssertEqual(choices.map { $0.quality }, ["1080p", "360p（音视频合一）", "音频"])
-        XCTAssertEqual(choices.map { $0.suffix }, ["", "_360p", ""])
+        XCTAssertEqual(choices.map { $0.quality }, ["1080p", "720p", "2160p · AV1（需 A17 Pro / M3 及以上机型）", "360p（音视频合一）", "仅音频"])
+        XCTAssertEqual(choices.map { $0.suffix }, ["", "_720p", "_2160p_av1", "_360p", ""])
         XCTAssertEqual(choices[0].main.itag, 137)
         // 原声音轨优先于码率更高的配音轨
         XCTAssertEqual(choices[0].audio?.url, "https://rr1.googlevideo.com/videoplayback?itag=140&lang=en")
-        XCTAssertEqual(choices[2].kind, .audio)
-        XCTAssertEqual(YouTubeParser.notice(parsed.list, choices: choices),
-                       "该视频更高的画质只有 VP9/AV1 编码，iOS 无法合并，已提供可用的最高画质（1080p）")
+        XCTAssertEqual(choices[2].main.itag, 401)
+        XCTAssertEqual(choices[4].kind, .audio)
+        // 更高档已以 AV1 提供，不再提示
+        XCTAssertEqual(YouTubeParser.notice(parsed.list, choices: choices), "")
 
         let solution = YouTubeSignature.Solution(sig: ["ABCDEFGH": "HG/FE"], n: ["BBB": "b-b", "AAA": "zz"])
         XCTAssertEqual(YouTubeParser.resolvedURL(choices[0].main, solution),
                        "https://rr1.googlevideo.com/videoplayback?itag=137&n=b-b&sig=HG%2FFE")
-        XCTAssertEqual(YouTubeParser.resolvedURL(choices[1].main, solution),
+        XCTAssertEqual(YouTubeParser.resolvedURL(choices[3].main, solution),
                        "https://rr1.googlevideo.com/videoplayback?itag=18&n=zz&x=1")
         XCTAssertNil(YouTubeParser.resolvedURL(choices[0].main, YouTubeSignature.Solution()))
 
         let medias = YouTubeParser.medias(choices, solution: solution, base: "Song")
-        XCTAssertEqual(medias.map { $0.fileName }, ["Song.mp4", "Song_360p.mp4", "Song.m4a"])
+        XCTAssertEqual(medias.map { $0.fileName }, ["Song.mp4", "Song_720p.mp4", "Song_2160p_av1.mp4", "Song_360p.mp4", "Song.m4a"])
+        XCTAssertEqual(Set(medias.map { $0.variantGroup }), ["video"])
         XCTAssertEqual(medias[0].audioURL, "https://rr1.googlevideo.com/videoplayback?itag=140&lang=en")
-        XCTAssertEqual(medias[1].size, 1000)
-        XCTAssertEqual(medias[2].kind, .audio)
-        XCTAssertEqual(medias[2].size, 3000)
+        XCTAssertEqual(medias[3].size, 1000)
+        XCTAssertEqual(medias[4].kind, .audio)
+        XCTAssertEqual(medias[4].size, 3000)
         XCTAssertEqual(medias[0].headers["User-Agent"], VideoHTTP.uaChrome)
 
         // 没解出 n 的分轨直接丢掉
         let partial = YouTubeParser.medias(choices, solution: YouTubeSignature.Solution(sig: ["ABCDEFGH": "x"], n: [:]), base: "S")
-        XCTAssertEqual(partial.map { $0.fileName }, ["S.m4a"])
+        XCTAssertEqual(partial.map { $0.fileName }, ["S_720p.mp4", "S_2160p_av1.mp4", "S.m4a"])
     }
 
     func testChooseVerticalAndHEVC() throws {
@@ -210,9 +212,11 @@ final class YouTubeTests: XCTestCase {
         ]}
         """#)!
         let choices = YouTubeParser.choose(YouTubeParser.formats(data).list)
-        XCTAssertEqual(choices.map { $0.quality }, ["1080p", "2160p60 · HEVC", "音频"])
-        XCTAssertEqual(choices[0].main.itag, 1)
-        XCTAssertEqual(choices[1].suffix, "_2160p")
+        XCTAssertEqual(choices.map { $0.quality }, ["2160p60 · HEVC", "1080p", "仅音频"])
+        XCTAssertEqual(choices[0].main.itag, 2)
+        XCTAssertEqual(choices[0].suffix, "")
+        XCTAssertEqual(choices[1].main.itag, 1)
+        XCTAssertEqual(choices[1].suffix, "_1080p")
         XCTAssertEqual(YouTubeParser.notice(YouTubeParser.formats(data).list, choices: choices), "")
 
         // 没有 m4a 音轨：分轨合并不了，只剩合一流 / 什么都没有

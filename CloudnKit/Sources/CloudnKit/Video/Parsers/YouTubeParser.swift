@@ -579,6 +579,8 @@ struct YouTubeParser: VideoParser {
         var resolution: Int { width > 0 && height > 0 ? min(width, height) : height }
         var isH264: Bool { codecs.hasPrefix("avc1") }
         var isHEVC: Bool { codecs.hasPrefix("hvc1") }
+        /// mp4 封装的 AV1：只有带 AV1 硬解的新机型（A17 Pro / M3 及以上）能合并播放
+        var isAV1MP4: Bool { mime == "video/mp4" && codecs.hasPrefix("av01") }
         /// AVFoundation 能合并的画面轨
         var isMP4Video: Bool { mime == "video/mp4" && (isH264 || isHEVC) }
         var isM4AAudio: Bool { mime == "audio/mp4" && codecs.hasPrefix("mp4a") }
@@ -728,21 +730,27 @@ struct YouTubeParser: VideoParser {
         return s
     }
 
-    /// ≤1080p 的最佳分轨（优先 H.264）+ 更高清的 mp4 分轨（有才给）+ 音视频合一 mp4 + 纯音频 m4a
+    /// 各档清晰度（最高在前，作为默认）：每个分辨率一条 H.264 / HEVC 分轨（同档 H.264 优先）；
+    /// 比它们更高的 AV1 档另列（只有新机型能播）；最后是音视频合一 mp4 与纯音频 m4a
     static func choose(_ all: [Format]) -> [Choice] {
         var out: [Choice] = []
         let audio = bestAudio(all)
         if let audio {
-            let adaptive = all.filter { !$0.progressive && $0.isMP4Video && $0.resolution > 0 }
-            let capped = adaptive.filter { $0.resolution <= 1080 }
-            let h264 = capped.filter { $0.isH264 }
-            if let primary = bestVideo(h264.isEmpty ? capped : h264) {
-                out.append(Choice(kind: .video, main: primary, audio: audio, quality: label(primary), suffix: ""))
+            let adaptive = all.filter { !$0.progressive && $0.resolution > 0 }
+            let compatible = adaptive.filter { $0.isMP4Video }
+            let resolutions = Set(compatible.map { $0.resolution }).sorted(by: >)
+            for r in resolutions {
+                let same = compatible.filter { $0.resolution == r }
+                let h264 = same.filter { $0.isH264 }
+                guard let best = bestVideo(h264.isEmpty ? same : h264) else { continue }
+                out.append(Choice(kind: .video, main: best, audio: audio, quality: label(best), suffix: out.isEmpty ? "" : "_\(r)p"))
             }
-            if let high = bestVideo(adaptive.filter { $0.resolution > 1080 }) {
-                let name = label(high)
-                out.append(Choice(kind: .video, main: high, audio: audio, quality: name,
-                                  suffix: "_\(high.resolution)p"))
+            let top = resolutions.first ?? 0
+            let av1 = adaptive.filter { $0.isAV1MP4 && $0.resolution > top }
+            for r in Set(av1.map { $0.resolution }).sorted(by: >) {
+                guard let best = bestVideo(av1.filter { $0.resolution == r }) else { continue }
+                out.append(Choice(kind: .video, main: best, audio: audio, quality: label(best) + " · AV1（需 A17 Pro / M3 及以上机型）",
+                                  suffix: "_\(r)p_av1"))
             }
         }
         let progressive = all.filter { $0.progressive && $0.mime == "video/mp4" }
@@ -751,7 +759,7 @@ struct YouTubeParser: VideoParser {
             out.append(Choice(kind: .video, main: p, audio: nil, quality: "\(label(p))（音视频合一）", suffix: suffix))
         }
         if let audio {
-            out.append(Choice(kind: .audio, main: audio, audio: nil, quality: "音频", suffix: ""))
+            out.append(Choice(kind: .audio, main: audio, audio: nil, quality: "仅音频", suffix: ""))
         }
         return out
     }
@@ -783,17 +791,17 @@ struct YouTubeParser: VideoParser {
             }
             let ext = c.kind == .audio ? "m4a" : "mp4"
             out.append(VideoMedia(url: url, kind: c.kind, fileName: "\(base)\(c.suffix).\(ext)", size: size,
-                                  headers: mediaHeaders, quality: c.quality, audioURL: audioURL))
+                                  headers: mediaHeaders, quality: c.quality, audioURL: audioURL, variantGroup: "video"))
         }
         return out
     }
 
-    /// 更高画质只有 VP9/AV1（iOS 合并不了）时提示一句
+    /// 更高画质只有 VP9（webm，iOS 合并不了）时提示一句
     static func notice(_ list: [Format], choices: [Choice]) -> String {
         let offered = choices.filter { $0.kind == .video }.map { $0.main.resolution }.max() ?? 0
-        let higher = list.contains { !$0.progressive && $0.mime.hasPrefix("video/") && !$0.isMP4Video && $0.resolution > offered }
+        let higher = list.contains { !$0.progressive && $0.mime.hasPrefix("video/") && !$0.isMP4Video && !$0.isAV1MP4 && $0.resolution > offered }
         if offered > 0 && higher {
-            return "该视频更高的画质只有 VP9/AV1 编码，iOS 无法合并，已提供可用的最高画质（\(offered)p）"
+            return "该视频更高的画质只有 VP9 编码，iOS 无法合并，已提供可用的最高画质（\(offered)p）"
         }
         return ""
     }
