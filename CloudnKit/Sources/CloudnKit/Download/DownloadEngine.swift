@@ -298,7 +298,23 @@ public actor DownloadEngine {
             let result = try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),
                                                progress: box, connections: connections, retryCount: config.retryCount,
                                                client: client, limiter: limiter).run()
-            // 独立音轨：两边都是 fMP4 才能用 AVFoundation 无损合并；TS 合不了，只保留视频（与之前一致）
+            // TS：相册 / 文件 App 多数播不了，转封装成 MP4（独立音轨也是 TS 时一并合入）；转封装失败退回原 .ts
+            if result.video.pathExtension == "ts" {
+                let video = result.video
+                let tsAudio: URL? = result.audio?.pathExtension == "ts" ? result.audio : nil
+                let output = dir.appendingPathComponent("merged.mp4")
+                do {
+                    try await Task.detached(priority: .utility) {
+                        try TSRemuxer.remux(video: video, audio: tsAudio, to: output)
+                    }.value
+                    return output
+                } catch {
+                    Log.error("TS 转 MP4 失败，保留原 TS：\(error.localizedDescription)")
+                    try? FileManager.default.removeItem(at: output)
+                    return video
+                }
+            }
+            // 独立音轨：两边都是 fMP4 时用 AVFoundation 无损合并
             guard let audio = result.audio, result.video.pathExtension == "mp4", audio.pathExtension == "mp4",
                   let merger = await currentMerger() else { return result.video }
             let output = dir.appendingPathComponent("merged.mp4")
