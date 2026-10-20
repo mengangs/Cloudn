@@ -24,6 +24,7 @@ final class AppModel {
     let accounts: AccountStore
     let bookmarks: BookmarkStore
     let downloads: DownloadStore
+    let announcements: AnnouncementStore
     @ObservationIgnored let resolvers: ShareResolvers
     @ObservationIgnored let videoService: VideoParseService
     @ObservationIgnored let background: BackgroundTransfers
@@ -34,6 +35,8 @@ final class AppModel {
     var pendingInput: String?
     /// 外部打开 / 导入的种子文件（解析页接手）
     var pendingTorrent: TorrentTarget?
+    /// 从公告弹窗点「查看详情」：「我的」页打开这条公告
+    var openAnnouncement: Announcement?
     /// 自动检查发现的新版本（弹窗提示）
     var availableUpdate: AppRelease?
 
@@ -53,6 +56,7 @@ final class AppModel {
         settings = AppSettings()
         accounts = AccountStore()
         bookmarks = BookmarkStore(directory: support)
+        announcements = AnnouncementStore(mirror: { [settings] in settings.githubMirror })
         resolvers = ShareResolvers(credentials: accounts.vault, options: settings.resolverOptions)
         videoService = VideoParseService(credentials: accounts.vault, webExtractor: HeadlessWebExtractor())
 
@@ -224,6 +228,7 @@ final class AppModel {
         switch phase {
         case .active:
             autoCheckForUpdates()
+            announcements.checkOnLaunch()
             endBackgroundTask()
             let ids = suspendedIds
             suspendedIds = []

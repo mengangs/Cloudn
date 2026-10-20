@@ -55,6 +55,8 @@ struct AccountsView: View {
                             .padding(.horizontal, 4)
                     }
                     VStack(spacing: 0) {
+                        NavigationLink { AnnouncementListView() } label: { linkRow(.doc, "公告", badge: app.announcements.unreadCount) }
+                        RowDivider(leading: 52)
                         NavigationLink { SettingsView() } label: { linkRow(.gear, "设置") }
                         RowDivider(leading: 52)
                         Button { exporting = true } label: { linkRow(.share, "导出登录凭据（加密备份）") }
@@ -79,6 +81,9 @@ struct AccountsView: View {
             .background(Color.paper)
             .task(id: app.accounts.accounts.keys.map(\.rawValue).sorted()) { await loadQuotas() }
             .navigationTitle("我的")
+            .navigationDestination(item: Binding(get: { app.openAnnouncement }, set: { app.openAnnouncement = $0 })) {
+                AnnouncementDetailView(announcement: $0)
+            }
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
@@ -203,11 +208,20 @@ struct AccountsView: View {
         .modifier(LogoutDialog(kind: kind, logoutKind: $logoutKind))
     }
 
-    private func linkRow(_ icon: Icon, _ title: String) -> some View {
+    private func linkRow(_ icon: Icon, _ title: String, badge: Int = 0) -> some View {
         HStack(spacing: 12) {
             IconView(icon, size: 19).foregroundStyle(Color.ink).frame(width: 26)
             Text(title).foregroundStyle(Color.ink)
             Spacer()
+            if badge > 0 {
+                Text(badge > 99 ? "99+" : "\(badge)")
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Color.clayInk, in: Capsule())
+                    .accessibilityLabel("\(badge) 条未读")
+            }
             IconView(.chevronRight, size: 13).foregroundStyle(Color.ink3)
         }
         .padding(.horizontal, 14)
