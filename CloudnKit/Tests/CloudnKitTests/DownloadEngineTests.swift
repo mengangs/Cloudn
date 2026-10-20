@@ -142,6 +142,18 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertNil(plain.bestVariant?.audio)
     }
 
+    func testM3U8DurationAndResolution() {
+        let master = M3U8.parse("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\nhi.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=500\nlo.m3u8\n", baseURL: "https://h/m.m3u8")
+        XCTAssertEqual(master.variantHeights, [720, 0])
+        let media = M3U8.parse("#EXTM3U\n#EXTINF:4.5,\na.ts\n#EXTINF:5,title\nb.ts\n", baseURL: "https://h/m.m3u8")
+        XCTAssertEqual(media.totalDuration, 9.5, accuracy: 0.001)
+        XCTAssertEqual(MediaProbe.totalFromContentRange("bytes 0-0/12345"), 12345)
+        XCTAssertNil(MediaProbe.totalFromContentRange("bytes */*"))
+        XCTAssertTrue(MediaProbeResult(duration: 12).looksLikePreview)
+        XCTAssertFalse(MediaProbeResult(size: 1, estimated: true, duration: 600).looksLikePreview)
+        XCTAssertTrue(MediaProbeResult(size: 500_000).looksLikePreview)
+    }
+
     func testM3U8Parse() {
         let p = M3U8.parse("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k.bin\",IV=0x000102030405060708090a0b0c0d0e0f\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2,\nhttps://cdn/a.m4s\n", baseURL: "https://h/p/list.m3u8")
         XCTAssertEqual(p.mapURL, "https://h/p/init.mp4")

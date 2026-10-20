@@ -26,8 +26,12 @@ struct M3U8 {
     var variantAudioGroups: [String?] = []
     /// 独立音轨：组名 → 音轨播放列表地址（同组有多条时取 DEFAULT=YES 的）
     var audioRenditions: [String: String] = [:]
+    /// 与 variants 一一对应：RESOLUTION 的短边（如 1280x720 → 720），没写为 0
+    var variantHeights: [Int] = []
     var segments: [Segment] = []
     var mapURL: String?
+    /// 各分片 EXTINF 时长之和（秒）
+    var totalDuration: Double = 0
 
     var isMaster: Bool { !variants.isEmpty }
 
@@ -37,6 +41,7 @@ struct M3U8 {
         var sequence = 0
         var pendingBandwidth: Int?
         var pendingAudio: String?
+        var pendingHeight = 0
         var defaultAudio = Set<String>()
         for rawLine in text.components(separatedBy: .newlines) {
             let line = rawLine.trimmed
@@ -44,6 +49,11 @@ struct M3U8 {
             if line.hasPrefix("#EXT-X-STREAM-INF") {
                 pendingBandwidth = Int(attribute("BANDWIDTH", in: line) ?? "") ?? 0
                 pendingAudio = attribute("AUDIO", in: line)
+                let size = (attribute("RESOLUTION", in: line) ?? "").lowercased().split(separator: "x").compactMap { Int($0) }
+                pendingHeight = size.count == 2 ? min(size[0], size[1]) : 0
+            } else if line.hasPrefix("#EXTINF:") {
+                let value = line.dropFirst("#EXTINF:".count).split(separator: ",").first.map(String.init) ?? ""
+                playlist.totalDuration += Double(value.trimmed) ?? 0
             } else if line.hasPrefix("#EXT-X-MEDIA:") {
                 guard attribute("TYPE", in: line) == "AUDIO", let group = attribute("GROUP-ID", in: line),
                       let uri = attribute("URI", in: line) else { continue }
@@ -69,6 +79,8 @@ struct M3U8 {
             } else if let bw = pendingBandwidth {
                 playlist.variants.append((bw, resolve(line, base: baseURL)))
                 playlist.variantAudioGroups.append(pendingAudio)
+                playlist.variantHeights.append(pendingHeight)
+                pendingHeight = 0
                 pendingBandwidth = nil
                 pendingAudio = nil
             } else {

@@ -13,6 +13,29 @@ struct SniffedMedia: Identifiable, Equatable {
     /// 发现它时所在的页面（下载时作 Referer）
     let page: String
     let title: String
+    /// 下载前探测到的大小 / 时长 / 清晰度
+    var info: MediaProbeResult?
+    var probing = true
+
+    /// 列表里显示的一行说明：清晰度 · 大小 · 时长
+    var detail: String {
+        guard let info else { return probing ? "正在获取大小…" : "大小未知" }
+        var parts: [String] = []
+        if info.height > 0 { parts.append("\(info.height)p") }
+        if let size = info.size { parts.append((info.estimated ? "约 " : "") + ByteFormat.string(size)) }
+        if let d = info.duration { parts.append(Self.clock(d)) }
+        return parts.isEmpty ? "大小未知" : parts.joined(separator: " · ")
+    }
+
+    var isPreview: Bool { info?.looksLikePreview ?? false }
+
+    /// 排序用：时长优先，其次大小
+    var weight: Double { (info?.duration ?? 0) * 1_000_000_000 + Double(info?.size ?? 0) }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
 
     var label: String {
         switch kind {
@@ -96,30 +119,47 @@ struct SnifferView: View {
     }
 
     private var mediaList: some View {
-        NavigationStack {
+        let sorted = browser.medias.sorted { $0.weight > $1.weight }
+        let main = sorted.filter { !$0.isPreview }
+        let previews = sorted.filter { $0.isPreview }
+        return NavigationStack {
             List {
                 Section {
-                    ForEach(browser.medias.reversed()) { media in
-                        Button { download(media) } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
-                                Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
-                            }
-                            .padding(.vertical, 2)
-                        }
-                        .contextMenu {
-                            Button {
-                                UIPasteboard.general.string = media.url
-                                app.show("已复制地址")
-                            } label: { Label("复制地址", glyph: .link) }
-                        }
-                    }
+                    ForEach(main) { mediaRow($0) }
                 } footer: {
-                    Text("最新发现的在最上面。播放视频后通常会出现真正的视频地址；同一个视频可能有多条（不同清晰度或广告），优先选 m3u8 或文件较长的那条。")
+                    Text("时长最长的排在最前面，一般就是正片。没找到正片？先在网页里点播放，真正的视频地址通常在开始播放后才出现。")
+                }
+                if !previews.isEmpty {
+                    Section {
+                        ForEach(previews) { mediaRow($0) }
+                    } header: {
+                        Text("可能是预览片段或广告")
+                    } footer: {
+                        Text("不到 30 秒或很小的视频，多半是网页上的预览图、广告。")
+                    }
                 }
             }
             .navigationTitle("发现的媒体")
             .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func mediaRow(_ media: SniffedMedia) -> some View {
+        Button { download(media) } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                    Text(media.detail).font(.monoSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
+                }
+                Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
+            }
+            .padding(.vertical, 2)
+        }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = media.url
+                app.show("已复制地址")
+            } label: { Label("复制地址", glyph: .link) }
         }
     }
 
@@ -198,8 +238,19 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     private func add(url: String, page: String, title: String) {
         guard url.hasPrefix("http"), !seen.contains(url) else { return }
         seen.insert(url)
-        medias.append(SniffedMedia(url: url, kind: SniffedMedia.classify(url), page: page.isEmpty ? currentURL : page,
-                                   title: title.isEmpty ? self.title : title))
+        let media = SniffedMedia(url: url, kind: SniffedMedia.classify(url), page: page.isEmpty ? currentURL : page,
+                                 title: title.isEmpty ? self.title : title)
+        medias.append(media)
+        Task { await probe(media) }
+    }
+
+    /// 后台探测大小 / 时长，结果回填到列表
+    private func probe(_ media: SniffedMedia) async {
+        let headers = await headers(for: media)
+        let info = await MediaProbe.probe(media.url, headers: headers, isHLS: media.kind == .hls)
+        guard let i = medias.firstIndex(where: { $0.id == media.id }) else { return }
+        medias[i].info = info
+        medias[i].probing = false
     }
 
     private func refreshState() {
@@ -267,6 +318,37 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
           document.querySelectorAll('video, audio, source').forEach(function(el){ report(el.currentSrc || el.src, true); });
         } catch (e) {}
       }, 1500);
+      // 正片地址常写在页面源码 / 内嵌数据里（含 JSON 转义的斜杠），定时扫一遍
+      var scans = 0;
+      function scanPage(){
+        try {
+          var html = document.documentElement ? document.documentElement.outerHTML : '';
+          if (html.length > 6000000) return;
+          var re = /https?:(?:\\\\?\\/){2}[^"'\\s<>]+?\\.(?:m3u8|mp4|m4v)(?:\\?[^"'\\s<>]*)?/gi, m;
+          while ((m = re.exec(html)) !== null) {
+            report(m[0].replace(/\\\\\\//g, '/').replace(/\\\\u0026/gi, '&').replace(/&amp;/g, '&'), false);
+          }
+        } catch (e) {}
+      }
+      var scanTimer = setInterval(function(){ scanPage(); if (++scans >= 10) clearInterval(scanTimer); }, 3000);
+      // 很多网站要点播放才去加载正片：页面加载完后把最大的那个视频静音播放一下
+      window.addEventListener('load', function(){
+        setTimeout(function(){
+          try {
+            if (window.top !== window) return;
+            var best = null, area = 0;
+            document.querySelectorAll('video').forEach(function(v){
+              var r = v.getBoundingClientRect(); var a = r.width * r.height;
+              if (a > area) { area = a; best = v; }
+            });
+            if (best && best.paused && area > 40000) {
+              best.muted = true;
+              var p = best.play(); if (p && p.catch) p.catch(function(){});
+            }
+          } catch (e) {}
+          scanPage();
+        }, 1500);
+      });
     })();
     """
 }
