@@ -227,6 +227,15 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         return json["data"].isObject || json["kind"].string == "drive#about"
     }
 
+    /// 登录态检测：用已保存的主账号，令牌快过期时先续期并回写，再读一次网盘信息。
+    /// 访问令牌只有几小时，单看令牌会把「可续期」误判成失效
+    public func checkLogin() async -> Bool {
+        guard let id = try? await loginIdentity(), !id.token.isEmpty,
+              let r = try? await client.send(.get(panBase + "/drive/v1/about", headers: panHeaders(id))), r.isSuccess,
+              let json = r.json else { return false }
+        return json["data"].isObject || json["kind"].string == "drive#about"
+    }
+
     // MARK: 身份
 
     private func guestIdentity() async -> Identity {

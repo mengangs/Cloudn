@@ -121,6 +121,13 @@ public enum AccountValidator {
     }
 }
 
+extension AccountValidator {
+    /// 网络是否通到该平台：有任何 HTTP 响应即算通（用来区分「登录失效」与「没网 / 被墙」）
+    public static func reachable(_ url: String) async -> Bool {
+        (try? await HTTPClient.shared.send(HTTPRequest(url: url, method: "HEAD", timeout: 10))) != nil
+    }
+}
+
 /// 不提供任何账号的凭证源（校验、测试用）
 public struct NoCredentials: CredentialStore {
     public init() {}

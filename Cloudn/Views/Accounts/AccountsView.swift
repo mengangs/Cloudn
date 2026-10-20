@@ -14,10 +14,18 @@ struct AccountsView: View {
     @State private var importing = false
     @State private var importData: ImportData?
     @State private var quotas: [SharePlatform: DriveQuota] = [:]
+    /// 上次取容量的时间与当时的账号：切回本页时 10 分钟内不重复请求
+    @State private var quotaLoaded: (at: Date, key: String)?
 
     /// 设置里勾选显示的网盘（默认全部）
     private var visibleDrives: [AccountKind] {
         AccountKind.allCases.filter { $0.isDrive && !app.settings.hiddenDrives.contains($0.rawValue) }
+    }
+
+    /// 账号有变（登录、退出、续期）时重新取容量
+    private var accountsKey: String {
+        app.accounts.accounts.sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { "\($0.key.rawValue)@\($0.value.updatedAt.timeIntervalSince1970)" }.joined(separator: ",")
     }
 
     private var loggedInSummary: String {
@@ -34,7 +42,7 @@ struct AccountsView: View {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                             ForEach(visibleDrives) { driveTile($0) }
                         }
-                        Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号。")
+                        Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号；右上角绿点表示已登录，红点表示登录已失效（每 6 小时最多自动检测一次）。")
                             .font(.caption)
                             .foregroundStyle(Color.ink3)
                             .padding(.horizontal, 4)
@@ -77,7 +85,7 @@ struct AccountsView: View {
                 .padding(.bottom, 24)
             }
             .background(Color.paper)
-            .task(id: app.accounts.accounts.keys.map(\.rawValue).sorted()) { await loadQuotas() }
+            .task(id: accountsKey) { await refreshStatus() }
             .navigationTitle("我的")
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
@@ -119,6 +127,7 @@ struct AccountsView: View {
         let account = app.accounts.accounts[kind]
         let platform = kind.drivePlatform
         let quota = platform.flatMap { quotas[$0] }
+        let expired = app.accounts.isExpired(kind)
         return Menu {
             accountMenu(kind)
         } label: {
@@ -127,12 +136,14 @@ struct AccountsView: View {
                     PlatformTile(mark: .account(kind), size: 34, dimmed: account == nil)
                     Spacer()
                     if account != nil {
-                        Circle().fill(Color.success).frame(width: 7, height: 7)
+                        statusDot(kind)
                     }
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(kind.displayName).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink).lineLimit(1)
-                    if let account {
+                    if account != nil, expired {
+                        Text("登录已失效，点按重新登录").font(.caption).foregroundStyle(Color.clayInk).lineLimit(1)
+                    } else if let account {
                         let count = app.accounts.count(for: kind)
                         Text(account.nickname + (count > 1 ? " 等 \(count) 个" : ""))
                             .font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
@@ -156,7 +167,7 @@ struct AccountsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
         } primaryAction: {
-            if account == nil {
+            if account == nil || expired {
                 app.accounts.pendingAdd = nil
                 startLogin(kind)
             } else if let platform, app.resolvers.manager(for: platform) != nil {
@@ -176,9 +187,10 @@ struct AccountsView: View {
             PlatformTile(mark: .account(kind), size: 32, dimmed: account == nil)
             VStack(alignment: .leading, spacing: 2) {
                 Text(kind.displayName).font(.subheadline.weight(.medium)).foregroundStyle(Color.ink)
-                Text(account.map { "已登录 · \($0.nickname)" } ?? kind.benefit)
+                let expired = app.accounts.isExpired(kind)
+                Text(account.map { expired ? "登录已失效 · \($0.nickname)" : "已登录 · \($0.nickname)" } ?? kind.benefit)
                     .font(.caption)
-                    .foregroundStyle(account == nil ? Color.ink3 : Color.success)
+                    .foregroundStyle(account == nil ? Color.ink3 : (expired ? Color.clayInk : Color.success))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -224,8 +236,45 @@ struct AccountsView: View {
                 Button { drivePlatform = platform } label: { Label("我的网盘", glyph: .cloud) }
             }
             Button { listKind = kind } label: { Label("账号管理 / 添加账号", glyph: .user) }
+            Button { Task { await checkNow(kind) } } label: { Label("检查登录状态", glyph: .check) }
             Menu { loginOptions(kind) } label: { Label("重新登录", glyph: .refresh) }
             Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
+        }
+    }
+
+    /// 右上角的状态点：绿色已登录，红色登录已失效，检测中为灰色
+    @ViewBuilder
+    private func statusDot(_ kind: AccountKind) -> some View {
+        let expired = app.accounts.isExpired(kind)
+        Circle()
+            .fill(app.accounts.checking.contains(kind) ? Color.ink3 : (expired ? Color.clayInk : Color.success))
+            .frame(width: 7, height: 7)
+            .accessibilityLabel(expired ? "登录已失效" : "已登录")
+    }
+
+    /// 进入本页时：取容量（10 分钟内不重复），取到容量的网盘即视为登录有效；
+    /// 其余已登录的平台按 6 小时一次的频率检测登录态
+    private func refreshStatus() async {
+        let key = accountsKey
+        if let loaded = quotaLoaded, loaded.key == key, Date().timeIntervalSince(loaded.at) < 600 {
+            // 容量不重取
+        } else {
+            await loadQuotas()
+            quotaLoaded = (Date(), key)
+            for kind in AccountKind.allCases {
+                if let platform = kind.drivePlatform, quotas[platform] != nil { app.accounts.recordHealth(kind, valid: true) }
+            }
+        }
+        await app.accounts.checkHealth(AccountKind.allCases, resolvers: app.resolvers)
+    }
+
+    private func checkNow(_ kind: AccountKind) async {
+        let result = await app.accounts.checkHealth([kind], resolvers: app.resolvers, force: true)[kind]
+        switch result {
+        case .valid: app.show("\(kind.displayName)登录有效")
+        case .expired: app.show("\(kind.displayName)登录已失效，请重新登录", error: true)
+        case .unreachable: app.show("连不上\(kind.displayName)，请检查网络后再试", error: true)
+        case nil: break
         }
     }
 

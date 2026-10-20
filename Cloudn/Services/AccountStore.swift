@@ -134,6 +134,10 @@ final class AccountStore {
     @ObservationIgnored private(set) var vault: AccountVault!
     /// 正在为该平台「添加账号」：接下来这次登录作为附加账号保存
     @ObservationIgnored var pendingAdd: AccountKind?
+    /// 主账号的登录态检测结果；存进 UserDefaults，重启后不必重测
+    private(set) var health: [AccountKind: HealthRecord] = AccountStore.loadHealth()
+    /// 正在检测的平台
+    private(set) var checking = Set<AccountKind>()
 
     init() {
         vault = AccountVault { [weak self] in
@@ -165,6 +169,7 @@ final class AccountStore {
             await vault.add(account, for: kind)
         } else {
             await vault.save(account, for: kind)
+            recordHealth(kind, valid: true)
         }
         await reload()
         return nickname
@@ -192,7 +197,93 @@ final class AccountStore {
 
     func logout(_ kind: AccountKind) async {
         await vault.remove(kind)
+        health[kind] = nil
+        saveHealth()
         await reload()
+    }
+}
+
+// MARK: - 登录态检测
+
+/// 只在「我的」页出现时检测，同一平台 6 小时内最多一次（手动检测除外），每次只发一个轻量请求
+/// （和登录校验同一个接口）。容量能取到的网盘直接算有效，不再额外请求。
+/// 请求失败时先看网络是否通：连不上平台算「未知」，保留上次结果，不会因为断网把账号标成失效
+extension AccountStore {
+    struct HealthRecord: Codable, Equatable {
+        var expired: Bool
+        var checkedAt: Date
+    }
+
+    static let healthInterval: TimeInterval = 6 * 3600
+    private static let healthKey = "accountHealth"
+
+    /// 主账号登录已失效。失效后账号又被更新过（重新登录、服务端续期回写）就不再算失效
+    func isExpired(_ kind: AccountKind) -> Bool {
+        guard let account = accounts[kind], let record = health[kind], record.expired else { return false }
+        return account.updatedAt <= record.checkedAt
+    }
+
+    func recordHealth(_ kind: AccountKind, valid: Bool) {
+        health[kind] = HealthRecord(expired: !valid, checkedAt: Date())
+        saveHealth()
+    }
+
+    enum CheckResult: Sendable { case valid, expired, unreachable }
+
+    /// 检测这些平台的主账号；force 为 false 时跳过 6 小时内测过的
+    @discardableResult
+    func checkHealth(_ kinds: [AccountKind], resolvers: ShareResolvers, force: Bool = false) async -> [AccountKind: CheckResult] {
+        let now = Date()
+        let targets: [(AccountKind, String)] = kinds.compactMap { kind in
+            guard let account = accounts[kind], !checking.contains(kind) else { return nil }
+            if !force, let record = health[kind], now.timeIntervalSince(record.checkedAt) < Self.healthInterval,
+               !(record.expired && account.updatedAt > record.checkedAt) { return nil }
+            return (kind, account.cookie)
+        }
+        guard !targets.isEmpty else { return [:] }
+        checking.formUnion(targets.map(\.0))
+        let results = await withTaskGroup(of: (AccountKind, CheckResult).self) { group -> [AccountKind: CheckResult] in
+            for (kind, cookie) in targets {
+                let probe = "https://" + (kind.loginURL.host ?? "")
+                group.addTask { (kind, await AccountStore.probeLogin(kind, cookie: cookie, probe: probe, resolvers: resolvers)) }
+            }
+            var out: [AccountKind: CheckResult] = [:]
+            for await (kind, result) in group { out[kind] = result }
+            return out
+        }
+        for (kind, result) in results {
+            checking.remove(kind)
+            switch result {
+            case .valid: recordHealth(kind, valid: true)
+            case .expired:
+                recordHealth(kind, valid: false)
+                Log.info("登录态检测：\(kind.displayName) 主账号已失效")
+            case .unreachable: break
+            }
+        }
+        return results
+    }
+
+    nonisolated private static func probeLogin(_ kind: AccountKind, cookie: String, probe: String, resolvers: ShareResolvers) async -> CheckResult {
+        let valid: Bool
+        if kind == .xunlei, let xunlei = resolvers.resolver(for: .xunlei) as? XunleiResolver {
+            valid = await xunlei.checkLogin()
+        } else {
+            valid = await AccountValidator.validate(kind, cookie: cookie) != nil
+        }
+        if valid { return .valid }
+        return await AccountValidator.reachable(probe) ? .expired : .unreachable
+    }
+
+    nonisolated private static func loadHealth() -> [AccountKind: HealthRecord] {
+        guard let data = UserDefaults.standard.data(forKey: healthKey),
+              let raw = try? JSONDecoder().decode([String: HealthRecord].self, from: data) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in AccountKind(rawValue: k).map { ($0, v) } })
+    }
+
+    private func saveHealth() {
+        let raw = Dictionary(uniqueKeysWithValues: health.map { ($0.key.rawValue, $0.value) })
+        if let data = try? JSONEncoder().encode(raw) { UserDefaults.standard.set(data, forKey: Self.healthKey) }
     }
 }
 
