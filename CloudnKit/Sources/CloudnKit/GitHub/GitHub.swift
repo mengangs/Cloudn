@@ -57,6 +57,8 @@ public struct GitHubRepo: Equatable, Sendable, Identifiable {
     public let defaultBranch: String
     public let stars: Int
     public let updatedAt: String
+    /// 私有仓库：附件要带 Token 走 API 地址下载
+    public var isPrivate = false
 }
 
 /// 仓库目录项
@@ -76,6 +78,13 @@ public struct GitHubAsset: Equatable, Sendable, Identifiable {
     public let size: Int64
     public let url: String
     public let downloads: Int
+    /// API 地址（/releases/assets/<id>）：私有仓库的附件只能带 Token 从这里下载
+    public var apiURL: String = ""
+
+    /// 私有仓库附件的下载请求：带 Token、要求原始字节；服务端 302 到签名的存储地址，跳转时下载会话会去掉 Authorization
+    public func privateDownloadHeaders(token: String) -> [String: String] {
+        ["Authorization": "Bearer " + token, "Accept": "application/octet-stream", "User-Agent": "Cloudn-iOS"]
+    }
 }
 
 public struct GitHubRelease: Equatable, Sendable, Identifiable {
@@ -155,7 +164,8 @@ public struct GitHubClient: Sendable {
     static func parseRepo(_ o: JSON) -> GitHubRepo {
         GitHubRepo(owner: o["owner"]["login"].string, name: o["name"].string, fullName: o["full_name"].string,
                    description: o["description"].string, defaultBranch: o["default_branch"].string.nilIfBlank ?? "main",
-                   stars: o["stargazers_count"].int, updatedAt: o["pushed_at"].string.nilIfBlank ?? o["updated_at"].string)
+                   stars: o["stargazers_count"].int, updatedAt: o["pushed_at"].string.nilIfBlank ?? o["updated_at"].string,
+                   isPrivate: o["private"].bool)
     }
 
     static func parseEntry(_ o: JSON) -> GitHubEntry {
@@ -168,7 +178,7 @@ public struct GitHubClient: Sendable {
                       isPrerelease: o["prerelease"].bool, publishedAt: o["published_at"].string,
                       assets: o["assets"].array.map {
                           GitHubAsset(name: $0["name"].string, size: $0["size"].int64, url: $0["browser_download_url"].string,
-                                      downloads: $0["download_count"].int)
+                                      downloads: $0["download_count"].int, apiURL: $0["url"].string)
                       })
     }
 }

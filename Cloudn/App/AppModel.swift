@@ -38,6 +38,8 @@ final class AppModel {
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续
     @ObservationIgnored private var suspendedIds: [UUID] = []
+    /// 已自动重新取过链的任务（每个任务只自动换一次，避免反复失败反复换）
+    @ObservationIgnored private var autoRefreshed = Set<UUID>()
 
     init() {
         let fm = FileManager.default
@@ -55,7 +57,7 @@ final class AppModel {
         let snapshot = settings.snapshot
         let engine = DownloadEngine(baseDirectory: support, downloadsDirectory: documents) { snapshot.get() }
         background = BackgroundTransfers(engine: engine, staging: support.appendingPathComponent("background", isDirectory: true))
-        downloads = DownloadStore(engine: engine, resolvers: resolvers, background: background)
+        downloads = DownloadStore(engine: engine, resolvers: resolvers, videoService: videoService, background: background)
         background.reconcile()
 
         let resolvers = self.resolvers
@@ -69,11 +71,28 @@ final class AppModel {
             await self?.didFinish(item)
         }
         let onFailed: @Sendable (DownloadItem) async -> Void = { [weak self] item in
-            await self?.notify(title: "下载失败", body: "\(item.displayName)：\(item.errorMessage ?? "未知错误")")
+            await self?.didFail(item)
         }
         Task { await engine.configure(merger: MediaTools.merger, onFinished: onFinished, onFailed: onFailed) }
         let settings = self.settings
         downloads.exportedURL = { settings.exportedFileURL($0) }
+    }
+
+    /// 下载失败：像是直链过期（403 / 404 / 410 / 412）且能重新取链的，自动换链继续一次；仍失败才通知
+    private func didFail(_ item: DownloadItem) async {
+        let message = item.errorMessage ?? ""
+        let expired = ["HTTP 403", "HTTP 404", "HTTP 410", "HTTP 412"].contains { message.hasPrefix($0) }
+        if expired, item.request.canRefresh, !autoRefreshed.contains(item.id) {
+            autoRefreshed.insert(item.id)
+            do {
+                try await downloads.refreshLink(item)
+                Log.info("直链过期，已自动重新取链：\(item.displayName)")
+                return
+            } catch {
+                Log.error("自动重新取链失败：\(item.displayName)：\(error.localizedDescription)")
+            }
+        }
+        notify(title: "下载失败", body: "\(item.displayName)：\(message.isEmpty ? "未知错误" : message)")
     }
 
     /// 应用不在前台时发本地通知（包括被系统在后台唤醒、没有界面的时候）

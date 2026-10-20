@@ -189,7 +189,8 @@ struct DriveFolderView: View {
     private func download(_ file: ShareFile) {
         perform(nil) {
             let link = try await manager.driveDownloadLink(file)
-            app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil)
+            app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil,
+                                  refresh: .drive(platform: platform, file: DriveFileRef(file)))
             app.show("已添加到下载")
         }
     }

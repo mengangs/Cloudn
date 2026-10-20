@@ -26,14 +26,16 @@ final class DownloadStore {
     @ObservationIgnored private var shareIdCache: [String: String] = [:]
     @ObservationIgnored let engine: DownloadEngine
     @ObservationIgnored private let resolvers: ShareResolvers
+    @ObservationIgnored private let videoService: VideoParseService
     @ObservationIgnored private let background: BackgroundTransfers
     @ObservationIgnored private let activity = DownloadActivity()
     /// 已移到外部文件夹的文件的位置（由 AppModel 提供，依赖设置里的文件夹书签）
     @ObservationIgnored var exportedURL: ((DownloadItem) -> URL?)?
 
-    init(engine: DownloadEngine, resolvers: ShareResolvers, background: BackgroundTransfers) {
+    init(engine: DownloadEngine, resolvers: ShareResolvers, videoService: VideoParseService, background: BackgroundTransfers) {
         self.engine = engine
         self.resolvers = resolvers
+        self.videoService = videoService
         self.background = background
         Task { [weak self] in
             for await list in await engine.updates() {
@@ -82,20 +84,24 @@ final class DownloadStore {
     }
 
     func enqueue(link: DownloadLink, platform: SharePlatform, folder: String, origin: ShareOrigin?, group: DownloadGroup? = nil, slot: Int = 0,
-                 mirrors: [DownloadLink] = []) {
+                 mirrors: [DownloadLink] = [], refresh: RefreshSource? = nil) {
         let kind: DownloadKind = link.url.contains(".m3u8") ? .hls : .file
         enqueue(DownloadRequest(
             url: link.url, headers: link.headers, fileName: link.fileName, folder: folder, kind: kind,
             expectedSize: link.size, source: platform.displayName,
             cleanup: link.cleanupToken.map { CleanupToken(platform: platform.rawValue, token: $0, slot: slot == 0 ? nil : slot) },
             origin: origin, group: group,
-            mirrors: mirrors.isEmpty ? nil : mirrors.map { DownloadSource(url: $0.url, headers: $0.headers) }))
+            mirrors: mirrors.isEmpty ? nil : mirrors.map { DownloadSource(url: $0.url, headers: $0.headers) },
+            refresh: refresh))
     }
 
     func enqueue(media: VideoMedia, result: VideoParseResult, folder: String = "", group: DownloadGroup? = nil) {
         let kind: DownloadKind = !media.audioURL.isEmpty ? .dash(audioURL: media.audioURL) : (media.isHLS ? .hls : .file)
+        // 记下作品页与这是第几个媒体：直链过期后重新解析作品页换链
+        let index = result.medias.firstIndex { $0.id == media.id } ?? 0
+        let refresh: RefreshSource? = result.url.isEmpty ? nil : .video(pageURL: result.url, fileName: media.fileName, index: index)
         enqueue(DownloadRequest(url: media.url, headers: media.headers, fileName: media.fileName, folder: folder, kind: kind,
-                                expectedSize: media.size, source: result.platform.displayName, group: group))
+                                expectedSize: media.size, source: result.platform.displayName, group: group, refresh: refresh))
     }
 
     // 交给后台会话的分片要一并撤掉，否则会在任务暂停 / 删除后继续占用流量
@@ -139,14 +145,39 @@ final class DownloadStore {
     func fileURL(_ item: DownloadItem) -> URL? { engine.fileURL(for: item) ?? exportedURL?(item) }
 
     /// 直链过期：按来源信息重新解析取链，保留已下载部分继续
+    /// 直链过期：按来源（分享链接 / 我的网盘 / 作品页）重新取链，保留已下载部分继续
     func refreshLink(_ item: DownloadItem) async throws {
-        guard let origin = item.request.origin, let resolver = resolvers.resolver(for: origin.platform),
-              let share = ShareLinkParser.parse(origin.shareURL) else {
+        if let origin = item.request.origin {
+            guard let resolver = resolvers.resolver(for: origin.platform), let share = ShareLinkParser.parse(origin.shareURL) else {
+                throw CloudnError("该任务没有可重新解析的来源，请回到解析页重新下载")
+            }
+            let session = try await resolver.openSession(share, pwd: origin.pwd)
+            let link = try await resolver.downloadLink(session, file: origin.file)
+            background.cancel(itemId: item.id)
+            await engine.replaceLink(item.id, url: link.url, headers: link.headers)
+            return
+        }
+        switch item.request.refresh {
+        case .drive(let platform, let file):
+            guard let manager = resolvers.manager(for: platform) else {
+                throw CloudnError("\(platform.displayName)暂不支持重新取链，请到「我的网盘」重新下载")
+            }
+            let link = try await manager.driveDownloadLink(file.file)
+            background.cancel(itemId: item.id)
+            await engine.replaceLink(item.id, url: link.url, headers: link.headers)
+        case .video(let pageURL, let fileName, let index):
+            guard let detected = VideoLinkParser.parse(pageURL) else { throw CloudnError("作品链接无法识别，请回到解析页重新解析") }
+            let result = try await videoService.parse(detected)
+            // 先按文件名对上；文件名变了（标题被改）再按序号
+            guard let media = result.medias.first(where: { $0.fileName == fileName })
+                    ?? (index < result.medias.count ? result.medias[index] : nil) else {
+                throw CloudnError("作品里已找不到这个文件，可能已被删除")
+            }
+            let kind: DownloadKind = !media.audioURL.isEmpty ? .dash(audioURL: media.audioURL) : (media.isHLS ? .hls : .file)
+            background.cancel(itemId: item.id)
+            await engine.replaceLink(item.id, url: media.url, headers: media.headers, kind: kind)
+        case nil:
             throw CloudnError("该任务没有可重新解析的来源，请回到解析页重新下载")
         }
-        let session = try await resolver.openSession(share, pwd: origin.pwd)
-        let link = try await resolver.downloadLink(session, file: origin.file)
-        background.cancel(itemId: item.id)
-        await engine.replaceLink(item.id, url: link.url, headers: link.headers)
     }
 }

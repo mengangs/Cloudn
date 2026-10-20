@@ -349,7 +349,7 @@ struct DownloadsView: View {
             } else {
                 Button { app.downloads.resume(item) } label: { Label("继续", glyph: .play) }
             }
-            if item.request.origin != nil {
+            if item.request.canRefresh {
                 Button { refresh(item) } label: { Label("重新获取直链并继续", glyph: .refresh) }
             }
         }

@@ -18,6 +18,17 @@ extension AppModel {
         show("已添加到下载")
     }
 
+    /// Release 附件：私有仓库带 Token 走 API 地址（浏览器下载地址对私有仓库是 404），公开仓库照常（可走镜像）
+    func downloadGitHubAsset(_ asset: GitHubAsset, folder: String, isPrivate: Bool) {
+        let token = settings.githubToken
+        guard isPrivate, !token.isEmpty, !asset.apiURL.isEmpty else {
+            return downloadGitHubFile(url: asset.url, name: asset.name, size: asset.size, folder: folder)
+        }
+        downloads.enqueue(DownloadRequest(url: asset.apiURL, headers: asset.privateDownloadHeaders(token: token), fileName: asset.name,
+                                          folder: folder, expectedSize: asset.size, source: "GitHub"))
+        show("已添加到下载")
+    }
+
     /// GitHub 文件最近一次的下载任务（按文件名与目录对上）
     func gitHubDownload(name: String, folder: String) -> DownloadItem? {
         downloads.items.last { $0.request.source == "GitHub" && $0.request.fileName == name && $0.request.folder == folder }
@@ -110,7 +121,7 @@ struct GitHubRepoView: View {
                     case .files:
                         GitHubDirectoryView(owner: owner, repo: repo, ref: initial.ref ?? info.defaultBranch, path: initial.path, description: info.description)
                     case .releases:
-                        GitHubReleasesView(owner: owner, repo: repo)
+                        GitHubReleasesView(owner: owner, repo: repo, isPrivate: info.isPrivate)
                     }
                 }
             } else if let error {
@@ -225,6 +236,7 @@ struct GitHubDirectoryView: View {
 struct GitHubReleasesView: View {
     let owner: String
     let repo: String
+    var isPrivate = false
     @Environment(AppModel.self) private var app
     @State private var releases: [GitHubRelease] = []
     @State private var loading = true
@@ -251,7 +263,7 @@ struct GitHubReleasesView: View {
                             }
                             Spacer(minLength: 0)
                             DownloadStateControl(item: app.gitHubDownload(name: asset.name, folder: repo)) {
-                                app.downloadGitHubFile(url: asset.url, name: asset.name, size: asset.size, folder: repo)
+                                app.downloadGitHubAsset(asset, folder: repo, isPrivate: isPrivate)
                             }
                         }
                         .paperRow()

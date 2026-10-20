@@ -51,6 +51,35 @@ public struct ShareOrigin: Codable, Sendable, Hashable {
     }
 }
 
+/// 自己网盘里的文件（我的网盘下载）：直链过期后按它重新取链
+public struct DriveFileRef: Codable, Sendable, Hashable {
+    public let fid: String
+    public let name: String
+    public let size: Int64
+    public let parentId: String
+    public let token: String
+
+    public init(_ file: ShareFile) {
+        fid = file.fid
+        name = file.name
+        size = file.size
+        parentId = file.parentId
+        token = file.token
+    }
+
+    public var file: ShareFile {
+        ShareFile(fid: fid, name: name, size: size, isDirectory: false, parentId: parentId, token: token)
+    }
+}
+
+/// 不是从分享链接来的下载（我的网盘、短视频 / 图集）：直链过期后据此重新取链
+public enum RefreshSource: Codable, Sendable, Hashable {
+    /// 自己网盘里的文件
+    case drive(platform: SharePlatform, file: DriveFileRef)
+    /// 作品页地址 + 媒体文件名（找不到同名的再按序号）
+    case video(pageURL: String, fileName: String, index: Int)
+}
+
 /// 一次批量下载（整个文件夹、一组图片）：下载页把同组任务收成一个可折叠分组
 public struct DownloadGroup: Codable, Sendable, Hashable {
     public let id: UUID
@@ -89,10 +118,16 @@ public struct DownloadRequest: Codable, Sendable, Hashable {
     public var group: DownloadGroup?
     /// 同一文件的其他直链（多源分片；旧任务表里没有这个字段）
     public var mirrors: [DownloadSource]?
+    /// 非分享来源的重新取链信息（旧任务表里没有这个字段）
+    public var refresh: RefreshSource?
+
+    /// 直链过期后能否重新取链
+    public var canRefresh: Bool { origin != nil || refresh != nil }
 
     public init(url: String, headers: [String: String] = [:], fileName: String, folder: String = "", kind: DownloadKind = .file,
                 expectedSize: Int64 = -1, source: String = "", cleanup: CleanupToken? = nil, origin: ShareOrigin? = nil,
-                group: DownloadGroup? = nil, mirrors: [DownloadSource]? = nil) {
+                group: DownloadGroup? = nil, mirrors: [DownloadSource]? = nil, refresh: RefreshSource? = nil) {
+        self.refresh = refresh
         self.mirrors = mirrors
         self.origin = origin
         self.group = group

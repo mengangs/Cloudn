@@ -1,5 +1,8 @@
 import XCTest
 @testable import CloudnKit
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 final class GitHubTests: XCTestCase {
     func testLinkParsing() {
@@ -37,5 +40,50 @@ final class GitHubTests: XCTestCase {
         XCTAssertEqual(rel.name, "v1")
         XCTAssertEqual(rel.assets.first?.size, 10)
         XCTAssertTrue(rel.isPrerelease)
+    }
+
+    func testPrivateRepoAssets() {
+        let repo = GitHubClient.parseRepo(JSON(["name": "b", "full_name": "a/b", "owner": ["login": "a"], "private": true]))
+        XCTAssertTrue(repo.isPrivate)
+        let rel = GitHubClient.parseRelease(JSON(["tag_name": "v1", "assets": [[
+            "name": "app.zip", "size": 10, "browser_download_url": "https://github.com/a/b/releases/download/v1/app.zip",
+            "url": "https://api.github.com/repos/a/b/releases/assets/42"
+        ]]]))
+        let asset = rel.assets[0]
+        XCTAssertEqual(asset.apiURL, "https://api.github.com/repos/a/b/releases/assets/42")
+        XCTAssertEqual(asset.privateDownloadHeaders(token: "t")["Accept"], "application/octet-stream")
+        XCTAssertEqual(asset.privateDownloadHeaders(token: "t")["Authorization"], "Bearer t")
+    }
+
+    /// 跳到别的主机（签名的存储地址）时去掉 Authorization，同主机跳转保留
+    func testRedirectDropsAuthorizationAcrossHosts() {
+        var original = URLRequest(url: URL(string: "https://api.github.com/repos/a/b/releases/assets/42")!)
+        original.setValue("Bearer t", forHTTPHeaderField: "Authorization")
+        var signed = URLRequest(url: URL(string: "https://objects.githubusercontent.com/x?sig=1")!)
+        signed.setValue("Bearer t", forHTTPHeaderField: "Authorization")
+        signed.setValue("bytes=0-9", forHTTPHeaderField: "Range")
+        let out = StreamingSession.strippingAuthorizationAcrossHosts(signed, from: original)
+        XCTAssertNil(out.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(out.value(forHTTPHeaderField: "Range"), "bytes=0-9")
+
+        var sameHost = URLRequest(url: URL(string: "https://api.github.com/other")!)
+        sameHost.setValue("Bearer t", forHTTPHeaderField: "Authorization")
+        XCTAssertEqual(StreamingSession.strippingAuthorizationAcrossHosts(sameHost, from: original).value(forHTTPHeaderField: "Authorization"), "Bearer t")
+    }
+
+    /// 旧任务表没有 refresh 字段也能读；新字段能来回编码
+    func testRefreshSourceCoding() throws {
+        let old = #"{"url":"u","headers":{},"fileName":"a","folder":"","kind":{"file":{}},"expectedSize":-1,"source":"s"}"#
+        let decoded = try JSONDecoder().decode(DownloadRequest.self, from: Data(old.utf8))
+        XCTAssertNil(decoded.refresh)
+        XCTAssertFalse(decoded.canRefresh)
+
+        let file = ShareFile(fid: "f1", name: "a.mp4", size: 9, isDirectory: false, parentId: "p", token: "tk")
+        var request = DownloadRequest(url: "u", fileName: "a.mp4", refresh: .drive(platform: .quark, file: DriveFileRef(file)))
+        XCTAssertTrue(request.canRefresh)
+        let round = try JSONDecoder().decode(DownloadRequest.self, from: JSONEncoder().encode(request))
+        XCTAssertEqual(round.refresh, request.refresh)
+        request.refresh = .video(pageURL: "https://www.douyin.com/video/1", fileName: "a.mp4", index: 0)
+        XCTAssertEqual(try JSONDecoder().decode(DownloadRequest.self, from: JSONEncoder().encode(request)).refresh, request.refresh)
     }
 }

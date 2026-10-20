@@ -74,6 +74,19 @@ final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate, @unchecke
 
     // MARK: URLSessionDownloadDelegate
 
+    /// 跳到别的主机时去掉 Authorization（GitHub 私有附件 302 到已签名的存储地址，带着 Token 会被拒）
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let newHost = request.url?.host?.lowercased(), newHost != task.originalRequest?.url?.host?.lowercased(),
+              request.value(forHTTPHeaderField: "Authorization") != nil else {
+            completionHandler(request)
+            return
+        }
+        var copy = request
+        copy.setValue(nil, forHTTPHeaderField: "Authorization")
+        completionHandler(copy)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         guard let job = BackgroundChunkJob.parse(taskDescription: downloadTask.taskDescription) else { return }
         let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0

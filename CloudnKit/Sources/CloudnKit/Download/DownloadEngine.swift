@@ -169,8 +169,8 @@ public actor DownloadEngine {
         schedule()
     }
 
-    /// 换一条新直链继续下载（同一文件重新取链，已下载的分片保留）
-    public func replaceLink(_ id: UUID, url: String, headers: [String: String]) {
+    /// 换一条新直链继续下载（同一文件重新取链，已下载的分片保留）。kind 不为空时一并替换（分轨视频的音轨直链也会过期）
+    public func replaceLink(_ id: UUID, url: String, headers: [String: String], kind: DownloadKind? = nil) {
         guard let i = index(id), items[i].status != .completed else { return }
         runners[id]?.cancel()
         runners[id] = nil
@@ -179,6 +179,7 @@ public actor DownloadEngine {
         leaveBackground(i)
         items[i].request.url = url
         items[i].request.headers = headers
+        if let kind { items[i].request.kind = kind }
         // 其他账号的旧直链多半也过期了，换链后只用新链
         items[i].request.mirrors = nil
         items[i].status = .queued

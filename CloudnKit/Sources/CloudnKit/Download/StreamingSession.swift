@@ -97,6 +97,20 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
         }
     }
 
+    /// 跳到别的主机时去掉 Authorization：GitHub 私有附件会 302 到已签名的存储地址，再带 Token 会被拒（只允许一种鉴权）
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(Self.strippingAuthorizationAcrossHosts(request, from: task.originalRequest))
+    }
+
+    static func strippingAuthorizationAcrossHosts(_ request: URLRequest, from original: URLRequest?) -> URLRequest {
+        guard let newHost = request.url?.host?.lowercased(), newHost != original?.url?.host?.lowercased(),
+              request.value(forHTTPHeaderField: "Authorization") != nil else { return request }
+        var copy = request
+        copy.setValue(nil, forHTTPHeaderField: "Authorization")
+        return copy
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard let h = handler(for: dataTask) else { return }
         limiter?.throttle(data.count)
