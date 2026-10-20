@@ -371,7 +371,10 @@ public actor DownloadEngine {
             items[i].totalBytes = size
             items[i].receivedBytes = size
             items[i].chunks = []
-            items[i].outputPath = folder.isEmpty ? target.lastPathComponent : folder + "/" + target.lastPathComponent
+            // 目录（多文件种子）以 / 结尾，界面据此按文件夹处理
+            let isDir = (try? target.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            let leaf = target.lastPathComponent + (isDir ? "/" : "")
+            items[i].outputPath = folder.isEmpty ? leaf : folder + "/" + leaf
             runners[id] = nil
             runIds[id] = nil
             progress[id] = nil

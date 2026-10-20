@@ -63,8 +63,11 @@ public enum DetectedInput: Sendable, Equatable {
     case video(DetectedVideoLink)
     case github(GitHubLink)
     case direct(String)
+    /// 磁力链接（或单独的 40 位特征码）
+    case magnet(MagnetLink)
 
     public static func detect(_ text: String) -> DetectedInput? {
+        if let m = MagnetLink.find(in: text) { return .magnet(m) }
         if let v = VideoLinkParser.parse(text) { return .video(v) }
         if let s = ShareLinkParser.parse(text) { return .share(s) }
         if let g = GitHubLink.parse(text) { return .github(g) }

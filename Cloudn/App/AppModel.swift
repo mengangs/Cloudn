@@ -32,6 +32,8 @@ final class AppModel {
     var toast: Toast?
     /// 外部（URL Scheme / 分享）送进来的待解析文本
     var pendingInput: String?
+    /// 外部打开 / 导入的种子文件（解析页接手）
+    var pendingTorrent: TorrentTarget?
     /// 自动检查发现的新版本（弹窗提示）
     var availableUpdate: AppRelease?
 
@@ -168,10 +170,28 @@ final class AppModel {
 
     /// 打开外部传入的链接：cloudn://resolve?text=...
     func handle(url: URL) {
+        if url.isFileURL {
+            if url.pathExtension.lowercased() == "torrent" { openTorrentFile(url) }
+            return
+        }
         guard url.scheme == "cloudn", let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         if let text = comps.queryItems?.first(where: { $0.name == "text" || $0.name == "url" })?.value, !text.isEmpty {
             pendingInput = text
             selectedTab = .resolve
+        }
+    }
+
+    /// 读种子文件：元数据直接进缓存，解析页列出文件（不用再向节点要）
+    func openTorrentFile(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let (info, trackers) = try TorrentInfo.parse(torrentFile: try Data(contentsOf: url))
+            TorrentMetadataCache.save(info, in: downloads.engine.torrentCacheDirectory)
+            pendingTorrent = TorrentTarget(magnet: MagnetLink(infoHash: info.infoHash, displayName: info.name, trackers: trackers))
+            selectedTab = .resolve
+        } catch {
+            show("无法打开种子文件：\(error.localizedDescription)", error: true)
         }
     }
 

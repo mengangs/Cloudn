@@ -99,11 +99,15 @@ final class TorrentTests: XCTestCase {
         let connect = [UInt8](TrackerClient.udpConnect(0xdeadbeef))
         XCTAssertEqual(connect.count, 16)
         XCTAssertEqual(PeerWire.readBE64(connect, 0), 0x41727101980)
-        let resp = PeerWire.be32(0) + PeerWire.be32(0xdeadbeef) + PeerWire.be64(42)
+        var resp: [UInt8] = PeerWire.be32(0)
+        resp += PeerWire.be32(0xdeadbeef)
+        resp += PeerWire.be64(42)
         XCTAssertEqual(try TrackerClient.parseUDPConnect(resp, transaction: 0xdeadbeef), 42)
         let a = TrackerClient.Announce(infoHash: [UInt8](repeating: 1, count: 20), peerId: [UInt8](repeating: 2, count: 20), left: 100)
         XCTAssertEqual(TrackerClient.udpAnnounce(42, 7, a).count, 98)
-        let ann = PeerWire.be32(1) + PeerWire.be32(7) + PeerWire.be32(1800) + PeerWire.be32(0) + PeerWire.be32(1) + [127, 0, 0, 1, 0x1a, 0xe1]
+        var ann: [UInt8] = PeerWire.be32(1)
+        for v: UInt32 in [7, 1800, 0, 1] { ann += PeerWire.be32(v) }
+        ann += [127, 0, 0, 1, 0x1a, 0xe1]
         XCTAssertEqual(try TrackerClient.parseUDPAnnounce(ann, transaction: 7), [PeerAddress(host: "127.0.0.1", port: 6881)])
 
         let http = Bencode.encode(.dict([("interval", .int(900)), ("peers", .bytes(Data([1, 2, 3, 4, 0, 80])))]))
@@ -161,7 +165,7 @@ final class TorrentTests: XCTestCase {
     }
 
     func testSingleFileTorrentAndResumeSkipsNetwork() async throws {
-        let payload = Data((0..<40_000).map { UInt8(($0 * 7) & 0xff) })
+        let payload = Data((0..<40_000).map { (i: Int) -> UInt8 in UInt8(truncatingIfNeeded: i * 7) })
         let info = try Self.makeInfo(name: "one.iso", pieceLength: 16_384, files: nil, payload: payload)
         let dir = try tempDir()
         let cache = dir.appendingPathComponent("cache")
@@ -212,7 +216,7 @@ final class TorrentTests: XCTestCase {
     }
 
     static func fixture() -> Fixture {
-        let payload = Data((0..<120_001).map { UInt8(($0 * 31 + $0 / 7) & 0xff) })
+        let payload = Data((0..<120_001).map { (i: Int) -> UInt8 in UInt8(truncatingIfNeeded: i * 31 + i / 7) })
         let files: [(String, Int)] = [("a.bin", 50_000), ("empty.txt", 0), ("sub/b.bin", 70_001)]
         let value = infoValue(name: "pack", pieceLength: 32_768, files: files, payload: payload)
         let info = try! TorrentInfo.parse(info: Bencode.encode(value))
@@ -260,6 +264,7 @@ final class SimulatedSwarm: TorrentNetwork, @unchecked Sendable {
     private let lock = NSLock()
     private var _connections = 0
     var connections: Int { lock.lock(); defer { lock.unlock() }; return _connections }
+    private func countConnection() { lock.lock(); _connections += 1; lock.unlock() }
 
     init(info: TorrentInfo, payload: Data, seeders: Int) {
         self.info = info
@@ -271,14 +276,20 @@ final class SimulatedSwarm: TorrentNetwork, @unchecked Sendable {
         guard address.host == "tracker.test" else { throw TransferError("unreachable") }
         let b = [UInt8](payload)
         let action = PeerWire.readBE32(b, 8), tid = PeerWire.readBE32(b, 12)
-        if action == 0 { return Data(PeerWire.be32(0) + PeerWire.be32(tid) + PeerWire.be64(77)) }
-        var out = PeerWire.be32(1) + PeerWire.be32(tid) + PeerWire.be32(60) + PeerWire.be32(0) + PeerWire.be32(UInt32(seeders))
+        if action == 0 {
+            var r: [UInt8] = PeerWire.be32(0)
+            r += PeerWire.be32(tid)
+            r += PeerWire.be64(77)
+            return Data(r)
+        }
+        var out: [UInt8] = PeerWire.be32(1)
+        for v in [tid, 60, 0, UInt32(seeders)] { out += PeerWire.be32(v) }
         for i in 0..<seeders { out += [10, 0, 0, UInt8(i + 1), 0x1a, 0xe1] }
         return Data(out)
     }
 
     func connect(_ address: PeerAddress, timeout: TimeInterval) async throws -> PeerStream {
-        lock.lock(); _connections += 1; lock.unlock()
+        countConnection()
         let (client, server) = PipeStream.pair()
         Task { await self.seed(server) }
         return client
@@ -340,25 +351,33 @@ final class PipeStream: PeerStream, @unchecked Sendable {
 
     private var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return closed }
 
+    private func target() -> PipeStream? {
+        lock.lock(); defer { lock.unlock() }
+        return closed ? nil : other
+    }
+
+    /// 取出 n 字节；不够时返回 nil，已关闭时抛错
+    private func take(_ n: Int) throws -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        if inbox.count >= n {
+            let out = Data(inbox.prefix(n))
+            inbox.removeFirst(n)
+            return out
+        }
+        if closed { throw TransferError("closed") }
+        return nil
+    }
+
     func send(_ data: Data) async throws {
-        lock.lock(); let peer = other; let c = closed; lock.unlock()
-        guard let peer, !c, !peer.isClosed else { throw TransferError("closed") }
+        guard let peer = target(), !peer.isClosed else { throw TransferError("closed") }
         peer.push(data)
     }
 
     func receive(exactly n: Int, timeout: TimeInterval) async throws -> Data {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
-            lock.lock()
-            if inbox.count >= n {
-                let out = Data(inbox.prefix(n))
-                inbox.removeFirst(n)
-                lock.unlock()
-                return out
-            }
-            let c = closed
-            lock.unlock()
-            if c || Date() > deadline { throw TransferError("closed") }
+            if let out = try take(n) { return out }
+            if Date() > deadline { throw TransferError("timeout") }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
     }

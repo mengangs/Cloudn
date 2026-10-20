@@ -51,6 +51,14 @@ struct SettingsView: View {
                     }
 
                     Section {
+                        Toggle("附加公共 Tracker", isOn: $settings.useExtraTrackers)
+                    } header: {
+                        Text("磁力 / BT")
+                    } footer: {
+                        Text("磁力链接靠 DHT 网络与 Tracker 寻找节点；自带的 Tracker 常已失效，附加几个公共 Tracker 能更快找到节点。BT 只下载不上传；只在应用打开时下载，切到后台约半分钟后暂停，回到前台自动继续。")
+                    }
+
+                    Section {
                         LabeledContent("完成后保存到", value: app.settings.exportFolder?.lastPathComponent ?? "应用下载目录")
                         Button("选择文件夹…") { pickingFolder = true }
                         if app.settings.exportFolderBookmark != nil {

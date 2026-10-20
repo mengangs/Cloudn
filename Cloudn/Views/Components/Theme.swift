@@ -70,7 +70,7 @@ enum Typeface {
 enum Icon: String {
     case link, arrowUp = "arrow-up", plus, paste, download, folder, file, video, image, music, archive, doc, text, cloud, star
     case save, user, gear, search, clock, check, checkCircle = "check-circle", chevronRight = "chevron-right", pause, play
-    case close, trash, lock, refresh, pencil, folderPlus = "folder-plus", move, share, eye, warning, filter, branch, tag, more
+    case close, trash, lock, refresh, pencil, folderPlus = "folder-plus", move, share, eye, warning, filter, branch, tag, more, magnet
 }
 
 extension Image {
@@ -103,6 +103,7 @@ struct PlatformMark: Equatable {
     static func share(_ p: SharePlatform) -> PlatformMark { PlatformMark(name: p.rawValue, isVideo: false) }
     static func video(_ p: VideoPlatform) -> PlatformMark { PlatformMark(name: p.rawValue, isVideo: true) }
     static let github = PlatformMark(name: "github", isVideo: false)
+    static let magnet = PlatformMark(name: "magnet", isVideo: false)
 
     static func account(_ kind: AccountKind) -> PlatformMark {
         PlatformMark(name: kind.rawValue, isVideo: !kind.isDrive)

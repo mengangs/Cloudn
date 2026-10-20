@@ -324,7 +324,9 @@ struct DownloadsView: View {
 
     private func primaryAction(_ item: DownloadItem) {
         switch item.status {
-        case .completed: previewURL = app.downloads.fileURL(item)
+        case .completed:
+            guard let url = app.downloads.fileURL(item) else { return }
+            if url.hasDirectoryPath || Self.isDirectory(url) { Self.revealInFiles(url) } else { previewURL = url }
         case .running, .queued: app.downloads.pause(item)
         case .paused, .failed: app.downloads.resume(item)
         case .merging: break
@@ -334,7 +336,11 @@ struct DownloadsView: View {
     @ViewBuilder
     private func menu(_ item: DownloadItem) -> some View {
         if item.status == .completed, let url = app.downloads.fileURL(item) {
-            Button { previewURL = url } label: { Label("打开", glyph: .eye) }
+            if Self.isDirectory(url) {
+                Button { Self.revealInFiles(url) } label: { Label("在「文件」中查看", glyph: .folder) }
+            } else {
+                Button { previewURL = url } label: { Label("打开", glyph: .eye) }
+            }
             ShareLink(item: url) { Label("分享 / 存储到文件", glyph: .share) }
             if MediaTools.canSaveToPhotos(url) {
                 Button {
@@ -365,6 +371,17 @@ struct DownloadsView: View {
                 Button("删除任务", role: .destructive) { app.downloads.remove(item, deleteFile: true) }
             }
         } label: { Label("删除", glyph: .trash) }
+    }
+
+    /// 多文件种子下完是一个目录：QuickLook 打不开，交给「文件」App 打开那个位置
+    static func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    static func revealInFiles(_ url: URL) {
+        guard let target = URL(string: "shareddocuments://" + url.path) else { return }
+        UIApplication.shared.open(target)
     }
 
     private func refresh(_ item: DownloadItem) {
@@ -570,7 +587,7 @@ struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            FileIcon(name: item.displayName)
+            FileIcon(name: item.displayName, isDirectory: isFolder)
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.displayName)
                     .lineLimit(2)
@@ -606,7 +623,18 @@ struct DownloadRow: View {
         .padding(.vertical, 4)
     }
 
+    /// 多文件种子：产物是目录
+    private var isFolder: Bool {
+        item.outputPath?.hasSuffix("/") == true
+    }
+
     private var statusText: String {
+        if case .torrent = item.request.kind, item.status == .running {
+            if item.totalBytes <= 0 { return "获取种子信息 · \(item.peers) 个节点" }
+            let eta = item.totalBytes > item.receivedBytes && item.speed > 0
+                ? " · " + Humanize.eta(Double(item.totalBytes - item.receivedBytes) / item.speed) : ""
+            return ByteFormat.speed(item.speed) + " · \(item.peers) 个节点" + eta
+        }
         switch item.status {
         case .queued: return "排队中"
         case .running:

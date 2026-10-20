@@ -2,6 +2,7 @@
 import CloudnKit
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// 解析页：输入框停在底部（单手够得着，随键盘上移），上面是收藏与最近记录
 struct ResolveView: View {
@@ -16,6 +17,8 @@ struct ResolveView: View {
     @State private var shareModel: ShareBrowserModel?
     @State private var videoResult: VideoParseResult?
     @State private var githubLink: GitHubLink?
+    @State private var torrentTarget: TorrentTarget?
+    @State private var importingTorrent = false
     @State private var showBookmarks = false
     /// 剪贴板里有链接、且这一条还没处理过
     @State private var clipboardOffer = false
@@ -73,6 +76,10 @@ struct ResolveView: View {
                 case .file: EmptyView()
                 }
             }
+            .navigationDestination(item: $torrentTarget) { TorrentView(target: $0) }
+            .fileImporter(isPresented: $importingTorrent, allowedContentTypes: [.torrent, .data]) { result in
+                if case .success(let url) = result { app.openTorrentFile(url) }
+            }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
                     showBookmarks = false
@@ -84,6 +91,7 @@ struct ResolveView: View {
         .sensoryFeedback(.selection, trigger: detectionKey) { _, new in !new.isEmpty }
         .onAppear(perform: consumePending)
         .onChange(of: app.pendingInput) { _, _ in consumePending() }
+        .onChange(of: app.pendingTorrent) { _, _ in consumePending() }
         .task { await checkClipboard() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             Task { await checkClipboard() }
@@ -97,6 +105,7 @@ struct ResolveView: View {
         case .video(let v): return "v." + v.platform.rawValue
         case .github: return "g"
         case .direct: return "d"
+        case .magnet: return "m"
         case nil: return isKouling ? "k" : ""
         }
     }
@@ -148,6 +157,7 @@ struct ResolveView: View {
         } else if trimmed.isEmpty {
             Menu {
                 Button { showBookmarks = true } label: { Label { Text("从收藏打开") } icon: { Image(icon: .star) } }
+                Button { importingTorrent = true } label: { Label { Text("打开种子文件") } icon: { Image(icon: .magnet) } }
                 Button { focused = true } label: { Label { Text("手动输入") } icon: { Image(icon: .pencil) } }
             } label: {
                 IconView(.plus, size: 18)
@@ -239,6 +249,7 @@ struct ResolveView: View {
         case .share(let s): return .share(s.platform)
         case .video(let v): return .video(v.platform)
         case .github: return .github
+        case .magnet: return .magnet
         case .direct, nil: return isKouling ? .share(.xunlei) : nil
         }
     }
@@ -251,6 +262,7 @@ struct ResolveView: View {
         case .github(.account(let owner)): return "GitHub · \(owner) 的仓库"
         case .github: return "GitHub 仓库"
         case .direct: return "下载直链"
+        case .magnet(let m): return m.displayName.isEmpty ? "磁力链接" : "磁力链接 · " + m.displayName
         case nil: return isKouling ? "迅雷口令" : "没有识别到链接"
         }
     }
@@ -433,6 +445,11 @@ struct ResolveView: View {
     // MARK: 动作
 
     private func consumePending() {
+        if let t = app.pendingTorrent {
+            app.pendingTorrent = nil
+            torrentTarget = t
+            return
+        }
         guard let text = app.pendingInput else { return }
         app.pendingInput = nil
         // 分享扩展会顺手把链接放进剪贴板：已经打开了，就别再提示「剪贴板里有一个链接」
@@ -488,6 +505,8 @@ struct ResolveView: View {
                 app.bookmarks.record(title: trimmed, text: input, source: "GitHub")
                 githubLink = link
             }
+        case .magnet(let magnet):
+            torrentTarget = TorrentTarget(magnet: magnet)
         case .direct(let url):
             let name = URL(string: url).map { u -> String in
                 let last = u.lastPathComponent.removingPercentEncoding ?? u.lastPathComponent

@@ -54,6 +54,10 @@ final class AppSettings {
             if notifyOnFinish && !oldValue { Notifier.requestAuthorizationIfNeeded() }
         }
     }
+    /// BT 下载附加内置的公共 tracker（磁力链接自带的 tracker 常已失效）
+    var useExtraTrackers: Bool {
+        didSet { defaults.set(useExtraTrackers, forKey: "useExtraTrackers"); publish() }
+    }
     /// 多账号下载：批量下载时按文件轮换使用同平台的多个账号
     var multiAccountDownload: Bool {
         didSet { defaults.set(multiAccountDownload, forKey: "multiAccountDownload") }
@@ -122,7 +126,8 @@ final class AppSettings {
             "speedLimitKB": 0,
             "directFirst": true,
             "autoCheckUpdates": true,
-            "liveActivity": true
+            "liveActivity": true,
+            "useExtraTrackers": true
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
         connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
@@ -137,6 +142,7 @@ final class AppSettings {
         liveActivity = defaults.bool(forKey: "liveActivity")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
+        useExtraTrackers = defaults.bool(forKey: "useExtraTrackers")
         multiSourceDownload = defaults.bool(forKey: "multiSourceDownload")
         accentHex = defaults.string(forKey: "accentHex") ?? ""
         githubMirror = defaults.string(forKey: "githubMirror") ?? ""
@@ -153,8 +159,10 @@ final class AppSettings {
     }
 
     private func publish() {
-        snapshot.set(DownloadSettings(maxConcurrentTasks: maxConcurrentTasks, connectionsPerTask: connectionsPerTask, retryCount: retryCount,
-                                      speedLimit: Int64(speedLimitKB) * 1024, connectionsBySource: connectionsBySource))
+        var settings = DownloadSettings(maxConcurrentTasks: maxConcurrentTasks, connectionsPerTask: connectionsPerTask, retryCount: retryCount,
+                                        speedLimit: Int64(speedLimitKB) * 1024, connectionsBySource: connectionsBySource)
+        settings.useExtraTrackers = useExtraTrackers
+        snapshot.set(settings)
     }
 }
 

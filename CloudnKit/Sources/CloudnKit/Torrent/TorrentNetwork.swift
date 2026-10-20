@@ -124,18 +124,21 @@ final class NWPeerStream: PeerStream, @unchecked Sendable {
 
     func receive(exactly n: Int, timeout: TimeInterval) async throws -> Data {
         while true {
-            lock.lock()
-            if buffer.count >= n {
-                let out = Data(buffer.prefix(n))
-                buffer.removeFirst(n)
-                lock.unlock()
-                return out
-            }
-            lock.unlock()
+            if let out = take(n) { return out }
             let chunk = try await TorrentTimeout.run(timeout) { try await self.readSome() }
-            lock.lock(); buffer.append(chunk); lock.unlock()
+            append(chunk)
         }
     }
+
+    private func take(_ n: Int) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        guard buffer.count >= n else { return nil }
+        let out = Data(buffer.prefix(n))
+        buffer.removeFirst(n)
+        return out
+    }
+
+    private func append(_ chunk: Data) { lock.lock(); buffer.append(chunk); lock.unlock() }
 
     private func readSome() async throws -> Data {
         try await withTaskCancellationHandler {
