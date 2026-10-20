@@ -18,16 +18,13 @@ struct SettingsView: View {
                         Stepper(value: $settings.maxConcurrentTasks, in: 1...5) {
                             LabeledContent("同时下载任务", value: "\(settings.maxConcurrentTasks)")
                         }
-                        Stepper(value: $settings.connectionsPerTask, in: 1...16) {
-                            LabeledContent("单任务连接数", value: "\(settings.connectionsPerTask)")
-                        }
                         Stepper(value: $settings.retryCount, in: 0...10) {
                             LabeledContent("失败自动重试", value: "\(settings.retryCount) 次")
                         }
                         Picker("下载限速", selection: $settings.speedLimitKB) {
                             ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
                         }
-                        NavigationLink("按平台设置连接数") { PlatformConnectionsView() }
+                        NavigationLink("连接数（按平台）") { PlatformConnectionsView() }
                         Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
                         Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
                         Toggle("锁屏与灵动岛显示进度", isOn: $settings.liveActivity)

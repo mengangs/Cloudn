@@ -14,9 +14,6 @@ final class AppSettings {
     var maxConcurrentTasks: Int {
         didSet { defaults.set(maxConcurrentTasks, forKey: "maxConcurrentTasks"); publish() }
     }
-    var connectionsPerTask: Int {
-        didSet { defaults.set(connectionsPerTask, forKey: "connectionsPerTask"); publish() }
-    }
     var retryCount: Int {
         didSet { defaults.set(retryCount, forKey: "retryCount"); publish() }
     }
@@ -131,7 +128,6 @@ final class AppSettings {
     init() {
         defaults.register(defaults: [
             "maxConcurrentTasks": 3,
-            "connectionsPerTask": 8,
             "clipboardHint": true,
             "autoSaveToPhotos": false,
             "notifyOnFinish": true,
@@ -144,7 +140,6 @@ final class AppSettings {
             "proxyPort": 7890
         ])
         maxConcurrentTasks = min(5, max(1, defaults.integer(forKey: "maxConcurrentTasks")))
-        connectionsPerTask = min(16, max(1, defaults.integer(forKey: "connectionsPerTask")))
         retryCount = min(10, max(0, defaults.integer(forKey: "retryCount")))
         speedLimitKB = max(0, defaults.integer(forKey: "speedLimitKB"))
         connectionsBySource = defaults.dictionary(forKey: "connectionsBySource") as? [String: Int] ?? [:]
@@ -188,7 +183,7 @@ final class AppSettings {
     }
 
     private func publish() {
-        var settings = DownloadSettings(maxConcurrentTasks: maxConcurrentTasks, connectionsPerTask: connectionsPerTask, retryCount: retryCount,
+        var settings = DownloadSettings(maxConcurrentTasks: maxConcurrentTasks, retryCount: retryCount,
                                         speedLimit: Int64(speedLimitKB) * 1024, connectionsBySource: connectionsBySource)
         settings.useExtraTrackers = useExtraTrackers
         snapshot.set(settings)
