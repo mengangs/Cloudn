@@ -18,12 +18,14 @@ struct TorrentTarget: Hashable, Identifiable {
 struct TorrentView: View {
     @Environment(AppModel.self) private var app
     let target: TorrentTarget
-    @State private var info: TorrentInfo?
-    @State private var errorMessage: String?
-    @State private var peers = (connected: 0, known: 0)
-    @State private var note = ""
     @State private var selected = Set<Int>()
-    @State private var attempt = 0
+
+    /// 查找在应用层进行：离开本页不中断，回来接着看
+    private var status: TorrentFetchStore.Status { app.torrents.status(target.magnet) }
+    private var info: TorrentInfo? { status.info }
+    private var errorMessage: String? { status.error }
+    private var peers: (connected: Int, known: Int) { (status.connected, status.known) }
+    private var note: String { status.note }
 
     private var files: [TorrentFile] { info?.visibleFiles ?? [] }
     private var selectedSize: Int64 { files.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.length } }
@@ -40,8 +42,7 @@ struct TorrentView: View {
                     fileSection(info)
                 } else if let errorMessage {
                     EmptyStateCard(icon: .warning, title: "没有拿到种子信息", detail: errorMessage, actionTitle: "重试") {
-                        self.errorMessage = nil
-                        attempt += 1
+                        app.torrents.start(target.magnet)
                     }
                 } else {
                     loadingCard
@@ -71,7 +72,17 @@ struct TorrentView: View {
             if info != nil { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
         }
         .sensoryFeedback(.selection, trigger: selected)
-        .task(id: attempt) { await load() }
+        .onAppear {
+            // 一打开就记进「最近」：还没拿到种子信息就退出，也能从解析页找回来
+            if info == nil { app.bookmarks.record(title: title, text: target.magnet.uri, source: "磁力链接") }
+            app.torrents.start(target.magnet)
+            if let info, selected.isEmpty { selected = Set(info.visibleFiles.map(\.id)) }
+        }
+        .onChange(of: info?.hexHash) { _, _ in
+            guard let info else { return }
+            selected = Set(info.visibleFiles.map(\.id))
+            app.bookmarks.record(title: info.name, text: target.magnet.uri, source: "磁力链接")
+        }
     }
 
     // MARK: 头部
@@ -118,10 +129,15 @@ struct TorrentView: View {
             if !note.isEmpty {
                 Text(note).font(.caption.monospacedDigit()).foregroundStyle(Color.ink3)
             }
-            Text("热门资源通常几秒内就绪；冷门资源可能要等几分钟，可以先离开此页，回来时继续。")
+            Text("热门资源通常几秒内就绪；冷门资源可能要等几分钟。离开此页会在后台继续查找，可从解析页「最近」回到这里；也可以不等，直接下载全部。")
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
                 .fixedSize(horizontal: false, vertical: true)
+            Button(action: downloadWithoutWaiting) {
+                Label("直接下载全部", glyph: .download).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
+            .padding(.top, 4)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -205,23 +221,23 @@ struct TorrentView: View {
 
     // MARK: 动作
 
-    private func load() async {
-        let cache = app.downloads.engine.torrentCacheDirectory
-        let trackers = app.settings.useExtraTrackers ? TorrentDefaults.publicTrackers : []
-        do {
-            let result = try await TorrentMetadata.fetch(target.magnet, cacheDirectory: cache, extraTrackers: trackers) { connected, known, status in
-                Task { @MainActor in
-                    peers = (connected, known)
-                    note = status
-                }
-            }
-            try Task.checkCancellation()
-            info = result
-            selected = Set(result.visibleFiles.map(\.id))
-            app.bookmarks.record(title: result.name, text: target.magnet.uri, source: "磁力链接")
-        } catch is CancellationError {
-        } catch {
-            if !Task.isCancelled { errorMessage = error.localizedDescription }
+    /// 不等种子信息：直接建下载任务（下载任务自己去取，进度与节点数在下载页看）
+    private func downloadWithoutWaiting() {
+        guard !isQueued(target.magnet) else {
+            app.show("这个种子已在下载列表中")
+            return
+        }
+        app.torrents.cancel(target.magnet)
+        let dn = target.magnet.displayName.trimmingCharacters(in: .whitespaces)
+        let name = dn.isEmpty ? "磁力链接 " + String(target.magnet.hexHash.prefix(8)) : dn
+        app.downloads.enqueue(DownloadRequest(url: target.magnet.uri, fileName: name, kind: .torrent(files: nil), source: "磁力链接"))
+        app.show("已添加到下载，种子信息在下载列表里继续获取")
+    }
+
+    private func isQueued(_ magnet: MagnetLink) -> Bool {
+        app.downloads.items.contains { item in
+            if case .torrent = item.request.kind, item.request.url.contains(magnet.hexHash), item.status != .failed, item.status != .completed { return true }
+            return false
         }
     }
 
@@ -231,11 +247,7 @@ struct TorrentView: View {
         let all = Set(ids).isSubset(of: selected)
         // 链接里带上种子名，任务在元数据缓存丢失时也有个像样的名字
         let magnet = MagnetLink(infoHash: target.magnet.infoHash, displayName: info.name, trackers: target.magnet.trackers)
-        let pending = app.downloads.items.contains { item in
-            if case .torrent = item.request.kind, item.request.url.contains(magnet.hexHash), item.status != .failed, item.status != .completed { return true }
-            return false
-        }
-        guard !pending else {
+        guard !isQueued(magnet) else {
             app.show("这个种子已在下载列表中")
             return
         }

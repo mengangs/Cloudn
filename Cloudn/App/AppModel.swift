@@ -25,6 +25,7 @@ final class AppModel {
     let bookmarks: BookmarkStore
     let downloads: DownloadStore
     let uploads: UploadStore
+    let torrents: TorrentFetchStore
     @ObservationIgnored let resolvers: ShareResolvers
     @ObservationIgnored let videoService: VideoParseService
     @ObservationIgnored let background: BackgroundTransfers
@@ -62,6 +63,8 @@ final class AppModel {
         let engine = DownloadEngine(baseDirectory: support, downloadsDirectory: documents) { snapshot.get() }
         background = BackgroundTransfers(engine: engine, staging: support.appendingPathComponent("background", isDirectory: true))
         downloads = DownloadStore(engine: engine, resolvers: resolvers, videoService: videoService, background: background)
+        torrents = TorrentFetchStore(cacheDirectory: engine.torrentCacheDirectory,
+                                     extraTrackers: { [settings] in settings.useExtraTrackers ? TorrentDefaults.publicTrackers : [] })
         background.reconcile()
 
         let resolvers = self.resolvers
