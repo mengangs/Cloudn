@@ -2,6 +2,7 @@
 import CloudnKit
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
@@ -153,8 +154,8 @@ struct SettingsView: View {
         .paperList()
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $pickingFolder) {
-            FolderPicker { app.settings.setExportFolder($0) }
+        .documentPicker(isPresented: $pickingFolder, types: [.folder]) { urls in
+            if let url = urls.first { app.settings.setExportFolder(url) }
         }
     }
 }

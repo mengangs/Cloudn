@@ -3,39 +3,70 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// 系统文件选择器（UIDocumentPickerViewController）。
-/// SwiftUI 的 .fileImporter 在同一条导航栈里挂了多个时只有一个生效（「我的」页已有导入备份），
-/// 选完点「打开」没反应；这里每次单独弹出，互不干扰
-struct DocumentPicker: UIViewControllerRepresentable {
+/// 系统文件选择器（UIDocumentPickerViewController），由 UIKit 直接弹出。
+/// - SwiftUI 的 .fileImporter 在同一条导航栈里挂了多个时只有一个生效（「我的」页已有导入备份）；
+/// - 把选择器包进 SwiftUI 的 sheet 里，选完点「打开」也可能没反应（选择器要自己收起，却不是被直接弹出的）。
+/// 所以这里从最上层的界面直接 present，选完 / 取消后由系统收起，再回调
+private struct DocumentPickerPresenter: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
     let types: [UTType]
-    var multiple = false
+    let multiple: Bool
     let onPick: ([URL]) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+    func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+
+    func updateUIViewController(_ host: UIViewController, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        guard isPresented, coordinator.picker == nil else { return }
         // asCopy: false —— 拿到原文件（安全作用域），大文件不必先复制一份
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
         picker.allowsMultipleSelection = multiple
-        picker.delegate = context.coordinator
-        return picker
+        picker.delegate = coordinator
+        coordinator.picker = picker
+        // 等这一轮界面更新结束再弹，避免与 SwiftUI 的转场冲突
+        DispatchQueue.main.async {
+            guard let top = Self.topController(from: host) else { return coordinator.finish(nil) }
+            top.present(picker, animated: true)
+            picker.presentationController?.delegate = coordinator
+        }
     }
 
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+    static func topController(from host: UIViewController) -> UIViewController? {
+        var top = host.view.window?.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top
+    }
 
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: ([URL]) -> Void
-        init(onPick: @escaping ([URL]) -> Void) { self.onPick = onPick }
+    final class Coordinator: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
+        var parent: DocumentPickerPresenter
+        var picker: UIDocumentPickerViewController?
 
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { onPick(urls) }
+        init(_ parent: DocumentPickerPresenter) { self.parent = parent }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { finish(urls) }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finish(nil) }
+        /// 下滑收起
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { finish(nil) }
+
+        func finish(_ urls: [URL]?) {
+            guard picker != nil else { return }
+            picker = nil
+            parent.isPresented = false
+            if let urls, !urls.isEmpty { parent.onPick(urls) }
+        }
     }
 }
 
 extension View {
-    /// 用系统文件选择器选文件（sheet 方式弹出）
+    /// 用系统文件选择器选文件 / 文件夹
     func documentPicker(isPresented: Binding<Bool>, types: [UTType], multiple: Bool = false, onPick: @escaping ([URL]) -> Void) -> some View {
-        sheet(isPresented: isPresented) {
-            DocumentPicker(types: types, multiple: multiple, onPick: onPick).ignoresSafeArea()
-        }
+        background(
+            DocumentPickerPresenter(isPresented: isPresented, types: types, multiple: multiple, onPick: onPick)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        )
     }
 }
