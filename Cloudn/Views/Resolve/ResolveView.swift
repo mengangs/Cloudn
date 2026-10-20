@@ -20,6 +20,10 @@ struct ResolveView: View {
     @State private var torrentTarget: TorrentTarget?
     @State private var importingTorrent = false
     @State private var showBookmarks = false
+    /// 网页嗅探打开的地址
+    @State private var sniffTarget: SniffTarget?
+    /// 平台解析失败后，询问是否改用网页嗅探
+    @State private var sniffOffer: SniffOffer?
     /// 剪贴板里有链接、且这一条还没处理过
     @State private var clipboardOffer = false
     /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次
@@ -79,6 +83,13 @@ struct ResolveView: View {
             .navigationDestination(item: $torrentTarget) { TorrentView(target: $0) }
             .documentPicker(isPresented: $importingTorrent, types: [.torrent, .data]) { urls in
                 if let url = urls.first { app.openTorrentFile(url) }
+            }
+            .fullScreenCover(item: $sniffTarget) { SnifferView(url: $0.url) }
+            .alert(sniffOffer?.message ?? "", isPresented: Binding(get: { sniffOffer != nil }, set: { if !$0 { sniffOffer = nil } })) {
+                Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("可以在网页里打开这个链接，播放后自动抓取视频地址下载。")
             }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
@@ -261,7 +272,7 @@ struct ResolveView: View {
         case .github(.file): return "GitHub 文件 · 直接下载"
         case .github(.account(let owner)): return "GitHub · \(owner) 的仓库"
         case .github: return "GitHub 仓库"
-        case .direct: return "下载直链"
+        case .direct: return "链接 · 文件直接下载，网页则嗅探其中的视频"
         case .magnet(let m): return m.displayName.isEmpty ? "磁力链接" : "磁力链接 · " + m.displayName
         case nil: return isKouling ? "迅雷口令" : "没有识别到链接"
         }
@@ -493,12 +504,20 @@ struct ResolveView: View {
         case .video(let link):
             let text = input
             run {
-                let result = try await app.videoService.parse(link)
-                try Task.checkCancellation()
-                guard !result.medias.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
-                app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
-                                     text: text, source: result.platform.displayName)
-                videoResult = result
+                do {
+                    let result = try await app.videoService.parse(link)
+                    try Task.checkCancellation()
+                    guard !result.medias.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
+                    app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
+                                         text: text, source: result.platform.displayName)
+                    videoResult = result
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // 专门的解析失败时，退一步用网页嗅探试试
+                    guard !Task.isCancelled else { throw error }
+                    sniffOffer = SniffOffer(url: link.url, message: error.localizedDescription)
+                }
             }
         case .github(let link):
             if case .file(let url, let name) = link {
@@ -511,17 +530,45 @@ struct ResolveView: View {
         case .magnet(let magnet):
             torrentTarget = TorrentTarget(magnet: magnet)
         case .direct(let url):
-            let name = URL(string: url).map { u -> String in
-                let last = u.lastPathComponent.removingPercentEncoding ?? u.lastPathComponent
-                return last.isEmpty || last == "/" ? (u.host ?? "download") : last
-            } ?? "download"
-            let kind: DownloadKind = url.lowercased().contains(".m3u8") ? .hls : .file
-            app.downloads.enqueue(DownloadRequest(url: url, headers: ["User-Agent": VideoHTTP.uaChrome],
-                                                  fileName: kind == .hls ? (name as NSString).deletingPathExtension + ".mp4" : name,
-                                                  kind: kind, source: "直链"))
-            app.show("已添加到下载")
-            input = ""
+            if Self.mayBeWebPage(url) {
+                run {
+                    if try await Self.isWebPage(url) {
+                        sniffTarget = SniffTarget(url: url)
+                    } else {
+                        enqueueDirect(url)
+                    }
+                }
+            } else {
+                enqueueDirect(url)
+            }
         }
+    }
+
+    /// 地址没有文件扩展名，或扩展名是网页类（html / php …），可能是网页而不是文件
+    private static func mayBeWebPage(_ url: String) -> Bool {
+        guard let u = URL(string: url) else { return false }
+        let ext = u.pathExtension.lowercased()
+        return ext.isEmpty || ["html", "htm", "shtml", "php", "asp", "aspx", "jsp", "do", "action"].contains(ext)
+    }
+
+    /// 取开头一小段看是不是 HTML
+    private static func isWebPage(_ url: String) async throws -> Bool {
+        let head = try await HTTPClient.fetchPrefix(url, headers: [("User-Agent", VideoHTTP.uaIPhone)], limit: 2048)
+        let text = String(decoding: head.data, as: UTF8.self).lowercased()
+        return text.contains("<html") || text.contains("<!doctype html") || text.contains("<head")
+    }
+
+    private func enqueueDirect(_ url: String) {
+        let name = URL(string: url).map { u -> String in
+            let last = u.lastPathComponent.removingPercentEncoding ?? u.lastPathComponent
+            return last.isEmpty || last == "/" ? (u.host ?? "download") : last
+        } ?? "download"
+        let kind: DownloadKind = url.lowercased().contains(".m3u8") ? .hls : .file
+        app.downloads.enqueue(DownloadRequest(url: url, headers: ["User-Agent": VideoHTTP.uaChrome],
+                                              fileName: kind == .hls ? (name as NSString).deletingPathExtension + ".mp4" : name,
+                                              kind: kind, source: "直链"))
+        app.show("已添加到下载")
+        input = ""
     }
 
     /// 后台执行一次解析；发送键变成可取消的进度环
@@ -602,4 +649,16 @@ private struct HistoryRow: View {
             IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)
         }
     }
+}
+
+/// 网页嗅探要打开的地址
+private struct SniffTarget: Identifiable {
+    let url: String
+    var id: String { url }
+}
+
+/// 解析失败后的嗅探提议
+private struct SniffOffer {
+    let url: String
+    let message: String
 }
