@@ -20,6 +20,15 @@ struct WebLoginView: View {
                     .animation(.easeOut(duration: 0.3), value: store.progress < 1)
                 LoginWebView(kind: kind, store: store)
                     .overlay {
+                        if store.loadError == nil && !store.committed {
+                            VStack(spacing: 10) {
+                                Spinner()
+                                Text("正在打开 \(kind.loginURL.host ?? "登录页")…").font(.footnote).foregroundStyle(Color.ink3)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.surface)
+                            .allowsHitTesting(false)
+                        }
                         if let error = store.loadError {
                             VStack(spacing: 12) {
                                 IconView(.warning, size: 28).foregroundStyle(Color.clayInk)
@@ -57,6 +66,11 @@ struct WebLoginView: View {
                     }
                 }
             }
+        }
+        .task(id: store.attempt) {
+            // 连接被静默丢弃时网页既不报错也不显示：20 秒还没收到页面就当超时
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            if !store.committed && store.loadError == nil { store.timedOut(kind.loginURL) }
         }
         .task {
             hint = switch kind {
@@ -105,6 +119,10 @@ final class WebLoginStore {
     var progress: Double = 0
     /// 页面加载失败的说明（内嵌网页加载失败时只会是一片空白，得自己显示出来）
     var loadError: String?
+    /// 已收到页面（开始渲染）；之前显示「正在打开」
+    var committed = false
+    /// 每次重试加一，用来重新计时
+    var attempt = 0
     @ObservationIgnored let dataStore: WKWebsiteDataStore = {
         let store = WKWebsiteDataStore.nonPersistent()
         store.useAppProxy()
@@ -114,7 +132,16 @@ final class WebLoginStore {
 
     func reload(_ url: URL) {
         loadError = nil
+        committed = false
+        attempt += 1
+        Log.info("网页登录：重试打开 \(url.absoluteString)")
         webView?.load(URLRequest(url: url))
+    }
+
+    func timedOut(_ url: URL) {
+        Log.error("网页登录：打开 \(url.host ?? "") 超时（20 秒没有收到页面）")
+        webView?.stopLoading()
+        loadError = "连接 \(url.host ?? "登录页") 超时，没有收到页面。\n\n海外平台在国内网络下无法直接访问，请开启 VPN（全局或让该网站走代理），或在「设置 › 网络代理」里填写代理"
     }
 
     func failed(_ error: Error) {
@@ -122,6 +149,7 @@ final class WebLoginStore {
         // 主动取消、被新的跳转打断都不算失败
         if e.domain == NSURLErrorDomain && e.code == NSURLErrorCancelled { return }
         if e.domain == "WebKitErrorDomain" && e.code == 102 { return }
+        Log.error("网页登录：页面加载失败 \(e.domain) \(e.code) \(e.localizedDescription)")
         var message = e.localizedDescription
         if e.domain == NSURLErrorDomain, [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
                                           NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed].contains(e.code) {
@@ -246,7 +274,35 @@ struct LoginWebView: UIViewRepresentable {
         weak var store: WebLoginStore?
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            Log.info("网页登录：开始打开 \(webView.url?.absoluteString ?? "")")
             Task { @MainActor in store?.loadError = nil }
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                     decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+            if navigationResponse.isForMainFrame, let http = navigationResponse.response as? HTTPURLResponse {
+                Log.info("网页登录：HTTP \(http.statusCode) \(http.url?.absoluteString ?? "")")
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            Task { @MainActor in store?.committed = true }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            Task { @MainActor in store?.committed = true }
+            // 页面加载完却没有内容（脚本出错、被拦截）：记下来便于排查
+            let probe = "(document.body ? document.body.innerText.length + ' 字 / ' + document.body.children.length + ' 个元素' : '没有 body') + ' · ' + navigator.userAgent"
+            webView.evaluateJavaScript(probe) { value, _ in
+                Log.info("网页登录：加载完成 \(webView.url?.host ?? "") 内容 \((value as? String) ?? "?")")
+            }
+        }
+
+        /// 网页进程被系统回收：会白屏，自动重新加载
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            Log.error("网页登录：网页进程意外退出，重新加载")
+            webView.reload()
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
