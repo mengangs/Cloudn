@@ -394,6 +394,9 @@ public actor DownloadEngine {
 
     /// 开始前估算还要占用的存储空间（未知返回 0，不检查）：
     /// 普通文件为剩余字节；m3u8 拼接后还要转封装、分轨还要合并，按两倍估
+    /// 预估大小来自解析结果（码率 × 时长等），可能离谱地大：× 2 溢出时按最大值算（反正空间肯定不够）
+    private static func doubled(_ size: Int64) -> Int64 { size > Int64.max / 2 ? Int64.max : size * 2 }
+
     static func estimatedSpace(kind: DownloadKind, expected: Int64, total: Int64, received: Int64, phase: Int = 0) -> Int64 {
         let size = total > 0 ? total : expected
         guard size > 0 else { return 0 }
@@ -401,9 +404,9 @@ public actor DownloadEngine {
         case .file, .torrent:
             return max(0, size - received)
         case .hls:
-            return expected > 0 ? max(0, expected * 2 - received) : 0
+            return expected > 0 ? max(0, doubled(expected) - received) : 0
         case .dash:
-            return phase == 0 && expected > 0 ? max(0, expected * 2 - received) : 0
+            return phase == 0 && expected > 0 ? max(0, doubled(expected) - received) : 0
         }
     }
 

@@ -177,7 +177,7 @@ struct TwitchParser: VideoParser {
                 url += "\(sep)sig=\(signature.urlQueryEncoded)&token=\(value.urlQueryEncoded)"
             }
             let quality = entry.item["quality"].string
-            let fps = Int(entry.fps.rounded())
+            let fps = Int(saturating: entry.fps.rounded())
             let label = Int(quality) == nil ? quality : (fps > 30 ? "\(quality)P\(fps)" : "\(quality)P")
             return ClipStream(url: url, quality: label)
         }

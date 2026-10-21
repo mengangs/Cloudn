@@ -9,6 +9,8 @@ struct AccountsView: View {
     @State private var passwordKind: AccountKind?
     @State private var drivePlatform: SharePlatform?
     @State private var listKind: AccountKind?
+    /// 在账号列表里点了「添加账号」：等列表收起（onDismiss）后再弹登录页
+    @State private var addAfterList: AccountKind?
     @State private var logoutKind: AccountKind?
     @State private var exporting = false
     @State private var importing = false
@@ -111,14 +113,16 @@ struct AccountsView: View {
                 PasswordLoginView(kind: kind)
             }
             .navigationDestination(item: $drivePlatform) { MyDriveView(platform: $0) }
-            .sheet(item: $listKind) { kind in
+            // 同一时刻只能展示一个 sheet：列表完全收起后再弹登录页（固定延时在慢设备上会赶在收起之前，登录页弹不出来）
+            .sheet(item: $listKind, onDismiss: {
+                guard let add = addAfterList else { return }
+                addAfterList = nil
+                app.accounts.pendingAdd = add
+                startLogin(add)
+            }) { kind in
                 AccountListView(kind: kind) { add in
+                    addAfterList = add
                     listKind = nil
-                    // 等账号列表收起后再弹登录页（同一时刻只能展示一个 sheet）
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        app.accounts.pendingAdd = add
-                        startLogin(add)
-                    }
                 }
             }
         }
@@ -392,10 +396,13 @@ struct ManualCookieView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if saving { Spinner() } else {
                         Button("保存") {
+                            guard !saving else { return }
                             saving = true
+                            error = nil
+                            let value = cookie.trimmingCharacters(in: .whitespacesAndNewlines)
                             Task {
                                 defer { saving = false }
-                                if let name = await app.accounts.login(kind, cookie: cookie) {
+                                if let name = await app.accounts.login(kind, cookie: value) {
                                     app.show("已登录：\(name)")
                                     dismiss()
                                 } else {
@@ -403,11 +410,14 @@ struct ManualCookieView: View {
                                 }
                             }
                         }
-                        .disabled(cookie.isEmpty)
+                        .disabled(cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
         }
+        // 校验途中不让下滑关掉（结果回来时页面已不在）
+        .interactiveDismissDisabled(saving)
     }
 }
 

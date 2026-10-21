@@ -18,26 +18,35 @@ struct BookmarksView: View {
                 Group {
                     ForEach(app.bookmarks.bookmarks) { b in
                         Button { onOpen(b) } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(b.title).foregroundStyle(Color.ink).lineLimit(2)
-                                Text("\(b.source) · \(b.createdAt.formatted(date: .numeric, time: .omitted))")
-                                    .font(.caption).foregroundStyle(Color.ink3)
+                            HStack(spacing: 12) {
+                                // 与解析页「最近」一致：前面是平台图标
+                                if let mark = ResolveView.mark(for: b.text) {
+                                    PlatformTile(mark: mark, size: 32)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.fillMuted).frame(width: 32, height: 32)
+                                        .overlay { IconView(.link, size: 16).foregroundStyle(Color.ink) }
+                                }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(b.title).foregroundStyle(Color.ink).lineLimit(2)
+                                    Text("\(b.source) · \(b.createdAt.formatted(date: .numeric, time: .omitted))")
+                                        .font(.caption).foregroundStyle(Color.ink3)
+                                }
                             }
                         }
                         .swipeActions {
                             Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
-                                .tint(Color.clayInk)
+                                .tint(Color.swipeDestructive)
                             Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
-                                .tint(Color.ink2)
+                                .tint(Color.swipeNeutral)
                         }
                         .contextMenu {
-                            Button { Clipboard.copy(b.text); app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
+                            Button { Clipboard.copy(b.text); app.show("已复制链接") } label: { Label("复制链接", glyph: .link) }
                             Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
                             Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
                         }
                     }
                 }
-                .listRowBackground(Color.surface)
+                .paperRow()
             }
             .paperList()
             .navigationTitle("收藏")
@@ -49,8 +58,10 @@ struct BookmarksView: View {
                 TextField("名称", text: $newTitle)
                 Button("取消", role: .cancel) {}
                 Button("保存") {
-                    if let r = renaming, !newTitle.isEmpty { app.bookmarks.rename(r.id, title: newTitle) }
+                    let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let r = renaming, !title.isEmpty { app.bookmarks.rename(r.id, title: title) }
                 }
+                .disabled(newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }

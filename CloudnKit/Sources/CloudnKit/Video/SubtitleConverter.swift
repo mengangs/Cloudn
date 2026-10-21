@@ -56,8 +56,14 @@ public enum SubtitleConverter {
         return s.count >= width ? s : String(repeating: "0", count: width - s.count) + s
     }
 
+    /// 时间上限（约 100 年）：字幕文件 / 接口里的时间不可信，超大值、负数、inf / nan 都夹到 0...上限，
+    /// 后面的加减比较（开始 + 时长、相邻两条之差）才不会溢出崩溃
+    static let maxMilliseconds = 100 * 365 * 24 * 3600 * 1000
+
+    static func clampMilliseconds(_ ms: Int) -> Int { min(max(0, ms), maxMilliseconds) }
+
     static func milliseconds(_ seconds: Double) -> Int {
-        Int((seconds * 1000).rounded())
+        clampMilliseconds(Int(saturating: (seconds * 1000).rounded()))
     }
 
     static func decodeText(_ data: Data) -> String? {
@@ -182,10 +188,10 @@ public enum SubtitleConverter {
             let raw = segs.map { $0["utf8"].string }.joined()
             let lines = raw.components(separatedBy: "\n").map { $0.trimmed }.filter { !$0.isEmpty }
             guard !lines.isEmpty else { continue }
-            let start = e["tStartMs"].int
-            var end = start + e["dDurationMs"].int
+            let start = clampMilliseconds(e["tStartMs"].int)
+            var end = start + clampMilliseconds(e["dDurationMs"].int)
             if !e.has("dDurationMs") {
-                let next = i + 1 < events.count ? events[i + 1]["tStartMs"].int : 0
+                let next = i + 1 < events.count ? clampMilliseconds(events[i + 1]["tStartMs"].int) : 0
                 end = next > start ? next : start + 2000
             }
             cues.append(Cue(start: start, end: end, text: lines.joined(separator: "\n")))

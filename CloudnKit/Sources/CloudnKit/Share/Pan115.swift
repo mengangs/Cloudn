@@ -963,7 +963,8 @@ extension Pan115Resolver: DriveUploader {
         guard parts.count == 2,
               let start = Int64(parts[0].trimmingCharacters(in: .whitespaces)),
               let end = Int64(parts[1].trimmingCharacters(in: .whitespaces)),
-              start >= 0, end >= start else { return nil }
+              // end - start + 1 要算长度：end 为 Int64.max 时会溢出崩溃
+              start >= 0, end >= start, end < Int64.max else { return nil }
         return (start, end)
     }
 

@@ -78,7 +78,8 @@ struct MediaPreviewView: View {
         .background(Color.black.opacity(DismissDrag.backdrop(dragY)).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .presentationBackground(.clear)
-        .onAppear(perform: startPlayer)
+        // onAppear 可能不止一次（画中画回来等）：已有播放器就不重建，免得从头播放
+        .onAppear { if player == nil && failure == nil { startPlayer() } }
         .onDisappear { player?.pause() }
     }
 

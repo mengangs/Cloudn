@@ -14,7 +14,8 @@ struct DownloadsView: View {
     @State private var deleting: DownloadItem?
     @State private var confirmClear = false
     @State private var refreshing = Set<UUID>()
-    @State private var samples: [Double] = []
+    /// 速度曲线的采样单独放在一个可观察对象里：只有汇总卡片读它，每秒采样不会让整个列表重绘
+    @State private var speed = SpeedSampler()
     /// 展开的分组
     @State private var expanded = Set<UUID>()
     /// 正在看调试信息的任务
@@ -94,7 +95,7 @@ struct DownloadsView: View {
             }
         }
         // 不用 destructive 角色：那会让列表立刻播放「删除这一行」的动画，确认框随行一起消失、行又弹回来和别的卡片重叠
-        .modifier(SwipeAction(edge: .trailing, action: selecting ? nil : SwipeAction.Item(title: "删除", glyph: .trash, tint: Color.clayInk) {
+        .modifier(SwipeAction(edge: .trailing, action: selecting ? nil : SwipeAction.Item(title: "删除", glyph: .trash, tint: Color.swipeDestructive) {
             deleting = item
         }))
         .modifier(SwipeAction(edge: .leading, action: selecting ? nil : leadingAction(item)))
@@ -106,10 +107,10 @@ struct DownloadsView: View {
     /// 右滑：下载中给「暂停」，暂停 / 失败给「继续」，已完成没有（不注册空的右滑，免得出现错位的按钮）
     private func leadingAction(_ item: DownloadItem) -> SwipeAction.Item? {
         if item.status.isActive {
-            return SwipeAction.Item(title: "暂停", glyph: .pause, tint: Color.ink2) { app.downloads.pause(item) }
+            return SwipeAction.Item(title: "暂停", glyph: .pause, tint: Color.swipeNeutral) { app.downloads.pause(item) }
         }
         if item.status == .paused || item.status == .failed {
-            return SwipeAction.Item(title: "继续", glyph: .play, tint: Color.success) { app.downloads.resume(item) }
+            return SwipeAction.Item(title: "继续", glyph: .play, tint: Color.swipePositive) { app.downloads.resume(item) }
         }
         return nil
     }
@@ -170,7 +171,7 @@ struct DownloadsView: View {
         NavigationStack {
             List {
                 if !app.downloads.items.isEmpty {
-                    SummaryCard(items: app.downloads.items, samples: samples)
+                    SummaryCard(items: app.downloads.items, sampler: speed)
                         .plainListRow(top: 4, bottom: 6)
                     filterChips
                         .plainListRow(top: 4, bottom: 8)
@@ -198,15 +199,21 @@ struct DownloadsView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if selecting {
-                        Button(selection.count == items.count ? "全不选" : "全选") {
-                            selection = selection.count == items.count ? [] : Set(items.map(\.id))
+                        // 按当前筛选下的任务判断（selection 里可能还留着别的筛选下选中的、或已被删掉的任务）
+                        let visible = Set(items.map(\.id))
+                        let allOn = !visible.isEmpty && visible.isSubset(of: selection)
+                        Button(allOn ? "全不选" : "全选") {
+                            if allOn { selection.subtract(visible) } else { selection.formUnion(visible) }
                         }
+                        .disabled(visible.isEmpty)
                         Button("完成") { withAnimation(.snappy(duration: 0.25)) { selecting = false; selection = [] } }.fontWeight(.semibold)
                     } else {
                         Menu {
                             Button { withAnimation(.snappy(duration: 0.25)) { selecting = true } } label: { Label("选择", glyph: .checkCircle) }
                             Button { app.downloads.resumeAll() } label: { Label("全部继续", glyph: .play) }
+                                .disabled(!app.downloads.items.contains { $0.status == .paused || $0.status == .failed })
                             Button { app.downloads.pauseAll() } label: { Label("全部暂停", glyph: .pause) }
+                                .disabled(!app.downloads.items.contains { $0.status.isActive })
                             Button(role: .destructive) { confirmClear = true } label: {
                                 Label("清除已完成记录", glyph: .trash)
                             }
@@ -229,7 +236,7 @@ struct DownloadsView: View {
                 if selecting { selectionBar.padding(.horizontal, 16).padding(.bottom, 8) }
             }
             .sensoryFeedback(.selection, trigger: selection)
-            .task { await sampleSpeed() }
+            .task { await speed.run(app.downloads) }
             .fullScreenCover(item: Binding(get: { previewURL.map(IdentifiedURL.init) }, set: { previewURL = $0?.url })) { item in
                 FilePreviewView(url: item.url)
             }
@@ -303,8 +310,10 @@ struct DownloadsView: View {
         let chosen = app.downloads.items.filter { selection.contains($0.id) }
         app.downloads.remove(chosen, deleteFile: deleteFiles)
         app.show("已删除 \(chosen.count) 个任务")
-        selection = []
-        selecting = false
+        withAnimation(.snappy(duration: 0.25)) {
+            selection = []
+            selecting = false
+        }
     }
 
     private var filterChips: some View {
@@ -330,6 +339,10 @@ struct DownloadsView: View {
                 Button("去解析") { app.selectedTab = .resolve }
                     .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
                     .padding(.top, 4)
+            } else {
+                Button("查看全部任务") { filter = .all }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                    .padding(.top, 4)
             }
         }
         .multilineTextAlignment(.center)
@@ -337,24 +350,14 @@ struct DownloadsView: View {
         .padding(.vertical, 48)
     }
 
-    /// 每秒记一次总速度，给速度曲线用；没有任务在下时清空
-    private func sampleSpeed() async {
-        while !Task.isCancelled {
-            let running = app.downloads.items.filter { $0.status == .running }
-            if running.isEmpty {
-                if !samples.isEmpty { samples = [] }
-            } else {
-                samples.append(running.reduce(0) { $0 + $1.speed })
-                if samples.count > 48 { samples.removeFirst(samples.count - 48) }
-            }
-            try? await Task.sleep(for: .seconds(1))
-        }
-    }
-
     private func primaryAction(_ item: DownloadItem) {
         switch item.status {
         case .completed:
-            guard let url = app.downloads.fileURL(item) else { return }
+            // 文件被「文件」App 删掉或挪走时，给个说明而不是打开一个空预览
+            guard let url = app.downloads.fileURL(item), FileManager.default.fileExists(atPath: url.path) else {
+                app.show("找不到文件，可能已被移动或删除", error: true)
+                return
+            }
             if url.hasDirectoryPath || Self.isDirectory(url) { Self.revealInFiles(url) } else { previewURL = url }
         case .running, .queued: app.downloads.pause(item)
         case .paused, .failed: app.downloads.resume(item)
@@ -507,10 +510,30 @@ enum DownloadEntry: Identifiable {
     }
 }
 
+/// 每秒记一次总速度，给速度曲线用；没有任务在下时清空
+@MainActor
+@Observable
+final class SpeedSampler {
+    private(set) var samples: [Double] = []
+
+    func run(_ store: DownloadStore) async {
+        while !Task.isCancelled {
+            let running = store.items.filter { $0.status == .running }
+            if running.isEmpty {
+                if !samples.isEmpty { samples = [] }
+            } else {
+                samples.append(running.reduce(0) { $0 + $1.speed })
+                if samples.count > 48 { samples.removeFirst(samples.count - 48) }
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
+    }
+}
+
 /// 顶部汇总：总速度、预计剩余时间、速度曲线、总进度
 private struct SummaryCard: View {
     let items: [DownloadItem]
-    let samples: [Double]
+    let sampler: SpeedSampler
 
     var body: some View {
         let active = items.filter { $0.status.isActive }
@@ -543,7 +566,7 @@ private struct SummaryCard: View {
                         if !eta.isEmpty { Text("\(active.count) 个进行中").font(.caption).foregroundStyle(Color.ink3) }
                     }
                 }
-                Sparkline(values: samples)
+                Sparkline(values: sampler.samples)
                     .frame(height: 40)
                 if total > 0 {
                     VStack(alignment: .leading, spacing: 6) {

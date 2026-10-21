@@ -61,7 +61,8 @@ struct TorrentView: View {
                     Button { Clipboard.copy(target.magnet.uri); app.show("已复制磁力链接") } label: {
                         Label { Text("复制磁力链接") } icon: { Image(icon: .link) }
                     }
-                    Button { UIPasteboard.general.string = target.magnet.hexHash; app.show("已复制特征码") } label: {
+                    // 走 Clipboard：解析页不会把刚复制的特征码当成「剪贴板里有一个链接」再提示
+                    Button { Clipboard.copy(target.magnet.hexHash); app.show("已复制特征码") } label: {
                         Label { Text("复制特征码") } icon: { Image(icon: .tag) }
                     }
                 } label: { Image(icon: .more).foregroundStyle(Color.ink) }

@@ -15,12 +15,19 @@ struct CloudnApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(model)
-                .onOpenURL { model.handle(url: $0) }
-                .preferredColorScheme(model.settings.appearance.colorScheme)
-                .tint(model.settings.accentColor)
-                .environment(\.onAccent, model.settings.onAccentColor)
+            Group {
+                // 截图模式（-CloudnScreenshot）：直接停在指定页面，不弹须知 / 更新提示。见 ScreenshotMode.swift
+                if let screen = ScreenshotMode.screen {
+                    ScreenshotRootView(screen: screen)
+                } else {
+                    RootView()
+                }
+            }
+            .environment(model)
+            .onOpenURL { model.handle(url: $0) }
+            .preferredColorScheme(model.settings.appearance.colorScheme)
+            .tint(model.settings.accentColor)
+            .environment(\.onAccent, model.settings.onAccentColor)
         }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseChanged(phase)

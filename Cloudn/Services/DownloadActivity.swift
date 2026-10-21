@@ -54,8 +54,9 @@ final class DownloadActivity {
     }
 
     private func state(_ items: [DownloadItem], active: [DownloadItem]) -> DownloadActivityAttributes.ContentState {
-        let total = active.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
-        let received = active.reduce(Int64(0)) { $0 + $1.receivedBytes }
+        // 按 Double 累加：服务端报的大小不可信，几个离谱的大数相加会让 Int64 溢出崩溃
+        let total = active.reduce(0.0) { $0 + Double(max(0, $1.totalBytes)) }
+        let received = active.reduce(0.0) { $0 + Double(max(0, $1.receivedBytes)) }
         let unknown = active.contains { $0.totalBytes <= 0 }
         let finished = items.filter { $0.status == .completed && !baselineCompleted.contains($0.id) }.count
         let main = active.first { $0.status == .running } ?? active.first
@@ -75,8 +76,8 @@ final class DownloadActivity {
             }
         }
         return .init(active: active.count, finished: finished,
-                     fraction: unknown || total <= 0 ? -1 : min(1, Double(received) / Double(total)),
-                     speed: active.reduce(Int64(0)) { $0 + Int64($1.speed) }, title: main?.displayName ?? "", note: note,
+                     fraction: unknown || total <= 0 ? -1 : min(1, received / total),
+                     speed: Int64(saturating: active.reduce(0.0) { $0 + max(0, $1.speed) }), title: main?.displayName ?? "", note: note,
                      failed: failedCount)
     }
 

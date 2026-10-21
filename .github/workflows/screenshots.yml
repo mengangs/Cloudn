@@ -1,0 +1,170 @@
+name: Screenshots
+
+# 在模拟器里以截图模式（-CloudnScreenshot <页面>，固定演示数据，见 Cloudn/App/ScreenshotMode.swift）启动应用，
+# 逐页截浅色 / 深色两套图，打包成 screenshots 产物：用来检查界面（含深色模式）和给 README 配图
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip-shots]
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: Simulator screenshots
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      SHOTS: ${{ github.workspace }}/screenshots
+    steps:
+      - uses: actions/checkout@v5
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Pick simulators
+        run: |
+          set -euo pipefail
+          xcrun simctl list runtimes
+          xcrun simctl list devicetypes | grep -E 'iPhone|iPad' || true
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, subprocess
+          def load(kind):
+              return json.loads(subprocess.check_output(["xcrun", "simctl", "list", kind, "-j"]))[kind]
+          runtimes = [r for r in load("runtimes") if r.get("isAvailable") and r.get("platform", r["name"].split()[0]) == "iOS"]
+          runtimes.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
+          runtime = runtimes[-1]
+          supported = {t["identifier"]: t["name"] for t in runtime.get("supportedDeviceTypes", [])} or \
+                      {t["identifier"]: t["name"] for t in load("devicetypes")}
+          def pick(preferred, prefix):
+              names = {name: ident for ident, name in supported.items()}
+              for name in preferred:
+                  if name in names:
+                      return names[name], name
+              candidates = [(ident, name) for ident, name in supported.items() if name.startswith(prefix)]
+              return candidates[-1]
+          phone = pick(["iPhone 16 Pro", "iPhone 17 Pro", "iPhone 15 Pro", "iPhone 16", "iPhone 15"], "iPhone")
+          pad = pick(["iPad Pro 11-inch (M4)", "iPad Pro (11-inch) (4th generation)", "iPad Air 11-inch (M2)", "iPad (10th generation)"], "iPad")
+          print(f"RUNTIME={runtime['identifier']}")
+          print(f"PHONE_TYPE={phone[0]}")
+          print(f"PHONE_NAME={phone[1]}")
+          print(f"PAD_TYPE={pad[0]}")
+          print(f"PAD_NAME={pad[1]}")
+          PY
+          cat "$GITHUB_ENV"
+
+      - name: Create simulators
+        run: |
+          set -euo pipefail
+          PHONE=$(xcrun simctl create "Shots iPhone" "$PHONE_TYPE" "$RUNTIME")
+          PAD=$(xcrun simctl create "Shots iPad" "$PAD_TYPE" "$RUNTIME")
+          echo "PHONE=$PHONE" >> "$GITHUB_ENV"
+          echo "PAD=$PAD" >> "$GITHUB_ENV"
+          echo "iPhone: $PHONE_NAME $PHONE / iPad: $PAD_NAME $PAD / $RUNTIME"
+          # iPhone 先开始启动，和编译并行；iPad 等 iPhone 截完再启动（两台同时跑时首次启动应用会卡很久）
+          xcrun simctl boot "$PHONE"
+
+      - name: Build for simulator
+        run: |
+          build() {
+            xcodebuild -project Cloudn.xcodeproj -scheme Cloudn -configuration Debug \
+              -destination "id=$PHONE" -derivedDataPath build "$@" build > build.log 2>&1
+            local status=$?
+            grep -E 'error:|BUILD (SUCCEEDED|FAILED)' build.log | head -200
+            return $status
+          }
+          # 本地签名（ad-hoc）才有钥匙串等权限；不行再退回不签名
+          build CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            || { echo "::warning::ad-hoc 签名构建失败，改为不签名"; build CODE_SIGNING_ALLOWED=NO; }
+
+      - name: Locate app
+        run: |
+          set -euo pipefail
+          APP=$(find build/Build/Products -maxdepth 2 -name 'Cloudn.app' -path '*iphonesimulator*' | head -1)
+          BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "BID=$BID" >> "$GITHUB_ENV"
+          echo "App: $APP ($BID)"
+
+      - name: Capture
+        run: |
+          set -uo pipefail
+          mkdir -p "$SHOTS"
+          prepare() {  # 启动完成 → 干净的状态栏 → 安装
+            xcrun simctl boot "$1" 2>/dev/null || true
+            xcrun simctl bootstatus "$1" -b
+            xcrun simctl status_bar "$1" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
+              --cellularMode active --cellularBars 4 --operatorName '' --batteryState charged --batteryLevel 100
+            xcrun simctl install "$1" "$APP"
+          }
+          launch() {
+            xcrun simctl terminate "$1" "$BID" >/dev/null 2>&1 || true
+            xcrun simctl launch "$1" "$BID" -CloudnScreenshot "$2" -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN
+          }
+          collect_log() {  # 应用日志（截图模式的临时目录里）一并放进产物，排查用
+            local dir
+            dir=$(xcrun simctl get_app_container "$1" "$BID" data 2>/dev/null) || return 0
+            cp "$dir/tmp/CloudnScreenshot/support/logs/cloudn.log" "$SHOTS/log-$1.txt" 2>/dev/null || true
+          }
+          shoot() {  # udid 设备前缀 页面 等待秒数
+            local udid=$1 device=$2 screen=$3 wait=$4
+            for mode in light dark; do
+              xcrun simctl ui "$udid" appearance "$mode"
+              launch "$udid" "$screen"
+              sleep "$wait"
+              xcrun simctl io "$udid" screenshot --type=png "$SHOTS/$device-$screen-$mode.png" || echo "::warning::$device $screen $mode 截图失败"
+            done
+            xcrun simctl terminate "$udid" "$BID" >/dev/null 2>&1 || true
+          }
+          prepare "$PHONE"
+          # 第一次启动较慢（dyld 缓存、字体），先空跑一次
+          launch "$PHONE" resolve; sleep 15
+          shoot "$PHONE" iphone resolve 6
+          shoot "$PHONE" iphone video 6
+          shoot "$PHONE" iphone downloads 12
+          shoot "$PHONE" iphone me 6
+          shoot "$PHONE" iphone settings 5
+          shoot "$PHONE" iphone preview-image 6
+          shoot "$PHONE" iphone preview-text 6
+          collect_log "$PHONE"
+          xcrun simctl shutdown "$PHONE"
+          prepare "$PAD"
+          launch "$PAD" downloads; sleep 15
+          shoot "$PAD" ipad downloads 12
+          collect_log "$PAD"
+          ls -la "$SHOTS"
+          {
+            echo "## 截图（${PHONE_NAME} / ${PAD_NAME}）"
+            echo
+            ls "$SHOTS" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 调试用（仅 wip-shots 分支）：把缩小的 JPEG 提交回该分支，方便不下载产物也能查看
+      - name: Publish previews to wip-shots
+        if: always() && github.ref == 'refs/heads/wip-shots'
+        run: |
+          mkdir -p preview
+          for f in "$SHOTS"/*.png; do sips -s format jpeg -s formatOptions 70 -Z 1000 "$f" --out "preview/$(basename "${f%.png}").jpg" >/dev/null; done
+          cp "$SHOTS"/log-*.txt preview/ 2>/dev/null || true
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -f preview
+          git commit -qm "Screenshot previews" && git push -q origin HEAD:wip-shots || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore

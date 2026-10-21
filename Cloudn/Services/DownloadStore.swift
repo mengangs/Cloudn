@@ -69,7 +69,8 @@ final class DownloadStore {
             files[origin.shareURL, default: [:]][origin.fileId] = item
         }
         if progress != shareProgress { shareProgress = progress }
-        shareFiles = files
+        // 每 0.5 秒刷新一次：没变化就不赋值，免得读它的分享页跟着整页重绘
+        if files != shareFiles { shareFiles = files }
     }
 
     /// 「平台|分享 ID」：同一分享的不同写法（带不带提取码、短链参数）归到一起

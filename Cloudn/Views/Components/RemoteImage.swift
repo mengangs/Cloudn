@@ -81,7 +81,9 @@ struct RemoteImage: View {
             }
         }
         .task(id: url) {
-            guard !url.isEmpty else { failed = true; return }
+            guard !url.isEmpty else { image = nil; failed = true; return }
+            // 换了地址（列表复用）：先清掉上一张的失败标记，加载中不显示「失败」图标
+            failed = false
             image = ImageLoader.shared.cached(url)
             if image == nil {
                 image = await ImageLoader.shared.load(url, headers: headers)

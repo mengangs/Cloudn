@@ -164,29 +164,43 @@ enum LivePhoto {
         adaptor.append(AVTimedMetadataGroup(items: [stillItem], timeRange: CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 100))))
         metadataIn.markAsFinished()
 
-        // 各轨同时喂数据（写入器要求交错，逐轨写完会卡住）
+        // 各轨同时喂数据（写入器要求交错，逐轨写完会卡住）。
+        // append 失败（写入器出错）后 isReadyForMoreMediaData 不会再变回 true、回调也不再来：
+        // 必须当场结束这一轨，否则 group 永远等不齐，整个保存卡死
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let group = DispatchGroup()
             for (index, (out, input)) in pairs.enumerated() {
                 group.enter()
                 let queue = DispatchQueue(label: "com.mengangs.Cloudn.live.\(index)")
+                let state = FeedState()
                 input.requestMediaDataWhenReady(on: queue) {
+                    guard !state.done else { return }
                     while input.isReadyForMoreMediaData {
-                        guard let buffer = out.copyNextSampleBuffer() else {
-                            input.markAsFinished()
-                            group.leave()
-                            return
-                        }
-                        input.append(buffer)
+                        if let buffer = out.copyNextSampleBuffer(), writer.status == .writing, input.append(buffer) { continue }
+                        state.done = true
+                        if writer.status == .writing { input.markAsFinished() }
+                        group.leave()
+                        return
                     }
                 }
             }
             group.notify(queue: .global()) { cont.resume() }
         }
-        await writer.finishWriting()
+        // 写入器已失败时调用 finishWriting 会抛 Objective-C 异常（直接崩溃）：只在仍在写入时收尾
+        if writer.status == .writing, reader.status != .failed {
+            await writer.finishWriting()
+        } else if writer.status == .writing {
+            writer.cancelWriting()
+        }
+        reader.cancelReading()
         if writer.status != .completed {
             throw LiveError("实况照片的视频写入失败：\(writer.error?.localizedDescription ?? "未知错误")")
         }
+    }
+
+    /// 每一轨喂数据的状态（只在该轨自己的串行队列上读写）
+    private final class FeedState: @unchecked Sendable {
+        var done = false
     }
 
     struct LiveError: LocalizedError {

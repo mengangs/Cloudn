@@ -42,6 +42,8 @@ final class AppModel {
     var batchJobs: [BatchJob] = []
 
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// 后台时间快用完前提前暂停前台任务的计时
+    @ObservationIgnored private var expiryWatch: Task<Void, Never>?
     /// 挂起前被暂停的前台任务（m3u8 / 分轨），回到前台时继续
     @ObservationIgnored private var suspendedIds: [UUID] = []
     /// 已自动重新取过链的任务（每个任务只自动换一次，避免反复失败反复换）
@@ -53,13 +55,17 @@ final class AppModel {
 
     init() {
         let fm = FileManager.default
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Cloudn", isDirectory: true)
-        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        // 截图模式（-CloudnScreenshot）：换成每次启动清空的临时目录并预置演示数据；正常启动为 nil。见 ScreenshotMode.swift
+        let demo = ScreenshotMode.prepare()
+        let support = demo?.support ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Cloudn", isDirectory: true)
+        let documents = demo?.documents ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         try? fm.createDirectory(at: support, withIntermediateDirectories: true)
 
         Log.configure(file: support.appendingPathComponent("logs/cloudn.log"))
         settings = AppSettings()
         accounts = AccountStore()
+        // 截图模式：演示账号已读进内存，从钥匙串删掉（正常启动时无操作）
+        if demo != nil { ScreenshotMode.accountsLoaded() }
         bookmarks = BookmarkStore(directory: support)
         resolvers = ShareResolvers(credentials: accounts.vault, options: settings.resolverOptions)
         uploads = UploadStore(resolvers: resolvers)
@@ -334,7 +340,19 @@ final class AppModel {
         Task { transfers.submit(await engine.enterBackground()) }
         guard downloads.activeCount > 0, backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "downloads") { [weak self] in
-            Task { @MainActor in await self?.suspendForegroundTransfers() }
+            // 必须在回调返回前结束后台任务，否则系统会直接杀掉应用；暂停落盘由下面提前开始的计时完成
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
+        }
+        expiryWatch?.cancel()
+        expiryWatch = Task { [weak self] in
+            // 后台时间只剩几秒时提前暂停前台任务、干净落盘，再交还系统
+            while !Task.isCancelled {
+                let remaining = UIApplication.shared.backgroundTimeRemaining
+                if remaining < 6 { break }
+                try? await Task.sleep(nanoseconds: UInt64(min(remaining - 6, 5) * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            await self?.suspendForegroundTransfers()
         }
     }
 
@@ -345,6 +363,8 @@ final class AppModel {
     }
 
     private func endBackgroundTask() {
+        expiryWatch?.cancel()
+        expiryWatch = nil
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid

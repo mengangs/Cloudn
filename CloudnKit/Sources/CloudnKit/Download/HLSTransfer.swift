@@ -27,7 +27,8 @@ struct M3U8 {
             let parts = spec.trimmed.split(separator: "@", maxSplits: 1).map { String($0).trimmed }
             guard let length = parts.first.flatMap({ Int64($0) }), length > 0 else { return nil }
             let offset = parts.count > 1 ? Int64(parts[1]) : previousEnd
-            guard let offset, offset >= 0 else { return nil }
+            // offset + length 会参与计算（Range 头、下一段起点），越界的数直接当无效，免得溢出崩溃
+            guard let offset, offset >= 0, offset <= Int64.max - length else { return nil }
             return ByteRange(offset: offset, length: length)
         }
     }
@@ -96,7 +97,8 @@ struct M3U8 {
                 pendingHeight = size.count == 2 ? min(size[0], size[1]) : 0
             } else if line.hasPrefix("#EXTINF:") {
                 let value = line.dropFirst("#EXTINF:".count).split(separator: ",").first.map(String.init) ?? ""
-                playlist.totalDuration += Double(value.trimmed) ?? 0
+                // "inf" / "nan" / 超大数会让后面的整数换算崩溃：只累加有限的非负时长
+                if let d = Double(value.trimmed), d.isFinite, d >= 0, d < 1e9 { playlist.totalDuration += d }
             } else if line.hasPrefix("#EXT-X-MEDIA:") {
                 guard attribute("TYPE", in: line) == "AUDIO", let group = attribute("GROUP-ID", in: line),
                       let uri = attribute("URI", in: line) else { continue }
@@ -106,7 +108,7 @@ struct M3U8 {
                 }
                 if isDefault { defaultAudio.insert(group) }
             } else if line.hasPrefix("#EXT-X-MEDIA-SEQUENCE:") {
-                sequence = Int(line.dropFirst("#EXT-X-MEDIA-SEQUENCE:".count)) ?? 0
+                sequence = max(0, Int(String(line.dropFirst("#EXT-X-MEDIA-SEQUENCE:".count)).trimmed) ?? 0)
             } else if line.hasPrefix("#EXT-X-BYTERANGE:") {
                 pendingRange = String(line.dropFirst("#EXT-X-BYTERANGE:".count))
             } else if line.hasPrefix("#EXT-X-ENDLIST") {
@@ -147,7 +149,7 @@ struct M3U8 {
                 }
                 pendingRange = nil
                 playlist.segments.append(Segment(url: url, key: key, sequence: sequence, range: range))
-                sequence += 1
+                sequence &+= 1
             }
         }
         return playlist
@@ -222,7 +224,7 @@ struct HLSTransfer {
         if playlist.isLive {
             // 直播流没有尽头：只能下到当前播放列表里已有的片段
             Log.info("m3u8 没有 EXT-X-ENDLIST，按直播流处理，只下载当前已有的 \(playlist.segments.count) 个分片")
-            progress.setNote("直播流：只下载当前已有的片段（约 \(Int(playlist.totalDuration)) 秒）")
+            progress.setNote("直播流：只下载当前已有的片段（约 \(Int(saturating: playlist.totalDuration)) 秒）")
         }
 
         let fm = FileManager.default
@@ -409,7 +411,7 @@ struct HLSTransfer {
 
     static func sequenceIV(_ sequence: Int) -> Data {
         var iv = Data(count: 16)
-        var n = UInt64(sequence).bigEndian
+        var n = UInt64(truncatingIfNeeded: sequence).bigEndian
         withUnsafeBytes(of: &n) { iv.replaceSubrange(8..<16, with: $0) }
         return iv
     }

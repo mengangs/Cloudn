@@ -95,7 +95,7 @@ struct SnapchatParser: VideoParser {
         snap.text = meta["description"].string.isEmpty ? video["description"].string : meta["description"].string
         snap.author = video["creator"]["personCreator"]["username"].string
         snap.cover = video["thumbnailUrl"].string
-        snap.timestamp = Int64(video["uploadDateMs"].double / 1000)
+        snap.timestamp = Int64(saturating: video["uploadDateMs"].double / 1000)
         if snap.title == "Spotlight Snap" { snap.title = "" }
         return snap
     }

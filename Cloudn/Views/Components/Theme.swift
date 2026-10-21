@@ -38,6 +38,10 @@ extension Color {
     /// 视频平台图标底（陶土浅）
     static let claySoft = dynamic(0xF2E2D7, 0x3A2A22)
     static let clayInk = dynamic(0x8E3F22, 0xF0A383)
+    /// 滑动操作按钮的底色：系统在上面画白字，深浅色下都要够深（clayInk / ink2 在深色下偏浅，白字看不清）
+    static let swipeDestructive = dynamic(0x8E3F22, 0x9A4A2A)
+    static let swipeNeutral = dynamic(0x66625A, 0x5A554C)
+    static let swipePositive = dynamic(0x3F7D52, 0x3E7350)
     static let success = dynamic(0x3F7D52, 0x7FB38E)
 }
 
@@ -197,10 +201,18 @@ extension View {
         self.frame(maxWidth: maxWidth).frame(maxWidth: .infinity)
     }
 
-    /// 浮层阴影（菜单、操作栏、Toast）
+    /// 浮层阴影（菜单、操作栏、Toast）：浅色是淡淡的暖棕，深色底上暖棕看不出来，改用更深的黑影把浮层托起来
     func floatingShadow() -> some View {
-        self.shadow(color: Color(red: 0.24, green: 0.18, blue: 0.12).opacity(0.10), radius: 12, y: 6)
+        self.shadow(color: Color.floatingShadow, radius: 12, y: 6)
     }
+}
+
+private extension Color {
+    static let floatingShadow = Color(UIColor {
+        $0.userInterfaceStyle == .dark
+            ? UIColor(white: 0, alpha: 0.45)
+            : UIColor(red: 0.24, green: 0.18, blue: 0.12, alpha: 0.10)
+    })
 }
 
 extension View {

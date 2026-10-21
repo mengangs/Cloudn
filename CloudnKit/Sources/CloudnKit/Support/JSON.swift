@@ -50,20 +50,27 @@ public struct JSON: @unchecked Sendable {
 
     public var int: Int { Int(int64) }
 
+    /// 超出 Int64 范围的数（如 1e30）、字符串 "nan" / "inf" 不能直接转 Int64（会崩溃）：按范围截断，非有限值给 0
     public var int64: Int64 {
         switch raw {
-        case let n as NSNumber: return n.int64Value
-        case let s as String: return Int64(s.trimmed) ?? Int64(Double(s.trimmed) ?? 0)
+        case let n as NSNumber:
+            let d = n.doubleValue
+            if d.isFinite, abs(d) < 9.0e18 { return n.int64Value }
+            return Int64(saturating: d)
+        case let s as String: return Int64(s.trimmed) ?? Int64(saturating: Double(s.trimmed) ?? 0)
         default: return 0
         }
     }
 
+    /// nan / inf（字符串 "inf"，或宽松 JS 解析出的 Infinity）当作 0：下游常把时长等转成整数，非有限值会让转换崩溃
     public var double: Double {
+        let d: Double
         switch raw {
-        case let n as NSNumber: return n.doubleValue
-        case let s as String: return Double(s.trimmed) ?? 0
+        case let n as NSNumber: d = n.doubleValue
+        case let s as String: d = Double(s.trimmed) ?? 0
         default: return 0
         }
+        return d.isFinite ? d : 0
     }
 
     public var bool: Bool {
@@ -98,6 +105,26 @@ public struct JSON: @unchecked Sendable {
     public static func serialize(_ value: Any) -> Data {
         (try? JSONSerialization.data(withJSONObject: value, options: [])) ?? Data("{}".utf8)
     }
+}
+
+public extension Int64 {
+    /// Double → Int64 不崩溃：超范围截断到 min / max，NaN 给 0（Int64(Double) 遇到这些会直接崩溃）
+    init(saturating value: Double) {
+        if value.isNaN {
+            self = 0
+        } else if value >= 9.223372036854775e18 {
+            self = .max
+        } else if value <= -9.223372036854775e18 {
+            self = .min
+        } else {
+            self = Int64(value)
+        }
+    }
+}
+
+public extension Int {
+    /// Double → Int 不崩溃：超范围截断，NaN 给 0
+    init(saturating value: Double) { self = Int(truncatingIfNeeded: Int64(saturating: value)) }
 }
 
 /// NSNumber 是否为布尔值（Linux 上没有 CFBooleanGetTypeID，按 objCType 判断）

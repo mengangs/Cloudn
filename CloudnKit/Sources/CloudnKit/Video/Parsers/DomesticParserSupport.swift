@@ -182,6 +182,9 @@ indirect enum JSLiteral {
 struct JSLiteralParser {
     private let s: [Unicode.Scalar]
     private var i = 0
+    /// 当前嵌套层数：网页里的数据不可信，`[[[[…` 嵌套几万层会把递归解析的栈撑爆（直接崩溃）
+    private var depth = 0
+    static let maxDepth = 256
 
     init(_ text: String) { s = Array(text.unicodeScalars) }
 
@@ -242,6 +245,9 @@ struct JSLiteralParser {
     private mutating func parsePrimary() -> JSLiteral? {
         skipSpace()
         guard let c = peek() else { return nil }
+        guard depth < Self.maxDepth else { return nil }
+        depth += 1
+        defer { depth -= 1 }
         var value: JSLiteral?
         switch c {
         case "{": value = parseObject()

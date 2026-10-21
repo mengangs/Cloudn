@@ -220,7 +220,7 @@ struct RedditParser: VideoParser {
         let author = post["author"].string
         return VideoParseResult(platform: platform, title: title.isEmpty ? "Reddit \(id)" : title,
                                 author: author == "[deleted]" ? "" : author, cover: Self.cover(post),
-                                text: post["selftext"].string, timestamp: Int64(post["created_utc"].double), url: url,
+                                text: post["selftext"].string, timestamp: Int64(saturating: post["created_utc"].double), url: url,
                                 medias: medias, notice: notice)
     }
 

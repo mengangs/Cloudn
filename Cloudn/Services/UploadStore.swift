@@ -167,8 +167,10 @@ final class UploadStore {
 
     private func beginBackgroundTask() {
         guard backgroundTask == .invalid else { return }
+        // 到期回调在主线程上同步调用，必须在它返回前结束后台任务，否则系统会直接杀掉应用；
+        // 绕一道 Task 是异步的，来不及
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "uploads") { [weak self] in
-            Task { @MainActor in self?.endBackgroundTask() }
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
         }
     }
 

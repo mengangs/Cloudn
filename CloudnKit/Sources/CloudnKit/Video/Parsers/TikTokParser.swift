@@ -404,6 +404,9 @@ indirect enum OrderedValue: Equatable {
     private struct Parser {
         let chars: [Unicode.Scalar]
         var index = 0
+        /// 嵌套层数上限：数据来自网络，嵌套过深会把递归解析的栈撑爆
+        var depth = 0
+        static let maxDepth = 256
 
         mutating func skipSpace() {
             let spaces: Set<Unicode.Scalar> = [" ", "\n", "\r", "\t"]
@@ -412,7 +415,9 @@ indirect enum OrderedValue: Equatable {
 
         mutating func value() -> OrderedValue? {
             skipSpace()
-            guard index < chars.count else { return nil }
+            guard index < chars.count, depth < Self.maxDepth else { return nil }
+            depth += 1
+            defer { depth -= 1 }
             switch chars[index] {
             case "{": return object()
             case "[": return array()

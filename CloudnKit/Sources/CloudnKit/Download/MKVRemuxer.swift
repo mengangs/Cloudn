@@ -369,6 +369,11 @@ struct MKVTrack {
     var unsupportedEncoding: String?
 
     var displayLanguage: String { languageBCP47.isEmpty ? language : languageBCP47 }
+
+    /// DefaultDuration 上限（纳秒）：1 分钟
+    static let maxDefaultDuration: UInt64 = 60_000_000_000
+
+    static func isPlausibleSampleRate(_ v: Double) -> Bool { v.isFinite && v >= 1000 && v <= 768_000 }
 }
 
 /// 一个 SimpleBlock / Block（只读选中轨道的数据）
@@ -541,7 +546,10 @@ final class MKVReader {
             case MKVID.trackType: t.type = try stream.readUInt(size)
             case MKVID.flagEnabled: t.isEnabled = try stream.readUInt(size) != 0
             case MKVID.flagDefault: t.isDefault = try stream.readUInt(size) != 0
-            case MKVID.defaultDuration: t.defaultDuration = try stream.readUInt(size)
+            case MKVID.defaultDuration:
+                // 每帧时长超过 1 分钟的不可能是真值，留着会让后面的时间计算溢出：当没写
+                let v = try stream.readUInt(size)
+                t.defaultDuration = v <= MKVTrack.maxDefaultDuration ? v : 0
             case MKVID.name: t.name = try stream.readString(size)
             case MKVID.language: t.language = try stream.readString(size)
             case MKVID.languageBCP47: t.languageBCP47 = try stream.readString(size)
@@ -562,8 +570,13 @@ final class MKVReader {
                     let c = try stream.readElement()
                     guard let s = c.size else { throw EBMLError.invalid }
                     switch c.id {
-                    case MKVID.samplingFrequency: t.sampleRate = try stream.readFloat(s)
-                    case MKVID.outputSamplingFrequency: t.outputSampleRate = try stream.readFloat(s)
+                    // nan / inf / 离谱的采样率转整数会崩溃：不在合理范围就忽略
+                    case MKVID.samplingFrequency:
+                        let v = try stream.readFloat(s)
+                        if MKVTrack.isPlausibleSampleRate(v) { t.sampleRate = v }
+                    case MKVID.outputSamplingFrequency:
+                        let v = try stream.readFloat(s)
+                        if MKVTrack.isPlausibleSampleRate(v) { t.outputSampleRate = v }
                     case MKVID.channels: t.channels = Int(clamping: try stream.readUInt(s))
                     default: try stream.skip(s)
                     }
@@ -667,7 +680,8 @@ final class MKVReader {
             switch e.id {
             case MKVID.timecode:
                 let v = try stream.readUInt(size)
-                clusterTime = Int64(clamping: v)
+                // 之后还要加上块的相对时间（Int16）：留出余量，损坏的超大值不至于相加溢出崩溃
+                clusterTime = Int64(clamping: min(v, UInt64(Int64.max / 2)))
             case MKVID.simpleBlock:
                 if let block = try readBlock(size: size, clusterTime: clusterTime, wanted: wanted, simple: true) {
                     try deliver(block)
@@ -999,7 +1013,8 @@ final class MKVRemuxJob {
     /// TimecodeScale 单位 → 纳秒（溢出时截断）
     private func nanoseconds(_ t: Int64) -> Int64 {
         let (p, overflow) = t.multipliedReportingOverflow(by: scale)
-        if overflow { return t < 0 ? Int64.min / 4 : Int64.max / 4 }
+        // 夹到 ±Int64.max / 4：后面还要加上帧序号 × 每帧时长，留出余量不溢出
+        if overflow || p > Int64.max / 4 || p < Int64.min / 4 { return (overflow ? t < 0 : p < 0) ? Int64.min / 4 : Int64.max / 4 }
         return p
     }
 

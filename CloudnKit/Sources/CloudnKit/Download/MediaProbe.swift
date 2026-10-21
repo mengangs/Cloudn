@@ -67,12 +67,14 @@ public enum MediaProbe {
         let duration = playlist.totalDuration
         var result = MediaProbeResult(duration: duration > 0 ? duration : nil, height: height)
         if bandwidth > 0 && duration > 0 {
-            result.size = Int64(Double(bandwidth) * duration / 8)
+            result.size = Int64(saturating: Double(bandwidth) * duration / 8)
             result.estimated = true
         } else if let first = playlist.segments.first,
                   let probed = await probeFile(first.url, headers: headers, client: client), let size = probed.size {
             // 没写码率：按第一个分片的大小 × 分片数估算
-            result.size = size * Int64(playlist.segments.count)
+            // 服务端给的大小不可信：相乘溢出时不估
+            let (estimate, overflow) = size.multipliedReportingOverflow(by: Int64(playlist.segments.count))
+            result.size = overflow ? nil : estimate
             result.estimated = true
         }
         return result

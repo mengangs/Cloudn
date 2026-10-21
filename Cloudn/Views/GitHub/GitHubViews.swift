@@ -48,7 +48,14 @@ struct GitHubAccountView: View {
         let shown = query.isEmpty ? repos : repos.filter { $0.name.localizedCaseInsensitiveContains(query) }
         List {
             if let error {
-                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error, actionTitle: "重试") {
+                    Task { await load() }
+                }
+                .inList()
+            } else if !loading && repos.isEmpty {
+                EmptyStateCard(icon: .folder, title: "还没有仓库").inList()
+            } else if !query.isEmpty && shown.isEmpty {
+                EmptyStateCard(icon: .search, title: "没有匹配的仓库", detail: "没有名字包含「\(query)」的仓库").inList()
             }
             ForEach(shown) { repo in
                 NavigationLink {
@@ -76,9 +83,17 @@ struct GitHubAccountView: View {
         .navigationTitle(owner)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            defer { loading = false }
-            do { repos = try await app.github.repositories(of: owner) } catch { self.error = error.localizedDescription }
+            // 从仓库页返回时不重新请求（未登录 Token 时 GitHub 接口每小时只有 60 次）
+            guard repos.isEmpty else { return }
+            await load()
         }
+    }
+
+    private func load() async {
+        loading = true
+        error = nil
+        defer { loading = false }
+        do { repos = try await app.github.repositories(of: owner) } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -140,6 +155,8 @@ struct GitHubRepoView: View {
         .navigationTitle("\(owner)/\(repo)")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // 从子目录返回时 .task 会再跑一次：已经取到仓库信息就不重复请求、也不把标签页切回去
+            guard info == nil else { return }
             if subPath?.hasPrefix("releases") == true { tab = .releases }
             await loadInfo()
         }
@@ -160,6 +177,7 @@ struct GitHubDirectoryView: View {
     @Environment(AppModel.self) private var app
     @State private var entries: [GitHubEntry] = []
     @State private var loading = true
+    @State private var loaded = false
     @State private var error: String?
 
     var body: some View {
@@ -169,7 +187,10 @@ struct GitHubDirectoryView: View {
                     .listRowBackground(Color.clear)
             }
             if let error {
-                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error, actionTitle: "重试") {
+                    Task { await load() }
+                }
+                .inList()
             }
             Section {
                 ForEach(entries) { entry in
@@ -197,7 +218,11 @@ struct GitHubDirectoryView: View {
         .paperList()
         .overlay { if loading { Spinner(size: 28) } }
         .refreshable { await load() }
-        .task { await load() }
+        .task {
+            // 从下一级目录返回时不重新请求（下拉可刷新）
+            guard !loaded else { return }
+            await load()
+        }
     }
 
     private func row(_ entry: GitHubEntry) -> some View {
@@ -221,6 +246,7 @@ struct GitHubDirectoryView: View {
         do {
             entries = try await app.github.contents(owner, repo, path: path, ref: ref)
             error = nil
+            loaded = true
         } catch {
             self.error = error.localizedDescription
         }
@@ -240,12 +266,16 @@ struct GitHubReleasesView: View {
     @Environment(AppModel.self) private var app
     @State private var releases: [GitHubRelease] = []
     @State private var loading = true
+    @State private var loaded = false
     @State private var error: String?
 
     var body: some View {
         List {
             if let error {
-                EmptyStateCard(icon: .warning, title: "加载失败", detail: error).inList()
+                EmptyStateCard(icon: .warning, title: "加载失败", detail: error, actionTitle: "重试") {
+                    Task { await load() }
+                }
+                .inList()
             } else if releases.isEmpty && !loading {
                 EmptyStateCard(icon: .tag, title: "没有发布版本").inList()
             }
@@ -291,8 +321,21 @@ struct GitHubReleasesView: View {
         .paperList()
         .overlay { if loading { Spinner(size: 28) } }
         .task {
-            defer { loading = false }
-            do { releases = try await app.github.releases(owner, repo) } catch { self.error = error.localizedDescription }
+            // 页面重新出现时 .task 会再跑一次：已取到就不重复请求（未填 Token 时接口每小时只有 60 次）
+            guard !loaded else { return }
+            await load()
+        }
+    }
+
+    private func load() async {
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            releases = try await app.github.releases(owner, repo)
+            loaded = true
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 }

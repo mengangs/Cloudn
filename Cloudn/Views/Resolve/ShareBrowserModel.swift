@@ -26,6 +26,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
     var selecting = false
     var selection = Set<String>()
     private(set) var busyFileIds = Set<String>()
+    /// 批量取链进度；total 为 0 表示还在展开文件夹、清点要下载的文件
     private(set) var batch: (done: Int, total: Int)?
 
     @ObservationIgnored private unowned let app: AppModel
@@ -33,6 +34,8 @@ final class ShareBrowserModel: Hashable, Identifiable {
     /// 预览 / 在线查看 / 复制直链取到的临时转存（夸克 / UC 兜底、115、光鸭）：清理凭据 → 账号序号。
     /// 下载入队的由下载完成后清理；这些没有下载任务兜底，预览关闭、复制约一分钟后、离开分享页时在这里清理
     @ObservationIgnored private var temporaryCopies: [String: Int] = [:]
+    /// 正在打开分享：.task 重入（页面重新出现）、登录回来重试等同时触发时只开一次
+    @ObservationIgnored private var opening = false
 
     init(app: AppModel, share: ParsedShare, pwd: String?, sourceText: String) {
         self.app = app
@@ -69,11 +72,15 @@ final class ShareBrowserModel: Hashable, Identifiable {
     // MARK: 浏览
 
     func open() async {
-        guard session == nil, let resolver else { return }
+        guard session == nil, !opening, let resolver else { return }
+        opening = true
         loading = true
         errorMessage = nil
         needsPassword = false
-        defer { loading = false }
+        defer {
+            opening = false
+            loading = false
+        }
         do {
             let s = try await resolver.openSession(share, pwd: pwd.isEmpty ? nil : pwd)
             session = s
@@ -228,6 +235,14 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     private func downloadBatch(_ items: [ShareFile]) async {
         guard let session, let resolver else { return }
+        // 上一批还在取链（连点「下载全部」、或又点了「下载整个文件夹」）：不再并行开一批，免得重复入队
+        guard batch == nil else {
+            app.show("正在获取直链，请等这一批完成")
+            return
+        }
+        // 先占住进度条：展开文件夹要逐层请求，期间底部就显示进行中
+        batch = (0, 0)
+        defer { batch = nil }
         var queue: [(ShareFile, String)] = []
         do {
             for item in items {
@@ -275,7 +290,6 @@ final class ShareBrowserModel: Hashable, Identifiable {
             }
             batch = (index + 1, queue.count)
         }
-        batch = nil
         let skipNote = skipped > 0 ? " · 跳过 \(skipped) 个已下载" : ""
         if failures == 0 {
             app.show("已添加 \(queue.count) 个\(skipNote)")

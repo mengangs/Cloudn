@@ -62,13 +62,19 @@ final class MSERecorder: @unchecked Sendable {
         }
     }
 
+    /// 上次没清掉的录制临时文件（例如录制中应用被杀）：每个进程只在第一次录制前清一次，
+    /// 免得新建的录制把本进程里另一个还在录 / 正在保存的录制目录删掉
+    private static let sweepStale: Void = {
+        let fm = FileManager.default
+        if let old = try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil) {
+            for url in old where url.lastPathComponent.hasPrefix(directoryPrefix) { try? fm.removeItem(at: url) }
+        }
+    }()
+
     init() {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
-        // 上次没清掉的录制临时文件（例如录制中应用被杀）
-        if let old = try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil) {
-            for url in old where url.lastPathComponent.hasPrefix(Self.directoryPrefix) { try? fm.removeItem(at: url) }
-        }
+        _ = Self.sweepStale
         directory = tmp.appendingPathComponent(Self.directoryPrefix + UUID().uuidString, isDirectory: true)
         try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
     }

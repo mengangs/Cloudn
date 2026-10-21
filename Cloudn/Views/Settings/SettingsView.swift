@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var pickingFolder = false
     @State private var logCleared = false
     @State private var checking = false
+    /// 诊断日志文件：进入页面时查一次，不在每次刷新界面（拨动开关）时访问磁盘
+    @State private var logFile: URL?
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -123,8 +125,8 @@ struct SettingsView: View {
                     }
 
                     Section("诊断") {
-                        if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) {
-                            ShareLink(item: log) { Label("导出诊断日志", glyph: .share) }
+                        if let logFile {
+                            ShareLink(item: logFile) { Label("导出诊断日志", glyph: .share) }
                         }
                         Button(logCleared ? "已清空日志" : "清空日志") {
                             Log.clear()
@@ -160,6 +162,9 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .documentPicker(isPresented: $pickingFolder, types: [.folder], asCopy: false) { urls in
             if let url = urls.first { app.settings.setExportFolder(url) }
+        }
+        .task {
+            if let log = Log.fileURL, FileManager.default.fileExists(atPath: log.path) { logFile = log }
         }
     }
 }

@@ -33,6 +33,7 @@ struct SniffedMedia: Identifiable, Equatable {
     var weight: Double { (info?.duration ?? 0) * 1_000_000_000 + Double(info?.size ?? 0) }
 
     static func clock(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0, seconds < 1e9 else { return "--:--" }
         let s = Int(seconds.rounded())
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
@@ -61,6 +62,8 @@ struct SnifferView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var browser: SnifferBrowser
+    /// 正在准备下载的地址（取 Cookie 要等一下）：连点不重复入队
+    @State private var enqueuing = Set<String>()
 
     init(url: String) {
         _browser = State(initialValue: SnifferBrowser(url: url))
@@ -70,6 +73,7 @@ struct SnifferView: View {
         NavigationStack {
             SnifferWebView(browser: browser)
                 .ignoresSafeArea(edges: .bottom)
+                .overlay { if let error = browser.loadError { loadErrorCard(error) } }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 0) {
                         if browser.mseDetected || browser.recording { recordBar }
@@ -84,7 +88,7 @@ struct SnifferView: View {
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
-                            Button { browser.webView.reload() } label: { Label("刷新", glyph: .refresh) }
+                            Button { browser.retry() } label: { Label("刷新", glyph: .refresh) }
                             Button {
                                 Clipboard.copy(browser.currentURL)
                                 app.show("已复制网页地址")
@@ -101,8 +105,19 @@ struct SnifferView: View {
                 .sheet(isPresented: $browser.showingList) { mediaList.presentationDetents([.medium, .large]) }
                 .sheet(isPresented: $browser.showingRecorder) { recorderSheet.presentationDetents([.medium, .large]) }
         }
+        // 第一次发现媒体时轻提示一下（底部按钮由灰变亮）
+        .sensoryFeedback(.success, trigger: browser.medias.isEmpty) { wasEmpty, isEmpty in wasEmpty && !isEmpty }
         // 关掉嗅探页时还在录制：丢弃（正在保存的不受影响）
         .onDisappear { browser.cancelRecording() }
+    }
+
+    /// 网页没打开（断网、地址错误、证书问题）：说明原因并给重试，免得只看到一片空白
+    private func loadErrorCard(_ message: String) -> some View {
+        ZStack {
+            Color.paper.ignoresSafeArea()
+            EmptyStateCard(icon: .warning, title: "网页打开失败", detail: message, actionTitle: "重试") { browser.retry() }
+                .padding(.horizontal, 24)
+        }
     }
 
     // MARK: 录制 MSE 视频流
@@ -231,6 +246,8 @@ struct SnifferView: View {
 
     private func saveRecording() {
         Task {
+            // 连点「停止并保存」：第一次已经停下了，后面的不再报「当前没有在录制」
+            guard browser.recording else { return }
             do {
                 let message = try await browser.stopRecording(into: app.downloads)
                 browser.showingRecorder = false
@@ -245,8 +262,10 @@ struct SnifferView: View {
         HStack(spacing: 18) {
             Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
                 .disabled(!browser.canGoBack)
+                .accessibilityLabel("后退")
             Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }
                 .disabled(!browser.canGoForward)
+                .accessibilityLabel("前进")
             Spacer()
             Button { browser.showingList = true } label: {
                 HStack(spacing: 6) {
@@ -309,7 +328,13 @@ struct SnifferView: View {
     }
 
     private func download(_ media: SniffedMedia) {
+        if app.downloads.items.contains(where: { $0.request.url == media.url && $0.status != .failed }) {
+            app.show("已在下载列表中")
+            return
+        }
+        guard enqueuing.insert(media.url).inserted else { return }
         Task {
+            defer { enqueuing.remove(media.url) }
             let headers = await browser.headers(for: media)
             let base = FileNames.base(media.title, fallback: URL(string: media.page)?.host ?? "video")
             let request: DownloadRequest
@@ -340,6 +365,10 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     private(set) var loading = false
+    /// 页面没能打开时的原因（显示出错卡片）；开始新的导航时清掉
+    private(set) var loadError: String?
+    /// 有没有页面成功显示过：之后的导航失败（点了坏链接）不盖住已显示的页面
+    @ObservationIgnored private var committed = false
     var showingList = false
     @ObservationIgnored private var seen = Set<String>()
     /// 等待探测的媒体与正在探测的数量：页面一下子请求几十个地址时，同时最多探测 maxProbes 个
@@ -551,6 +580,16 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         return outcome.message
     }
 
+    /// 刷新；页面一次都没打开成功时 webView 没有地址，reload 什么也不做，改为重新载入原地址
+    func retry() {
+        loadError = nil
+        if committed {
+            webView.reload()
+        } else if let target = URL(string: currentURL) {
+            webView.load(URLRequest(url: target))
+        }
+    }
+
     private func refreshState() {
         title = webView.title ?? ""
         currentURL = webView.url?.absoluteString ?? currentURL
@@ -560,12 +599,18 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loading = true
+        loadError = nil
         // 换页面了：旧页面的 MSE 轨道作废（录制中保留，结束后再清）
         if !recording && !mseTracks.isEmpty {
             mseTracks = [:]
             mseFrames = [:]
         }
         refreshState()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        committed = true
+        loadError = nil
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -581,6 +626,10 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         loading = false
         refreshState()
+        // 被新的导航顶掉（-999）、或页面交给了别的应用 / 下载（WebKit 102）不算失败；已经有页面显示着的也不盖住
+        let ns = error as NSError
+        let ignored = (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) || (ns.domain == "WebKitErrorDomain" && ns.code == 102)
+        if !ignored && !committed { loadError = ns.localizedDescription }
     }
 
     /// 在每个页面（含 iframe）里：监听资源加载、fetch / XHR 请求和 video / audio 元素，

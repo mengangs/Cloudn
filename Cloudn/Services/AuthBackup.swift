@@ -9,6 +9,8 @@ import Foundation
 enum AuthBackup {
     static let iterations: UInt32 = 200_000
     static let fileExtension = "cloudnauth"
+    /// 导入时接受的 PBKDF2 次数上限（导出用 20 万次，留足余量）
+    static let maxIterations: UInt32 = 5_000_000
 
     struct Envelope: Codable {
         var version = 1
@@ -60,7 +62,8 @@ enum AuthBackup {
         guard !passphrase.isEmpty else { throw Failure.emptyPassphrase }
         guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data), envelope.version == 1,
               let salt = Data(base64Encoded: envelope.salt), let combined = Data(base64Encoded: envelope.box),
-              envelope.iterations >= 10_000 else { throw Failure.badFile }
+              // 次数来自文件：损坏 / 恶意的超大值（如 40 亿次）会让派生密钥算上几个小时，界面一直卡住
+              envelope.iterations >= 10_000, envelope.iterations <= maxIterations, !salt.isEmpty else { throw Failure.badFile }
         let key = try deriveKey(passphrase, salt: salt, iterations: envelope.iterations)
         guard let box = try? AES.GCM.SealedBox(combined: combined), let plain = try? AES.GCM.open(box, using: key),
               let payload = try? JSONDecoder().decode(Payload.self, from: plain) else { throw Failure.wrongPassphrase }

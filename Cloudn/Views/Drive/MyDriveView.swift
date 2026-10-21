@@ -34,7 +34,12 @@ struct DriveFolderView: View {
 
     @Environment(AppModel.self) private var app
     @State private var items: [ShareFile] = []
-    @State private var loading = false
+    /// 一开始就算「加载中」：首次请求发出前不闪一下「空文件夹」
+    @State private var loading = true
+    /// 已加载过：从子文件夹返回时不重新请求（下拉可刷新；增删改、上传完成后会自动刷新）
+    @State private var loaded = false
+    /// 正在取下载链接的文件（防连点重复加入下载，行尾显示转圈）
+    @State private var fetching = Set<String>()
     @State private var errorMessage: String?
     @State private var naming: NamingTarget?
     @State private var nameText = ""
@@ -84,7 +89,8 @@ struct DriveFolderView: View {
             if let errorMessage {
                 EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage, actionTitle: "重试") { Task { await load() } }.inList()
             } else if items.isEmpty && !loading && uploads.isEmpty {
-                EmptyStateCard(icon: .folder, title: "空文件夹").inList()
+                EmptyStateCard(icon: .folder, title: "空文件夹", actionTitle: uploader != nil ? "上传文件" : nil) { importingFiles = true }
+                    .inList()
             } else if visibleItems.isEmpty && !query.isEmpty {
                 EmptyStateCard(icon: .search, title: "没有匹配的文件", detail: "当前文件夹里没有名字包含「\(query)」的文件").inList()
             }
@@ -137,7 +143,10 @@ struct DriveFolderView: View {
             exportMedia(picked)
         }
         .onChange(of: app.uploads.finishedRevision) { _, _ in Task { await load() } }
-        .task { await load() }
+        .task {
+            guard !loaded else { return }
+            await load()
+        }
         .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("名称", text: $nameText)
             Button("取消", role: .cancel) {}
@@ -171,7 +180,7 @@ struct DriveFolderView: View {
             if caps.contains(.delete) {
                 // 不用 destructive 角色：它会触发列表删除动画，确认框刚弹出就被收回、行又弹回来
                 Button { deleting = item } label: { Label("删除", glyph: .trash) }
-                    .tint(Color.clayInk)
+                    .tint(Color.swipeDestructive)
             }
         }
         .contextMenu {
@@ -214,7 +223,9 @@ struct DriveFolderView: View {
                 .font(.caption).foregroundStyle(Color.ink3)
             }
             Spacer(minLength: 0)
-            if !item.isDirectory {
+            if fetching.contains(item.fid) {
+                Spinner(size: 17)
+            } else if !item.isDirectory {
                 IconView(.download, size: 17).foregroundStyle(Color.ink2)
             }
         }
@@ -231,17 +242,27 @@ struct DriveFolderView: View {
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
+            loaded = true
         } catch {
+            // 下拉刷新途中离开页面等被取消的情况不算失败
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func download(_ file: ShareFile) {
-        perform(nil) {
-            let link = try await manager.driveDownloadLink(file)
-            app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil,
-                                  refresh: .drive(platform: platform, file: DriveFileRef(file)))
-            app.show("已添加到下载")
+        guard !fetching.contains(file.fid) else { return }
+        fetching.insert(file.fid)
+        Task {
+            defer { fetching.remove(file.fid) }
+            do {
+                let link = try await manager.driveDownloadLink(file)
+                app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil,
+                                      refresh: .drive(platform: platform, file: DriveFileRef(file)))
+                app.show("已添加到下载")
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
         }
     }
 
@@ -281,6 +302,8 @@ struct DriveFolderView: View {
 
     /// 执行操作：成功后提示并刷新列表，失败弹错误
     private func perform(_ success: String?, _ action: @escaping () async throws -> Void) {
+        // 上一个操作还没结束（连点确认、重复提交）：不再叠加
+        guard !busy else { return }
         busy = true
         Task {
             defer { busy = false }
@@ -325,12 +348,16 @@ struct DriveFolderPicker: View {
         let onPick: (String) -> Void
         @State private var folders: [ShareFile] = []
         @State private var loading = true
+        @State private var loaded = false
         @State private var errorMessage: String?
 
         var body: some View {
             List {
                 if let errorMessage {
-                    EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage).inList()
+                    EmptyStateCard(icon: .warning, title: "加载失败", detail: errorMessage, actionTitle: "重试") {
+                        Task { await load() }
+                    }
+                    .inList()
                 } else if !loading && folders.filter({ $0.fid != excluding }).isEmpty {
                     EmptyStateCard(icon: .folder, title: "这里没有子文件夹", detail: "可以直接移动到当前文件夹").inList()
                 }
@@ -360,12 +387,22 @@ struct DriveFolderPicker: View {
                 .padding(.bottom, 8)
             }
             .task {
-                defer { loading = false }
-                do {
-                    folders = try await manager.listDrive(folderId).filter(\.isDirectory)
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                // 从下一级返回时不重新请求
+                guard !loaded else { return }
+                await load()
+            }
+        }
+
+        private func load() async {
+            loading = true
+            errorMessage = nil
+            defer { loading = false }
+            do {
+                folders = try await manager.listDrive(folderId).filter(\.isDirectory)
+                loaded = true
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
             }
         }
     }

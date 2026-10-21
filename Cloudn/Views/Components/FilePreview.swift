@@ -31,6 +31,8 @@ struct FilePreviewView: View {
     @State private var fileSize: Int64?
     /// 图片解码失败（文件损坏或格式不支持）时改显示「无法预览」卡片
     @State private var imageFailed = false
+    /// 正在把转好的 MP4 存进下载（防止连点存出好几份）
+    @State private var savingConverted = false
 
     enum Mode { case player, image, text, document, unsupported }
 
@@ -147,6 +149,7 @@ struct FilePreviewView: View {
             Menu {
                 if converted != nil {
                     Button { saveConverted() } label: { Label("保存转换后的 MP4 到下载", glyph: .download) }
+                        .disabled(savingConverted)
                 }
                 if MediaTools.canSaveToPhotos(url) {
                     Button {
@@ -285,10 +288,12 @@ struct FilePreviewView: View {
 
     /// 把转好的 MP4（和文字字幕）存进下载列表，「文件」App 里可见、可存相册
     private func saveConverted() {
-        guard let converted else { return }
+        guard let converted, !savingConverted else { return }
+        savingConverted = true
         let base = url.deletingPathExtension().lastPathComponent
         let subtitles = convertSubtitles
         Task {
+            defer { savingConverted = false }
             do {
                 let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
                 try FileManager.default.copyItem(at: converted, to: copy)

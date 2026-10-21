@@ -141,8 +141,15 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
 }
 
 /// 取消回调里要拿到的 URLSessionTask
+/// 续体里写入、取消回调（在别的线程）里读取：读写都要加锁，否则是数据竞争（强引用读写交错可能直接崩）
 final class TaskBox: @unchecked Sendable {
-    var task: URLSessionTask?
+    private let lock = NSLock()
+    private var stored: URLSessionTask?
+
+    var task: URLSessionTask? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
 }
 
 extension HTTPClient {

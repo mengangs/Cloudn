@@ -82,6 +82,6 @@ public enum ByteFormat {
         case "T": factor = 1024 * 1024 * 1024 * 1024
         default: factor = 1
         }
-        return Int64(value * factor)
+        return Int64(saturating: value * factor)
     }
 }

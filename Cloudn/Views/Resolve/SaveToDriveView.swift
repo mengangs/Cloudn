@@ -98,6 +98,9 @@ struct SaveToDriveView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
+                    // 先同步占住，连点只转存一次
+                    guard !saving else { return }
+                    saving = true
                     Task { await save() }
                 } label: {
                     HStack(spacing: 8) {
@@ -120,12 +123,13 @@ struct SaveToDriveView: View {
 
     private func load() async {
         guard let saver = model.saver else { return }
+        let target = current
         loading = true
         errorMessage = nil
         // 进入新目录时先清掉上一层的列表，免得加载期间点到旧的文件夹
         folders = []
-        defer { loading = false }
-        let target = current
+        // 被新目录顶掉的旧请求不收加载状态：否则新目录还在加载时会闪一下「这里没有子文件夹」
+        defer { if target == current { loading = false } }
         do {
             let list = try await saver.listFolders(target)
             guard target == current else { return }

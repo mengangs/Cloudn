@@ -6,8 +6,13 @@ import UniformTypeIdentifiers
 /// 先通过 cloudn://resolve?text=… 唤起主应用；只有唤起失败时才把内容放进剪贴板（打开 Cloudn 即会提示粘贴），
 /// 唤起成功就不动用户的剪贴板。
 final class ShareViewController: UIViewController {
+    /// viewDidAppear 可能不止一次（弹出的提示框收起后等）：只处理一次，免得重复唤起主应用
+    private var handled = false
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        guard !handled else { return }
+        handled = true
         Task { await handle() }
     }
 

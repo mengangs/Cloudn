@@ -24,13 +24,16 @@ struct BatchView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        .accessibilityElement(children: .combine)
                     }
+                    .paperRow()
                 } header: {
                     Text(summary)
                 } footer: {
                     Text("逐条解析，每条按最高画质加入下载，归在下载页的「\(job.title)」分组里。离开这个页面也会继续。")
                 }
             }
+            .paperList()
             .navigationTitle(job.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -114,11 +114,19 @@ final class NWPeerStream: PeerStream, @unchecked Sendable {
         } } onCancel: { [conn] in conn.cancel() }
     }
 
+    /// 对方不读（接收窗口满）时 send 的回调可能一直不来：限时，并在取消时断开连接让回调带错误返回，
+    /// 否则这个 peer 的任务永远结束不了，暂停 / 取消 BT 下载会一直卡住
     func send(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            conn.send(content: data, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
-            })
+        try await TorrentTimeout.run(60) { [conn] in
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    conn.send(content: data, completion: .contentProcessed { error in
+                        if let error { cont.resume(throwing: error) } else { cont.resume() }
+                    })
+                }
+            } onCancel: { [conn] in
+                conn.cancel()
+            }
         }
     }
 

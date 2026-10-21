@@ -304,7 +304,9 @@ public struct BackgroundChunkJob: Codable, Sendable, Hashable {
     public static func parse(taskDescription: String?) -> (itemId: UUID, chunkIndex: Int, offset: Int64, end: Int64)? {
         let parts = (taskDescription ?? "").components(separatedBy: "|")
         guard parts.count == 4, let id = UUID(uuidString: parts[0]), let index = Int(parts[1]),
-              let offset = Int64(parts[2]), let end = Int64(parts[3]) else { return nil }
+              let offset = Int64(parts[2]), let end = Int64(parts[3]),
+              // 下标、偏移直接用于数组访问和文件定位：负数会崩溃
+              index >= 0, offset >= 0 else { return nil }
         return (id, index, offset, end)
     }
 }

@@ -22,6 +22,8 @@ struct ResolveView: View {
     @State private var torrentTarget: TorrentTarget?
     @State private var importingTorrent = false
     @State private var showBookmarks = false
+    /// 在收藏面板里点的那一条：面板收起后再打开，免得结果页 / 批量进度页在面板退场途中弹出而被系统丢掉
+    @State private var bookmarkToOpen: String?
     /// 网页嗅探打开的地址
     @State private var sniffTarget: SniffTarget?
     /// 平台解析失败后，询问是否改用网页嗅探
@@ -37,16 +39,27 @@ struct ResolveView: View {
     @FocusState private var focused: Bool
 
     private var trimmed: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var detected: DetectedInput? { DetectedInput.detect(input) }
-    private var isXunleiKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
-    private var isQuarkKouling: Bool { detected == nil && QuarkKouling.extract(input) != nil }
+    /// 输入识别（几十条正则）：body 里十几处要用，同一段输入只算一次
+    private var detection: InputDetection { Self.detection(for: input) }
+    private var detected: DetectedInput? { detection.detected }
+    private var isXunleiKouling: Bool { detection.xunlei }
+    private var isQuarkKouling: Bool { detection.quark }
     /// 识别不出链接、但像中文口令（迅雷，或要经第三方解析的夸克 / UC）
     private var isKouling: Bool { isXunleiKouling || isQuarkKouling }
     /// 夸克 / UC 口令要发给第三方服务解析：没开总是允许时先问
     @State private var askingKoulingConsent = false
     private var canSubmit: Bool { detected != nil || isKouling }
-    /// 一次粘贴了多个视频链接：批量解析下载
-    private var batchLinks: [String] { Self.videoLinks(in: input) }
+    /// 一次粘贴了多个视频链接：批量解析下载（只有识别成视频时才找）
+    private var batchLinks: [String] { detection.batchLinks }
+
+    @MainActor private static var detectionMemo: (text: String, value: InputDetection)?
+
+    @MainActor private static func detection(for text: String) -> InputDetection {
+        if let memo = detectionMemo, memo.text == text { return memo.value }
+        let value = InputDetection(text)
+        detectionMemo = (text, value)
+        return value
+    }
 
     /// 文本里所有能识别的视频 / 图集链接（按作品去重：同一作品的不同写法只留第一个，保持顺序）
     static func videoLinks(in text: String) -> [String] {
@@ -147,10 +160,14 @@ struct ResolveView: View {
                       let account = app.accounts.list(retry.kind).first, account.updatedAt != retry.stamp else { return }
                 open(text: retry.text)
             }) { LoginSheet(kind: $0) }
-            .sheet(isPresented: $showBookmarks) {
+            .sheet(isPresented: $showBookmarks, onDismiss: {
+                guard let text = bookmarkToOpen else { return }
+                bookmarkToOpen = nil
+                open(text: text)
+            }) {
                 BookmarksView { bookmark in
+                    bookmarkToOpen = bookmark.text
                     showBookmarks = false
-                    open(text: bookmark.text)
                 }
                 .presentationDetents([.medium, .large])
             }
@@ -363,7 +380,8 @@ struct ResolveView: View {
             }
             .labelStyle(.titleOnly)
             .buttonBorderShape(.capsule)
-            .tint(Color.ink)
+            // 系统粘贴按钮的文字固定是白色：深色模式下墨色是浅色，换成深暖灰，否则看不清（对比度不足时系统也会拒绝粘贴）
+            .tint(Self.pasteTint)
             .controlSize(.small)
             Button { markClipboardHandled() } label: {
                 IconView(.close, size: 12).frame(width: 36, height: 44).contentShape(Rectangle()).foregroundStyle(Color.ink3)
@@ -375,6 +393,8 @@ struct ResolveView: View {
         .padding(.vertical, 10)
         .card()
     }
+
+    private static let pasteTint = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x57524A) : UIColor(hex: 0x1F1E1B) })
 
     private func markClipboardHandled() {
         handledChange = UIPasteboard.general.changeCount
@@ -527,10 +547,21 @@ struct ResolveView: View {
 
     /// 某条记录对应分享的下载情况：(已完成, 总数)。读的是只在数量变化时更新的汇总，不随进度重绘
     private func downloadProgress(for text: String) -> (done: Int, total: Int)? {
-        guard let share = ShareLinkParser.parse(text),
+        guard let share = Self.share(for: text),
               let key = app.downloads.shareKey(platform: share.platform, shareURL: share.url),
               let p = app.downloads.shareProgress[key] else { return nil }
         return (p.done, p.total)
+    }
+
+    /// 最近记录对应的分享链接：同样按文本缓存，输入框每敲一个字整页重绘时不再逐条跑正则
+    @MainActor private static var shareCache: [String: ParsedShare?] = [:]
+
+    @MainActor private static func share(for text: String) -> ParsedShare? {
+        if let hit = shareCache[text] { return hit }
+        let share = ShareLinkParser.parse(text)
+        if shareCache.count > 500 { shareCache.removeAll() }
+        shareCache[text] = share
+        return share
     }
 
     /// 支持的平台：一排图标，不写长段文字
@@ -597,6 +628,8 @@ struct ResolveView: View {
             if isKouling { resolveKouling() }
             return
         }
+        // 新的一次解析顶掉还没完成的上一次：免得旧结果晚到，又推出一页
+        cancelWork()
         let links = batchLinks
         if case .video = detected, links.count > 1 {
             batchJob = app.startBatch(title: "批量下载 \(links.count) 个", entries: links.map { (title: "", url: $0) })
@@ -842,6 +875,24 @@ private struct BatchJobRow: View {
         if job.failedCount > 0 { text += " · \(job.failedCount) 个失败" }
         if job.running { text += " · 解析中…" } else if !job.finished { text += " · 已停止" }
         return text
+    }
+}
+
+/// 一段输入的识别结果
+private struct InputDetection {
+    let detected: DetectedInput?
+    /// 识别不出链接时：像迅雷口令 / 能取出夸克（UC）口令
+    let xunlei: Bool
+    let quark: Bool
+    /// 识别成视频时，文本里所有视频链接（去重）
+    let batchLinks: [String]
+
+    @MainActor init(_ text: String) {
+        let detected = DetectedInput.detect(text)
+        self.detected = detected
+        xunlei = detected == nil && XunleiKouling.looksLikeKouling(text)
+        quark = detected == nil && QuarkKouling.extract(text) != nil
+        if case .video = detected { batchLinks = ResolveView.videoLinks(in: text) } else { batchLinks = [] }
     }
 }
 

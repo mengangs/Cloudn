@@ -121,6 +121,8 @@ struct PasswordLoginView: View {
                     }
                 }
             }
+            // 换了登录方式，上一种方式的错误提示不再相关
+            .onChange(of: mode) { error = nil }
             .task(id: countdown > 0) {
                 while countdown > 0 {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -128,10 +130,12 @@ struct PasswordLoginView: View {
                 }
             }
         }
+        // 登录请求途中不让下滑关掉（结果回来时页面已不在，也不会提示）
+        .interactiveDismissDisabled(working)
     }
 
     private func sendCode() {
-        guard let provider else { return }
+        guard let provider, !working else { return }
         error = nil
         working = true
         Task {
@@ -146,7 +150,8 @@ struct PasswordLoginView: View {
     }
 
     private func submit() {
-        guard let provider else { return }
+        // 键盘「前往」与工具栏「登录」可能连着触发：上一次还没结束就不再提交
+        guard let provider, !working else { return }
         error = nil
         working = true
         Task {

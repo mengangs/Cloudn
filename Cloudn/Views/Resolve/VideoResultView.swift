@@ -16,8 +16,8 @@ struct VideoResultView: View {
     /// 合集里取消勾选的条目（默认全选）
     @State private var unpicked = Set<UUID>()
     @State private var batchJob: BatchJob?
-    /// 正在保存的字幕
-    @State private var savingSubtitle: UUID?
+    /// 正在保存的字幕（可以同时存几条）
+    @State private var savingSubtitles = Set<UUID>()
     /// 下载前探测到的大小 / 清晰度 / 时长（平台没给的才探测）
     @State private var probes: [UUID: MediaProbeResult] = [:]
     @State private var probing = Set<UUID>()
@@ -30,18 +30,21 @@ struct VideoResultView: View {
     /// 实况照片：图片 id → 配对的视频。配上对的视频挂在图片上，不单独列为视频
     private let livePairs: [UUID: VideoMedia]
     private let liveClipIDs: Set<UUID>
+    /// 结果不会变：视频、图片与清晰度分组在这里算一次，body 里多处直接用，不必每次重绘都重新筛
+    private let videos: [VideoMedia]
+    private let images: [VideoMedia]
+    /// 视频区的行：同一清晰度组合成一行
+    private let videoRows: [[VideoMedia]]
 
     init(result: VideoParseResult) {
         self.result = result
         let pairs = result.livePairs
         livePairs = pairs
-        liveClipIDs = Set(pairs.values.map(\.id))
-    }
-
-    private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image && !liveClipIDs.contains($0.id) } }
-
-    /// 视频区的行：同一清晰度组合成一行
-    private var videoRows: [[VideoMedia]] {
+        let clipIDs = Set(pairs.values.map(\.id))
+        liveClipIDs = clipIDs
+        let videos = result.medias.filter { $0.kind != .image && !clipIDs.contains($0.id) }
+        self.videos = videos
+        images = result.medias.filter { $0.kind == .image }
         var rows: [[VideoMedia]] = []
         var index: [String: Int] = [:]
         for media in videos {
@@ -54,7 +57,7 @@ struct VideoResultView: View {
                 rows.append([media])
             }
         }
-        return rows
+        videoRows = rows
     }
 
     private func selection(_ options: [VideoMedia]) -> VideoMedia {
@@ -64,7 +67,6 @@ struct VideoResultView: View {
 
     /// 「全部下载」的对象：图片（连同实况视频）+ 每行选中的视频
     private var downloadAll: [VideoMedia] { videoRows.map(selection) + withLive(images) }
-    private var images: [VideoMedia] { result.medias.filter { $0.kind == .image } }
 
     /// 图片后面紧跟它的实况视频（下载时一起入队，下载页据此配成实况照片）
     private func withLive(_ medias: [VideoMedia]) -> [VideoMedia] {
@@ -323,7 +325,7 @@ struct VideoResultView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(qualityText(selected) ?? "选择清晰度")
-                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                Image(icon: .chevronRight).resizable().scaledToFit().frame(width: 9, height: 9).rotationEffect(.degrees(90))
             }
             .font(.footnote.weight(.medium))
             .foregroundStyle(Color.clayInk)
@@ -526,6 +528,7 @@ struct VideoResultView: View {
     }
 
     static func clock(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0, seconds < 1e9 else { return "--:--" }
         let s = Int(seconds.rounded())
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
@@ -544,7 +547,7 @@ struct VideoResultView: View {
                             Text(track.automatic ? "自动生成 · 存为 SRT" : "存为 SRT").font(.caption).foregroundStyle(Color.ink3)
                         }
                         Spacer(minLength: 0)
-                        if savingSubtitle == track.id {
+                        if savingSubtitles.contains(track.id) {
                             Spinner(size: 18)
                         } else {
                             Button { saveSubtitle(track) } label: { IconView(.download, size: 15) }
@@ -562,9 +565,9 @@ struct VideoResultView: View {
     }
 
     private func saveSubtitle(_ track: SubtitleTrack) {
-        savingSubtitle = track.id
+        guard savingSubtitles.insert(track.id).inserted else { return }
         Task {
-            defer { savingSubtitle = nil }
+            defer { savingSubtitles.remove(track.id) }
             do {
                 let name = try await app.saveSubtitle(track, title: result.title.isEmpty ? result.platform.displayName : result.title,
                                                       source: result.platform.displayName, page: result.url)
@@ -582,8 +585,7 @@ struct VideoResultView: View {
         if !result.entries.isEmpty && !selecting {
             let picked = pickedEntries
             Button {
-                let title = result.title.isEmpty ? result.platform.displayName : result.title
-                batchJob = app.startBatch(title: title, entries: picked.map { (title: $0.title, url: $0.url) })
+                startBatch(picked)
             } label: {
                 HStack(spacing: 6) {
                     Image(icon: .download)
@@ -626,6 +628,19 @@ struct VideoResultView: View {
     }
 
     // MARK: 动作
+
+    /// 合集批量下载：同样这些条目已经有批量任务（连点、或关掉进度页后再点）就打开那个，不重复建；
+    /// 停下的、有失败的在进度页里继续 / 重试
+    private func startBatch(_ picked: [VideoEntry]) {
+        guard batchJob == nil, !picked.isEmpty else { return }
+        let urls = Set(picked.map(\.url))
+        if let existing = app.batchJobs.last(where: { Set($0.items.map(\.url)) == urls }) {
+            batchJob = existing
+            return
+        }
+        let title = result.title.isEmpty ? result.platform.displayName : result.title
+        batchJob = app.startBatch(title: title, entries: picked.map { (title: $0.title, url: $0.url) })
+    }
 
     private func state(of media: VideoMedia) -> DownloadItem? {
         app.downloads.items.last { $0.request.url == media.url }

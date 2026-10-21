@@ -25,6 +25,7 @@ struct DownloadDebugView: View {
                     content(item)
                 } else {
                     EmptyStateCard(icon: .warning, title: "任务已删除", detail: "这条下载记录已不存在。")
+                        .padding(16)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.paper)
                 }
