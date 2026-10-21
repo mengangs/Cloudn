@@ -31,7 +31,7 @@ struct BookmarksView: View {
                                 .tint(Color.ink2)
                         }
                         .contextMenu {
-                            Button { UIPasteboard.general.string = b.text; app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
+                            Button { Clipboard.copy(b.text); app.show("已复制") } label: { Label("复制链接", glyph: .paste) }
                             Button { newTitle = b.title; renaming = b } label: { Label("重命名", glyph: .pencil) }
                             Button(role: .destructive) { app.bookmarks.remove([b.id]) } label: { Label("删除", glyph: .trash) }
                         }

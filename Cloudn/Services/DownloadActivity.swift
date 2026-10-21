@@ -60,20 +60,28 @@ final class DownloadActivity {
         let finished = items.filter { $0.status == .completed && !baselineCompleted.contains($0.id) }.count
         let main = active.first { $0.status == .running } ?? active.first
         var note = ""
+        var failedCount: Int? = nil
         if let main, case .torrent = main.request.kind, main.totalBytes <= 0 {
             note = "正在获取种子信息"
         } else if active.isEmpty {
             // 没有进行中的任务时分清：真的全部完成，还是被暂停 / 失败
             let paused = items.filter { $0.status == .paused }.count
             let failed = items.filter { $0.status == .failed }.count
-            if paused > 0 { note = "\(paused) 个已暂停，回到应用继续" } else if failed > 0 { note = "\(failed) 个下载失败" }
+            if paused > 0 {
+                note = "\(paused) 个已暂停，回到应用继续"
+            } else if failed > 0 {
+                note = "\(failed) 个下载失败"
+                failedCount = failed
+            }
         }
         return .init(active: active.count, finished: finished,
                      fraction: unknown || total <= 0 ? -1 : min(1, Double(received) / Double(total)),
-                     speed: active.reduce(Int64(0)) { $0 + Int64($1.speed) }, title: main?.displayName ?? "", note: note)
+                     speed: active.reduce(Int64(0)) { $0 + Int64($1.speed) }, title: main?.displayName ?? "", note: note,
+                     failed: failedCount)
     }
 
-    /// 切到后台：之后应用多半拿不到运行时间、进度不会再刷新，先把说明写上，免得锁屏上停着一个过时的进度
+    /// 切到后台：之后应用多半拿不到运行时间、进度不会再刷新，先把说明写上，免得锁屏上停着一个过时的进度。
+    /// 速度清零（不再刷新的速度只会误导），并设一个过期时间：过期后锁屏 / 灵动岛把进度显示为「未更新」
     func enterBackground(_ items: [DownloadItem]) {
         guard let activity else { return }
         let active = items.filter { $0.status.isActive }
@@ -81,9 +89,10 @@ final class DownloadActivity {
         var next = state(items, active: active)
         let foregroundOnly = active.contains { !$0.backgrounded && !($0.request.kind == .file) }
         next.note = foregroundOnly ? "部分任务回到应用后继续" : "后台下载中，打开应用查看进度"
+        next.speed = 0
         lastState = next
         lastUpdate = Date()
-        Task { await activity.update(ActivityContent(state: next, staleDate: nil)) }
+        Task { await activity.update(ActivityContent(state: next, staleDate: Date().addingTimeInterval(60))) }
     }
 
     private func start(_ state: DownloadActivityAttributes.ContentState) {

@@ -13,6 +13,8 @@ struct ShareBrowserView: View {
     /// 就地弹出的登录页；登录成功回来后重新打开分享（换成登录态）
     @State private var loginKind: AccountKind?
     @State private var textPreview: TextPreviewItem?
+    /// 正在预览的文件取到的直链：可能是临时转存，预览关闭后清理
+    @State private var previewLink: DownloadLink?
     @State private var query = ""
     /// 标题块滚出屏幕后，导航栏才显示标题
     @State private var headerHidden = false
@@ -61,14 +63,16 @@ struct ShareBrowserView: View {
             .safeAreaInset(edge: .bottom) { actionBar.padding(.horizontal, 16).padding(.bottom, 8) }
             .refreshable { await model.reloadCurrent(force: true) }
             .task { await model.open() }
+            // 离开分享页（返回、切到别的标签页）：预览 / 复制直链留下的临时转存一并清理；全屏预览盖住时不算离开
+            .onDisappear { if preview == nil && textPreview == nil { model.releaseAllTemporary() } }
             .sensoryFeedback(.selection, trigger: model.selection)
             .animation(.snappy(duration: 0.25), value: model.selecting)
             .animation(.snappy(duration: 0.25), value: model.batch?.total)
         }
-        .fullScreenCover(item: $preview) { item in
+        .fullScreenCover(item: $preview, onDismiss: releasePreviewLink) { item in
             MediaPreviewView(item: item)
         }
-        .sheet(item: $textPreview) { TextPreviewView(item: $0) }
+        .sheet(item: $textPreview, onDismiss: releasePreviewLink) { TextPreviewView(item: $0) }
         .sheet(item: $saveItems) { items in
             SaveToDriveView(model: model, files: items.files)
         }
@@ -87,7 +91,14 @@ struct ShareBrowserView: View {
                 Text(model.share.platform.displayName)
                 if let kind = model.share.platform.accountKind {
                     Text("·")
-                    Text(app.accounts.isLoggedIn(kind) ? "已登录" : "未登录")
+                    if model.loginExpired {
+                        Button { loginKind = kind } label: {
+                            Text("登录已失效 · 重新登录").foregroundStyle(Color.clayInk)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(app.accounts.isLoggedIn(kind) ? "已登录" : "未登录")
+                    }
                 }
             }
             .font(.footnote)
@@ -130,7 +141,7 @@ struct ShareBrowserView: View {
                 .foregroundStyle(Color.clayInk)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            Button("登录") { loginKind = model.share.platform.accountKind }
+            Button(model.loginExpired ? "重新登录" : "登录") { loginKind = model.share.platform.accountKind }
                 .buttonStyle(PillButtonStyle(kind: .dark, height: 30))
                 .font(.footnote)
         }
@@ -387,7 +398,7 @@ struct ShareBrowserView: View {
                 Menu {
                     Button { model.selecting = true } label: { Label { Text("多选") } icon: { Image(icon: .checkCircle) } }
                         .disabled(model.files.isEmpty)
-                    Button { UIPasteboard.general.string = model.sourceText; app.show("已复制分享链接") } label: {
+                    Button { Clipboard.copy(model.sourceText); app.show("已复制分享链接") } label: {
                         Label { Text("复制分享链接") } icon: { Image(icon: .link) }
                     }
                     if let url = URL(string: model.share.url) {
@@ -537,7 +548,9 @@ struct ShareBrowserView: View {
         if kind == .video || kind == .audio || kind == .image {
             Button {
                 run {
-                    let link = try await model.link(for: file)
+                    let link = try await model.temporaryLink(for: file)
+                    model.releaseTemporary(previewLink)
+                    previewLink = link
                     preview = MediaPreviewItem(url: link.url, headers: link.headers, title: file.name,
                                                kind: kind == .image ? .image : (kind == .audio ? .audio : .video))
                 }
@@ -548,7 +561,9 @@ struct ShareBrowserView: View {
         if kind == .text {
             Button {
                 run {
-                    let link = try await model.link(for: file)
+                    let link = try await model.temporaryLink(for: file)
+                    model.releaseTemporary(previewLink)
+                    previewLink = link
                     textPreview = TextPreviewItem(url: link.url, headers: link.headers, title: file.name)
                 }
             } label: {
@@ -557,9 +572,11 @@ struct ShareBrowserView: View {
         }
         Button {
             run {
-                let link = try await model.link(for: file)
-                UIPasteboard.general.string = link.url
-                app.show("已复制直链（需带请求头才能下载）")
+                let link = try await model.temporaryLink(for: file)
+                Clipboard.copy(link.url)
+                // 临时转存取到的直链：留一分钟给别的应用开始下载，之后清理网盘里的临时文件
+                model.releaseTemporary(link, after: 60)
+                app.show(link.cleanupToken == nil ? "已复制直链（需带请求头才能下载）" : "已复制直链（临时转存，约 1 分钟后清理）")
             }
         } label: {
             Label { Text("复制直链") } icon: { Image(icon: .link) }
@@ -567,6 +584,11 @@ struct ShareBrowserView: View {
         if model.saver != nil {
             Button { startSave([file]) } label: { Label { Text("转存到我的网盘") } icon: { Image(icon: .save) } }
         }
+    }
+
+    private func releasePreviewLink() {
+        model.releaseTemporary(previewLink)
+        previewLink = nil
     }
 
     private func run(_ work: @escaping () async throws -> Void) {

@@ -38,15 +38,20 @@ struct DownloadLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: DownloadActivityAttributes.self) { context in
             // 不自定义底色：锁屏会把浅色底渲染成发黄的玻璃、浅灰字看不清。用系统底色 + 语义文字颜色
-            LockScreenView(state: context.state)
+            LockScreenView(state: context.state, stale: context.isStale)
                 .padding(16)
         } dynamicIsland: { context in
             let state = context.state
+            // 过了过期时间还没收到新进度（应用在后台拿不到运行时间）：进度变淡，提示未更新
+            let stale = context.isStale && state.active > 0
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
-                        Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 26)
-                        Text(state.active > 0 ? "\(state.active) 个" : (state.isPaused ? "已暂停" : "完成")).font(.subheadline.weight(.semibold))
+                        Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
+                             tint: Palette.clayOnBlack, size: 26)
+                            .opacity(stale ? 0.5 : 1)
+                        Text(state.active > 0 ? "\(state.active) 个" : (state.isFailed ? "失败" : (state.isPaused ? "已暂停" : "完成")))
+                            .font(.subheadline.weight(.semibold))
                     }
                     .padding(.leading, 4)
                 }
@@ -57,23 +62,34 @@ struct DownloadLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(state.title).font(.footnote).lineLimit(1).foregroundStyle(.secondary)
-                        if !state.note.isEmpty { Text(state.note).font(.caption2).foregroundStyle(.secondary) }
-                        if state.fraction >= 0 && state.active > 0 { Bar(fraction: state.fraction, tint: Palette.clayOnBlack, track: .white.opacity(0.15)) }
+                        if stale {
+                            Text("进度未更新，打开应用查看").font(.caption2).foregroundStyle(.secondary)
+                        } else if !state.note.isEmpty {
+                            Text(state.note).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if state.fraction >= 0 && state.active > 0 {
+                            Bar(fraction: state.fraction, tint: Palette.clayOnBlack, track: .white.opacity(0.15)).opacity(stale ? 0.5 : 1)
+                        }
                     }
                     .padding(.horizontal, 4)
                 }
             } compactLeading: {
                 // 紧贴胶囊圆角的左边缘会被裁到一点：往里收一些、圆环略小
-                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 16)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
+                     tint: Palette.clayOnBlack, size: 16)
+                    .opacity(stale ? 0.5 : 1)
                     .padding(.leading, 4)
             } compactTrailing: {
                 Text(state.compactText)
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.clayOnBlack)
+                    .opacity(stale ? 0.5 : 1)
                     .padding(.trailing, 2)
             } minimal: {
-                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, tint: Palette.clayOnBlack, size: 16)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
+                     tint: Palette.clayOnBlack, size: 16)
+                    .opacity(stale ? 0.5 : 1)
             }
             .keylineTint(Palette.clayOnBlack)
         }
@@ -85,30 +101,36 @@ struct DownloadLiveActivity: Widget {
 }
 
 extension DownloadActivityAttributes.ContentState {
-    /// 没有进行中的任务、但不是全部完成（被暂停 / 失败）
-    var isPaused: Bool { active == 0 && !note.isEmpty }
+    /// 没有进行中的任务，剩下的是失败的（没有暂停的）
+    var isFailed: Bool { active == 0 && (failed ?? 0) > 0 }
+
+    /// 没有进行中的任务、但不是全部完成（被暂停；旧版本的状态里失败也算在这里）
+    var isPaused: Bool { active == 0 && !note.isEmpty && !isFailed }
 
     /// 灵动岛右侧：知道进度显示百分比，否则显示速度，再不然显示任务数
     var compactText: String {
-        if active == 0 { return isPaused ? "暂停" : "完成" }
+        if active == 0 { return isFailed ? "失败" : (isPaused ? "暂停" : "完成") }
         if fraction >= 0 { return "\(Int(fraction * 100))%" }
         if speed > 0 { return ByteCountFormatter.string(fromByteCount: speed, countStyle: .file) }
         return "\(active) 个"
     }
 }
 
-/// 圆环进度；完成后变成对勾、暂停显示暂停符号；进度未知时只画底环（不画假的进度）
+/// 圆环进度；完成后变成对勾、暂停显示暂停符号、失败显示叹号；进度未知时只画底环（不画假的进度）
 private struct Ring: View {
     let fraction: Double
     let done: Bool
     var paused = false
+    var failed = false
     let tint: Color
     var size: CGFloat
 
     var body: some View {
         ZStack {
             Circle().stroke(tint.opacity(0.25), lineWidth: size * 0.13)
-            if paused {
+            if failed {
+                Image(systemName: "exclamationmark").font(.system(size: size * 0.45, weight: .bold)).foregroundStyle(tint)
+            } else if paused {
                 Image(systemName: "pause.fill").font(.system(size: size * 0.38, weight: .bold)).foregroundStyle(tint)
             } else if done {
                 Image(systemName: "checkmark").font(.system(size: size * 0.45, weight: .bold)).foregroundStyle(tint)
@@ -145,23 +167,31 @@ private struct Bar: View {
 
 private struct LockScreenView: View {
     let state: DownloadActivityAttributes.ContentState
+    /// 过了过期时间还没收到新进度（应用在后台）
+    var stale = false
+
+    private var dimmed: Bool { stale && state.active > 0 }
 
     private var headline: String {
         if state.active > 0 { return "正在下载 \(state.active) 个文件" }
+        if state.isFailed { return "下载失败" }
         return state.isPaused ? "下载已暂停" : "下载完成"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused,
-                     tint: state.active == 0 && !state.isPaused ? Palette.success : Palette.clay, size: 34)
+                Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
+                     tint: state.active == 0 && !state.isPaused && !state.isFailed ? Palette.success : Palette.clay, size: 34)
+                    .opacity(dimmed ? 0.5 : 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     if !state.title.isEmpty {
                         Text(state.title).font(.footnote).lineLimit(1).foregroundStyle(.secondary)
                     }
-                    if !state.note.isEmpty {
+                    if dimmed {
+                        Text("进度未更新，打开应用查看").font(.caption).lineLimit(1).foregroundStyle(.secondary)
+                    } else if !state.note.isEmpty {
                         Text(state.note).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                     }
                 }
@@ -175,6 +205,7 @@ private struct LockScreenView: View {
             }
             if state.fraction >= 0 && state.active > 0 {
                 Bar(fraction: state.fraction, tint: Palette.clay, track: Color.secondary.opacity(0.25))
+                    .opacity(dimmed ? 0.5 : 1)
             }
             if state.finished > 0 {
                 Text("已完成 \(state.finished) 个").font(.caption2).foregroundStyle(.secondary)

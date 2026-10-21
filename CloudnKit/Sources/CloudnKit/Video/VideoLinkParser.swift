@@ -137,7 +137,7 @@ public enum VideoLinkParser {
 
         Rule(platform: .soundcloud, kind: "short", rx: Rx(#"on\.soundcloud\.com/[A-Za-z0-9]+"#, ignoreCase: true)),
         Rule(platform: .soundcloud, kind: "api", rx: Rx(#"api(?:-v2)?\.soundcloud\.com/tracks/(?:soundcloud%3Atracks%3A)?(\d+)"#, ignoreCase: true)),
-        // 歌单：解析器给出「暂不支持歌单 / 专辑」
+        // 歌单 / 专辑：解析器列出曲目条目，按合集展示
         Rule(platform: .soundcloud, kind: "set", rx: Rx(#"(?<![A-Za-z0-9.\-])(?:www\.|m\.)?soundcloud\.com/([\w\-]+/sets/[\w\-]+)"#, ignoreCase: true)),
         Rule(platform: .soundcloud, kind: "track", rx: Rx(#"(?<![A-Za-z0-9.\-])(?:www\.|m\.)?soundcloud\.com/((?!(?:stations|discover|search|you|upload|charts|pages|terms-of-use|messages|notifications|settings|people|tags|popular)/)[\w\-]+/(?!(?:tracks|albums|sets|reposts|likes|spotlight|comments|popular-tracks|followers|following)(?:[/?#]|$))[\w\-]+(?:/s-[A-Za-z0-9]+)?)"#, ignoreCase: true)),
 
@@ -202,6 +202,20 @@ public enum VideoLinkParser {
             return DetectedVideoLink(platform: rule.platform, kind: rule.kind, id: short ? "" : id, url: short ? "https://" + m[0] : url)
         }
         return nil
+    }
+
+    /// 去重用的键：同一作品的不同写法（带不带追踪参数、www / m 站）归成一个；短链还没展开、没有 id，按地址
+    public static func dedupeKey(_ link: DetectedVideoLink) -> String {
+        link.id.isEmpty ? link.url : "\(link.platform.rawValue)|\(link.kind)|\(link.id)"
+    }
+
+    /// 一组链接按作品去重（保持顺序），识别不出的丢掉
+    public static func uniqueLinks(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        return urls.filter { url in
+            guard let link = parse(url) else { return false }
+            return seen.insert(dedupeKey(link)).inserted
+        }
     }
 }
 

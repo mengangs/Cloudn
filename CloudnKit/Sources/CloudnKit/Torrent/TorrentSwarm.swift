@@ -61,6 +61,8 @@ actor TorrentSwarm {
     private var dhtLookups = 0
     private var handshakes = 0
     private(set) var trackers: [String]
+    /// 写盘失败等无法靠重下解决的错误：设置后整个下载停下并报这个错
+    private(set) var failure: String?
 
     init(infoHash: [UInt8], selection: [Int]?, trackers: [String], workRoot: URL, stateURL: URL,
          cacheDir: URL, progress: TransferProgress, metadataOnly: Bool) {
@@ -76,7 +78,12 @@ actor TorrentSwarm {
 
     /// 已有元数据（缓存 / 种子文件）时直接建立下载计划
     func begin(with info: TorrentInfo?) throws {
-        if let info, self.info == nil { try setupDownload(info) }
+        guard let info, self.info == nil else { return }
+        do {
+            try setupDownload(info)
+        } catch {
+            throw TransferError(TorrentStorage.writeFailureMessage(error), permanent: true)
+        }
     }
 
     var isComplete: Bool {
@@ -155,15 +162,23 @@ actor TorrentSwarm {
         let raw = (0..<count).reduce(into: Data()) { $0.append(metadataPieces[$1]!) }
         metadataPieces = [:]
         metadataRequested = [:]
+        let parsed: TorrentInfo
         do {
-            let parsed = try TorrentInfo.parse(info: raw, expectedHash: infoHash)
-            TorrentMetadataCache.save(parsed, in: cacheDir)
-            Log.info("BT 元数据就绪：\(parsed.name)，\(parsed.pieceCount) 块，\(parsed.files.count) 个文件")
-            try setupDownload(parsed)
+            parsed = try TorrentInfo.parse(info: raw, expectedHash: infoHash)
         } catch {
             // 校验不过（有人发了错的数据）：整份重新要
             Log.error("BT 元数据无效：\(error.localizedDescription)")
             metadataSize = 0
+            return
+        }
+        TorrentMetadataCache.save(parsed, in: cacheDir)
+        Log.info("BT 元数据就绪：\(parsed.name)，\(parsed.pieceCount) 块，\(parsed.files.count) 个文件")
+        do {
+            try setupDownload(parsed)
+        } catch {
+            // 建文件失败是本地存储的问题（不是元数据坏了），重新要元数据也没用
+            Log.error("BT 建立文件失败：\(error.localizedDescription)")
+            failure = failure ?? TorrentStorage.writeFailureMessage(error)
         }
     }
 
@@ -280,6 +295,14 @@ actor TorrentSwarm {
             Log.error("BT 分块 \(index) 校验失败，重新下载")
             retry.append(index)
         }
+        reportProgress()
+    }
+
+    /// 校验通过但写盘失败：这块退回待下载，并记下错误让整个下载停下（多半是空间满了，重下也写不进去）
+    func pieceWriteFailed(_ index: Int, message: String) {
+        verifying.remove(index)
+        if !have[index] { retry.append(index) }
+        failure = failure ?? message
         reportProgress()
     }
 

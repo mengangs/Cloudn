@@ -34,15 +34,15 @@ struct NetworkProxyView: View {
                                 .onSubmit(commit)
                         }
                         LabeledContent("端口") {
+                            // 数字键盘没有回车键：停止输入片刻后自动保存（见下方 task(id: port)）
                             TextField("7890", text: $port)
                                 .multilineTextAlignment(.trailing)
                                 .font(.mono)
                                 .keyboardType(.numberPad)
-                                .onSubmit(commit)
                         }
                     }
                 } footer: {
-                    Text("关闭时跟随系统网络（包括 VPN 与系统代理）。开启后解析、下载、上传与 GitHub 请求都经这个代理；切到后台后由系统接管的下载，要等下次打开应用才改用新代理。网盘登录页和磁力（BT）连接不走这里的代理。")
+                    Text("关闭时跟随系统网络（包括 VPN 与系统代理）。开启后解析、下载、上传、GitHub 请求和应用内的网页登录页都经这个代理；已打开的网页要关掉重开才改用新代理，切到后台后由系统接管的下载要等下次打开应用才改用。磁力（BT）连接不走这里的代理。")
                 }
 
                 if settings.proxyEnabled {
@@ -71,7 +71,9 @@ struct NetworkProxyView: View {
             }
             .listRowBackground(Color.surface)
         }
-        .paperList()
+        .scrollContentBackground(.hidden)
+        .readableWidth()
+        .background(Color.paper)
         .navigationTitle("网络代理")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -82,6 +84,12 @@ struct NetworkProxyView: View {
         .onChange(of: app.settings.proxyKind) { result = nil }
         .onChange(of: host) { result = nil }
         .onChange(of: port) { result = nil }
+        .task(id: port) {
+            // 端口停止输入 0.8 秒后写入设置（逐字写入会让网络会话跟着反复重建）
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            commitPort()
+        }
     }
 
     private var draft: NetworkProxy? {
@@ -93,6 +101,10 @@ struct NetworkProxyView: View {
     private func commit() {
         let trimmed = host.trimmingCharacters(in: .whitespaces)
         if trimmed != app.settings.proxyHost { app.settings.proxyHost = trimmed }
+        commitPort()
+    }
+
+    private func commitPort() {
         if let p = Int(port), (1...65535).contains(p), p != app.settings.proxyPort { app.settings.proxyPort = p }
     }
 

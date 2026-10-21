@@ -15,6 +15,9 @@ extension UIColor {
         self.init(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
                   blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
     }
+
+    /// 正文墨色（给 UIKit 视图用，取值与 Color.ink 一致）
+    static let cloudnInk = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xEDEAE3) : UIColor(hex: 0x1F1E1B) }
 }
 
 extension Color {
@@ -30,7 +33,8 @@ extension Color {
     static let divider = dynamic(0xECE8DE, 0x302E2A)
     static let ink = dynamic(0x1F1E1B, 0xEDEAE3)
     static let ink2 = dynamic(0x66625A, 0xA8A397)
-    static let ink3 = dynamic(0x8A857B, 0x7C786F)
+    /// 三级文字：对纸色、卡片底的对比度在两种外观下都不低于 4.5:1
+    static let ink3 = dynamic(0x736E66, 0x8F8A80)
     /// 视频平台图标底（陶土浅）
     static let claySoft = dynamic(0xF2E2D7, 0x3A2A22)
     static let clayInk = dynamic(0x8E3F22, 0xF0A383)
@@ -188,6 +192,11 @@ extension View {
         self.listRowBackground(Color.surface).listRowSeparatorTint(Color.divider)
     }
 
+    /// iPad 等宽屏上把主内容收窄并居中，避免一行拉得过长；iPhone 宽度不到上限，不受影响
+    func readableWidth(_ maxWidth: CGFloat = 700) -> some View {
+        self.frame(maxWidth: maxWidth).frame(maxWidth: .infinity)
+    }
+
     /// 浮层阴影（菜单、操作栏、Toast）
     func floatingShadow() -> some View {
         self.shadow(color: Color(red: 0.24, green: 0.18, blue: 0.12).opacity(0.10), radius: 12, y: 6)
@@ -326,6 +335,7 @@ struct FilterChip: View {
                 .overlay { if !selected { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .sensoryFeedback(.selection, trigger: selected)
     }
 }

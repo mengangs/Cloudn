@@ -70,9 +70,7 @@ public final class VideoParseService: Sendable {
         guard let parser = parsers[resolved.platform] else {
             throw VideoParseError(.unsupported, "暂不支持解析\(resolved.platform.displayName)")
         }
-        if resolved.isShortLink && resolved.platform != .kuaishou {
-            throw VideoParseError(.unsupported, "短链展开失败，请复制完整链接后重试")
-        }
+        if let error = Self.unexpandedError(original: link, resolved: resolved) { throw error }
         var cookie = ""
         if let kind = resolved.platform.accountKind { cookie = await credentials.cookie(for: kind) ?? "" }
         let result = try await parser.parse(resolved, cookie: cookie)
@@ -82,6 +80,17 @@ public final class VideoParseService: Sendable {
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
                                 url: result.url, medias: medias, notice: result.notice,
                                 entries: result.entries, subtitles: result.subtitles)
+    }
+
+    /// 展开后仍是短链（快手的短链由解析器自己展开，除外）：
+    /// 终址变了但认不出 → 指向的是不支持的页面（直播间、活动页…），附上终址供网页嗅探；终址没变 → 展开失败
+    static func unexpandedError(original: DetectedVideoLink, resolved: DetectedVideoLink) -> VideoParseError? {
+        guard resolved.isShortLink, resolved.platform != .kuaishou else { return nil }
+        if resolved.url != original.url {
+            return VideoParseError(.unsupported, "暂不支持这类链接：短链指向的页面不是可解析的\(resolved.platform.displayName)作品，可以用网页嗅探试试",
+                                   sniffURL: resolved.url)
+        }
+        return VideoParseError(.unsupported, "短链展开失败，请复制完整链接后重试")
     }
 
     /// 展开短链（最多 5 跳），终址能重新识别就用新的识别结果

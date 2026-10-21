@@ -34,6 +34,12 @@ final class TorrentStorage: @unchecked Sendable {
         }
     }
 
+    /// 写盘失败的说明：空间不足单独提示（这类错误重下也没用，整个任务停下）
+    static func writeFailureMessage(_ error: Error) -> String {
+        if DiskSpace.isOutOfSpace(error) { return "存储空间不足，BT 下载已停止：请清理空间后继续" }
+        return "写入文件失败，BT 下载已停止：\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+    }
+
     func write(piece index: Int, data: Data) throws {
         let start = Int64(index) * info.pieceLength
         let end = start + Int64(data.count)

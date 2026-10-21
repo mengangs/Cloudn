@@ -132,7 +132,8 @@ final class AccountStore {
     /// 各平台附加账号
     private(set) var extras: [AccountKind: [Account]] = [:]
     @ObservationIgnored private(set) var vault: AccountVault!
-    /// 正在为该平台「添加账号」：接下来这次登录作为附加账号保存
+    /// 正在为该平台「添加账号」：接下来这次登录作为附加账号保存。
+    /// 登录成功时清除；登录页没登成就关掉时由「我的」页清除（sheet 的 onDismiss）
     @ObservationIgnored var pendingAdd: AccountKind?
     /// 主账号的登录态检测结果；存进 UserDefaults，重启后不必重测
     private(set) var health: [AccountKind: HealthRecord] = AccountStore.loadHealth()
@@ -195,6 +196,7 @@ final class AccountStore {
         await reload()
     }
 
+    /// 退出该平台：主账号与附加账号一并删除（确认框里会写明账号数）
     func logout(_ kind: AccountKind) async {
         await vault.remove(kind)
         health[kind] = nil

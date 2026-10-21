@@ -21,8 +21,24 @@ struct VideoResultView: View {
     /// 下载前探测到的大小 / 清晰度 / 时长（平台没给的才探测）
     @State private var probes: [UUID: MediaProbeResult] = [:]
     @State private var probing = Set<UUID>()
+    /// 探测过的（含失败的），不再重复探测
+    @State private var probed = Set<UUID>()
+    /// 分轨视频各清晰度共用同一条音轨：音轨大小只探一次
+    @State private var audioProbes = AudioProbeCache()
+    /// 就地弹出的登录页（登录已失效时）
+    @State private var loginKind: AccountKind?
+    /// 实况照片：图片 id → 配对的视频。配上对的视频挂在图片上，不单独列为视频
+    private let livePairs: [UUID: VideoMedia]
+    private let liveClipIDs: Set<UUID>
 
-    private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image } }
+    init(result: VideoParseResult) {
+        self.result = result
+        let pairs = result.livePairs
+        livePairs = pairs
+        liveClipIDs = Set(pairs.values.map(\.id))
+    }
+
+    private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image && !liveClipIDs.contains($0.id) } }
 
     /// 视频区的行：同一清晰度组合成一行
     private var videoRows: [[VideoMedia]] {
@@ -46,14 +62,20 @@ struct VideoResultView: View {
         return options.first { $0.id == chosen[group] } ?? options[0]
     }
 
-    /// 「全部下载」的对象：图片 + 每行选中的视频
-    private var downloadAll: [VideoMedia] { videoRows.map(selection) + images }
+    /// 「全部下载」的对象：图片（连同实况视频）+ 每行选中的视频
+    private var downloadAll: [VideoMedia] { videoRows.map(selection) + withLive(images) }
     private var images: [VideoMedia] { result.medias.filter { $0.kind == .image } }
+
+    /// 图片后面紧跟它的实况视频（下载时一起入队，下载页据此配成实况照片）
+    private func withLive(_ medias: [VideoMedia]) -> [VideoMedia] {
+        medias.flatMap { media in [media] + (livePairs[media.id].map { [$0] } ?? []) }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if let kind = result.platform.accountKind, app.accounts.isExpired(kind) { expiredCard(kind) }
                 if !result.notice.isEmpty {
                     HStack(alignment: .top, spacing: 10) {
                         IconView(.warning, size: 16)
@@ -80,12 +102,12 @@ struct VideoResultView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     if !result.url.isEmpty {
-                        Button { UIPasteboard.general.string = result.url; app.show("已复制作品链接") } label: {
+                        Button { Clipboard.copy(result.url); app.show("已复制作品链接") } label: {
                             Label { Text("复制作品链接") } icon: { Image(icon: .link) }
                         }
                     }
                     if !result.text.isEmpty {
-                        Button { UIPasteboard.general.string = result.text; app.show("已复制文案") } label: {
+                        Button { Clipboard.copy(result.text); app.show("已复制文案") } label: {
                             Label { Text("复制文案") } icon: { Image(icon: .text) }
                         }
                     }
@@ -101,7 +123,27 @@ struct VideoResultView: View {
         .animation(.snappy(duration: 0.25), value: selecting)
         .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }
         .sheet(item: $batchJob) { BatchView(job: $0) }
+        .sheet(item: $loginKind) { LoginSheet(kind: $0) }
         .task(id: result.medias.map(\.id)) { await probeAll() }
+    }
+
+    /// 该平台的登录已失效：解析结果可能不完整（清晰度受限、拿不到需登录的内容），旁边就是重新登录入口
+    private func expiredCard(_ kind: AccountKind) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            IconView(.user, size: 18).foregroundStyle(Color.clayInk)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(kind.displayName)登录已失效").font(.footnote.weight(.semibold))
+                Text("重新登录后可获取更高清晰度或需登录才能看的内容").font(.caption)
+            }
+            .foregroundStyle(Color.clayInk)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button("重新登录") { loginKind = kind }
+                .buttonStyle(PillButtonStyle(kind: .dark, height: 30))
+                .font(.footnote)
+        }
+        .padding(14)
+        .background(Color.claySoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     // MARK: 头部
@@ -179,6 +221,26 @@ struct VideoResultView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("播放视频")
+        .contextMenu {
+            Button { saveCover() } label: { Label { Text("保存封面") } icon: { Image(icon: .download) } }
+            Button { Clipboard.copy(result.cover); app.show("已复制封面地址") } label: {
+                Label { Text("复制封面地址") } icon: { Image(icon: .link) }
+            }
+        }
+    }
+
+    /// 封面作为一条下载加入列表（完成后可在下载页存到相册）
+    private func saveCover() {
+        let ext = URL(string: result.cover).map { $0.pathExtension.lowercased() } ?? ""
+        let name = FileNames.base(result.title, fallback: result.platform.displayName) + "_cover."
+            + (["jpg", "jpeg", "png", "webp", "heic", "avif", "gif"].contains(ext) ? ext : "jpg")
+        if let item = app.downloads.items.last(where: { $0.request.url == result.cover }), item.status != .failed {
+            app.show("封面已在下载列表中")
+            return
+        }
+        app.downloads.enqueue(DownloadRequest(url: result.cover, headers: videos.first?.headers ?? [:], fileName: name,
+                                              kind: .file, source: result.platform.displayName))
+        app.show("封面已添加到下载")
     }
 
     // MARK: 视频
@@ -217,6 +279,8 @@ struct VideoResultView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                    .contextMenu { videoMenu(media) }
                     if index < rows.count - 1 { RowDivider(leading: 64) }
                 }
             }
@@ -230,12 +294,23 @@ struct VideoResultView: View {
         }
     }
 
-    /// 清晰度选择：组内第一个是最高画质
+    @ViewBuilder
+    private func videoMenu(_ media: VideoMedia) -> some View {
+        Button { Clipboard.copy(media.url); app.show("已复制直链（部分平台需带请求头才能下载）") } label: {
+            Label { Text("复制直链") } icon: { Image(icon: .link) }
+        }
+        if let url = URL(string: media.url) {
+            ShareLink(item: url) { Label { Text("分享链接") } icon: { Image(icon: .share) } }
+        }
+    }
+
+    /// 清晰度选择：组内第一个是最高画质。打开菜单时才探测其余清晰度的大小
     private func qualityPicker(_ options: [VideoMedia], selected: VideoMedia) -> some View {
         Menu {
             ForEach(options) { option in
                 Button {
                     chosen[option.variantGroup] = option.id
+                    Task { await probe([option]) }
                 } label: {
                     if option.id == selected.id {
                         Label(optionTitle(option), systemImage: "checkmark")
@@ -244,6 +319,7 @@ struct VideoResultView: View {
                     }
                 }
             }
+            .onAppear { Task { await probe(options) } }
         } label: {
             HStack(spacing: 4) {
                 Text(qualityText(selected) ?? "选择清晰度")
@@ -278,30 +354,38 @@ struct VideoResultView: View {
         return (info.estimated ? "约 " : "") + ByteFormat.string(size)
     }
 
-    /// 平台没给大小或清晰度的，逐个探测（同时最多 4 个）；分轨视频的大小 = 画面 + 声音
+    /// 平台没给大小或清晰度的才探测：一开始只探每行当前选中的那个，其余清晰度等打开清晰度菜单再探
     private func probeAll() async {
-        let targets = videos.filter { $0.size <= 0 || $0.quality.isEmpty }
+        await probe(videoRows.map(selection))
+    }
+
+    /// 逐个探测（同时最多 4 个），探过的跳过；分轨视频的大小 = 画面 + 声音（同一条音轨只探一次）
+    private func probe(_ medias: [VideoMedia]) async {
+        let targets = medias.filter { ($0.size <= 0 || $0.quality.isEmpty) && !probed.contains($0.id) && !probing.contains($0.id) }
         guard !targets.isEmpty else { return }
-        probing = Set(targets.map(\.id))
+        probing.formUnion(targets.map(\.id))
+        let audio = audioProbes
         await withTaskGroup(of: (UUID, MediaProbeResult?).self) { group in
             var pending = targets.makeIterator()
             for _ in 0..<4 {
-                if let media = pending.next() { group.addTask { await Self.probe(media) } }
+                if let media = pending.next() { group.addTask { await Self.probe(media, audio: audio) } }
             }
             for await (id, info) in group {
                 probing.remove(id)
                 if let info { probes[id] = info }
-                if let media = pending.next() { group.addTask { await Self.probe(media) } }
+                // 被取消（离开页面）的不算探过，下次进来再探
+                if !Task.isCancelled { probed.insert(id) }
+                if let media = pending.next() { group.addTask { await Self.probe(media, audio: audio) } }
             }
         }
-        probing = []
+        probing.subtract(targets.map(\.id))
     }
 
-    nonisolated private static func probe(_ media: VideoMedia) async -> (UUID, MediaProbeResult?) {
+    nonisolated private static func probe(_ media: VideoMedia, audio: AudioProbeCache) async -> (UUID, MediaProbeResult?) {
         guard var info = await MediaProbe.probe(media.url, headers: media.headers, isHLS: media.isHLS) else { return (media.id, nil) }
         if !media.audioURL.isEmpty, let size = info.size {
-            let audio = await MediaProbe.probe(media.audioURL, headers: media.headers, isHLS: false)
-            info.size = audio?.size.map { size + $0 }
+            let audioSize = await audio.size(media.audioURL, headers: media.headers)
+            info.size = audioSize.map { size + $0 }
         }
         return (media.id, info)
     }
@@ -330,6 +414,7 @@ struct VideoResultView: View {
     private func imageTile(_ media: VideoMedia) -> some View {
         let on = selected.contains(media.id)
         let state = state(of: media)
+        let live = livePairs[media.id]
         return Button {
             if selecting {
                 if on { selected.remove(media.id) } else { selected.insert(media.id) }
@@ -344,6 +429,18 @@ struct VideoResultView: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(on ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.hairline), lineWidth: on ? 2.5 : 1)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if live != nil {
+                        Text("LIVE")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 6)
+                            .frame(height: 18)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .padding(8)
+                            .accessibilityLabel("实况照片")
+                    }
                 }
                 .scaleEffect(on ? 0.96 : 1)
                 .overlay(alignment: .topTrailing) {
@@ -364,8 +461,11 @@ struct VideoResultView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button { download([media]) } label: { Label { Text("下载这张") } icon: { Image(icon: .download) } }
-            Button { UIPasteboard.general.string = media.url; app.show("已复制图片地址") } label: {
+            Button { download(withLive([media])) } label: { Label { Text("下载这张") } icon: { Image(icon: .download) } }
+            if let live {
+                Button { play(live) } label: { Label { Text("播放实况") } icon: { Image(icon: .play) } }
+            }
+            Button { Clipboard.copy(media.url); app.show("已复制图片地址") } label: {
                 Label { Text("复制图片地址") } icon: { Image(icon: .link) }
             }
         }
@@ -392,6 +492,12 @@ struct VideoResultView: View {
                     } label: {
                         HStack(spacing: 12) {
                             SelectMark(on: !unpicked.contains(entry.id), size: 20)
+                            if !entry.cover.isEmpty {
+                                Color.fillMuted
+                                    .frame(width: 64, height: 40)
+                                    .overlay { RemoteImage(url: VideoHTTP.secureURL(entry.cover)) }
+                                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            }
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(entry.title.isEmpty ? entry.url : entry.title)
                                     .font(.subheadline).foregroundStyle(Color.ink).lineLimit(2)
@@ -494,9 +600,12 @@ struct VideoResultView: View {
 
     @ViewBuilder
     private var mediaBottomBar: some View {
-        let targets = selecting ? images.filter { selected.contains($0.id) } : downloadAll
-        let title = selecting ? (targets.isEmpty ? "选择要下载的图片" : "下载所选 · \(targets.count) 张")
-            : (targets.count > 1 ? "全部下载 · \(targets.count) 项" : "下载")
+        let picked = images.filter { selected.contains($0.id) }
+        let targets = selecting ? withLive(picked) : downloadAll
+        // 数量按作品算：实况照片的视频随图片一起下，不另计
+        let count = selecting ? picked.count : videoRows.count + images.count
+        let title = selecting ? (picked.isEmpty ? "选择要下载的图片" : "下载所选 · \(count) 张")
+            : (count > 1 ? "全部下载 · \(count) 项" : "下载")
         Button {
             download(targets)
             selecting = false
@@ -532,11 +641,24 @@ struct VideoResultView: View {
             app.show("已在下载列表中")
             return
         }
-        // 多张图片归到以作品标题命名的文件夹
-        let folder = pending.count > 1 ? FileNames.base(result.title, fallback: result.platform.displayName) : ""
-        let group = pending.count > 1 ? DownloadGroup(title: result.title.isEmpty ? result.platform.displayName : result.title) : nil
+        // 多张图片归到以作品标题命名的文件夹；实况照片的视频跟着图片走（同一目录才能配对），不单独计数
+        let units = pending.filter { !liveClipIDs.contains($0.id) }.count
+        let folder = units > 1 ? FileNames.base(result.title, fallback: result.platform.displayName) : ""
+        let group = units > 1 ? DownloadGroup(title: result.title.isEmpty ? result.platform.displayName : result.title) : nil
         for m in pending { app.downloads.enqueue(media: m, result: result, folder: folder, group: group) }
-        let skipped = medias.count - pending.count
-        app.show(pending.count > 1 ? "已添加 \(pending.count) 个" + (skipped > 0 ? " · 跳过 \(skipped) 个已下载" : "") : "已添加到下载")
+        let skipped = medias.filter { !liveClipIDs.contains($0.id) }.count - units
+        app.show(units > 1 ? "已添加 \(units) 个" + (skipped > 0 ? " · 跳过 \(skipped) 个已下载" : "") : "已添加到下载")
+    }
+}
+
+/// 同一条音轨的大小探测合并成一次（各清晰度共用一条音轨时）
+private actor AudioProbeCache {
+    private var tasks: [String: Task<Int64?, Never>] = [:]
+
+    func size(_ url: String, headers: [String: String]) async -> Int64? {
+        if let task = tasks[url] { return await task.value }
+        let task = Task { await MediaProbe.probe(url, headers: headers, isHLS: false)?.size }
+        tasks[url] = task
+        return await task.value
     }
 }

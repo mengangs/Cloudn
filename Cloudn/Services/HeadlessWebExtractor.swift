@@ -25,6 +25,10 @@ struct HeadlessWebExtractor: WebPageExtractor {
 final class HeadlessSession: NSObject, WKNavigationDelegate {
     private let webView: WKWebView
     private let target: URL
+    /// 页面已加载失败（打不开 / 网页进程崩溃）：不再空等到超时，让解析器尽快换别的办法
+    private var failed = false
+    /// 主框架至少提交过一次导航（页面已有内容）
+    private var committed = false
 
     init?(url: String, userAgent: String, scripts: [String]) {
         guard let target = URL(string: url),
@@ -93,11 +97,53 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return nil }
+            if failed {
+                // 失败前页面可能已经把数据带回来了：最后看一眼，没有就立即结束
+                guard committed, let ready = await evaluate(readyScript) as? Bool, ready else { return nil }
+                return await evaluate(extractScript) as? String
+            }
             if let ready = await evaluate(readyScript) as? Bool, ready {
                 return await evaluate(extractScript) as? String
             }
         }
         return nil
+    }
+
+    // MARK: 导航失败
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        committed = true
+    }
+
+    /// 还没提交就失败：页面根本没打开（断网、被墙、证书错误）。已有页面后的跳转失败（如页面尝试唤起 App 的自定义协议）不算
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard Self.isFatal(error) else { return }
+        if !committed {
+            Log.info("隐藏浏览器：页面打开失败 \(error.localizedDescription)")
+            failed = true
+        }
+    }
+
+    /// 主框架加载中途失败
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard Self.isFatal(error) else { return }
+        Log.info("隐藏浏览器：页面加载失败 \(error.localizedDescription)")
+        failed = true
+    }
+
+    /// 网页进程崩溃（内存不足等）：页面已经没了，等下去也不会好
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Log.info("隐藏浏览器：网页进程已终止")
+        committed = false
+        failed = true
+    }
+
+    /// 被新导航顶掉（-999）、交给下载 / 外部 App（WebKit 102）、不支持的协议都不是真正的失败
+    private static func isFatal(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && (ns.code == NSURLErrorCancelled || ns.code == NSURLErrorUnsupportedURL) { return false }
+        if ns.domain == "WebKitErrorDomain" && (ns.code == 102 || ns.code == 101 || ns.code == 204) { return false }
+        return true
     }
 
     /// 回调版 evaluateJavaScript（async 版本在结果为 undefined 时会抛错），带 3 秒超时

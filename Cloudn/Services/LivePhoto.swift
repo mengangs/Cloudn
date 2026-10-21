@@ -41,6 +41,20 @@ enum LivePhoto {
         return []
     }
 
+    /// a 和 b 是同一张实况照片的两半（按文件名判断）
+    static func isPartner(_ a: String, of b: String) -> Bool {
+        partnerNames(for: b).contains { $0.caseInsensitiveCompare(a) == .orderedSame }
+    }
+
+    /// 一对实况照片共用的名字（图片去掉扩展名）：两半算出来相同；不是实况照片的一半返回 nil
+    static func pairKey(for fileName: String) -> String? {
+        let stem = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        if videoExtensions.contains(ext), stem.hasSuffix(suffix) { return String(stem.dropLast(suffix.count)) }
+        if imageExtensions.contains(ext) { return stem }
+        return nil
+    }
+
     private static func existing(_ dir: URL, _ stem: String, _ exts: [String]) -> URL? {
         let fm = FileManager.default
         for ext in exts {

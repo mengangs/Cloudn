@@ -85,14 +85,35 @@ final class TransferProgress: @unchecked Sendable {
 
     func chunk(_ index: Int) -> DownloadChunk { lock.lock(); defer { lock.unlock() }; return _chunks[index] }
 
-    func setSegments(done: Int, total: Int) { lock.lock(); _segmentsDone = done; _segmentsTotal = total; lock.unlock() }
+    /// bytes：续传时已下好的分片字节数（计入已下载大小）
+    func setSegments(done: Int, total: Int, bytes: Int64 = 0) {
+        lock.lock(); _segmentsDone = done; _segmentsTotal = total; _hlsBytes = bytes; lock.unlock()
+    }
     func segmentFinished(bytes: Int64) { lock.lock(); _segmentsDone += 1; _hlsBytes += bytes; lock.unlock() }
 }
 
 struct TransferError: Error, LocalizedError {
     let message: String
-    init(_ m: String) { message = m }
+    /// HTTP 状态码引起的错误（决定能不能重试）；其他错误为 nil
+    var status: Int?
+    /// 服务器给的 Retry-After（秒）
+    var retryAfter: TimeInterval?
+    /// 重试也没用的错误（如存储空间不足），直接让任务失败
+    var permanent = false
+    init(_ m: String, permanent: Bool = false) {
+        message = m
+        self.permanent = permanent
+    }
+    /// HTTP 状态码错误：说明与 RangeTransfer.statusMessage 一致（应用按「HTTP 403」等前缀判断要不要重新取链）
+    init(status: Int, retryAfter: TimeInterval? = nil) {
+        message = RangeTransfer.statusMessage(status)
+        self.status = status
+        self.retryAfter = retryAfter
+    }
     var errorDescription: String? { message }
+
+    /// 值得过一会儿再试（408 / 429 / 5xx）
+    var isRetryableStatus: Bool { status.map(RetryPolicy.isRetryable) ?? false }
 }
 
 /// 单个文件的分片下载：探测 → 规划分片 → 多连接并发写入同一文件的不同偏移 → 断点续传
@@ -106,6 +127,8 @@ struct RangeTransfer {
     let streamer: StreamingSession
     /// 同一文件的其他直链：分片按序号轮流使用各条链接，某条失败时换下一条重试
     var mirrors: [DownloadSource] = []
+    /// 续传已有的分片计划前先探测一次总长度（换过直链：新链接对上的可能已不是同一个文件）
+    var verifyExisting = false
 
     /// 主链在前
     var sources: [DownloadSource] { [DownloadSource(url: url, headers: headers)] + mirrors }
@@ -122,7 +145,9 @@ struct RangeTransfer {
     func run() async throws {
         let fm = FileManager.default
         if progress.chunks.isEmpty || !fm.fileExists(atPath: destination.path) {
-            try await plan()
+            try await withRetry { try await self.plan() }
+        } else if verifyExisting {
+            try await verifyPlan()
         }
         // 只有按 Range 规划成多段的任务才能切分片、换连接（单流可能是服务端不支持 Range）
         let splittable = progress.chunks.count > 1
@@ -194,36 +219,48 @@ struct RangeTransfer {
         return (status, respHeaders)
     }
 
-    /// 探测总长度与是否支持分片
-    private func plan() async throws {
+    /// 探测总长度与是否支持分片（Range 0-0，不可信时再不带 Range 问一次）
+    func probe() async throws -> (total: Int64, ranged: Bool) {
         let probe = try await head(range: true)
         Log.info("下载探测（Range 0-0）：HTTP \(probe.status) Content-Range=\(probe.headers["content-range"] ?? "无") "
                  + "Content-Length=\(probe.headers["content-length"] ?? "无") Content-Type=\(probe.headers["content-type"] ?? "无")")
-        guard (200..<300).contains(probe.status) else { throw TransferError(Self.statusMessage(probe.status)) }
-        var total: Int64 = -1
-        var ranged = false
-        if let planned = Self.planTotal(status: probe.status, headers: probe.headers) {
-            (total, ranged) = planned
-        } else {
-            // 分段回应不可信：不带 Range 再问一次总长度（拿不到就整体下载、长度未知）
-            let plain = try await head(range: false)
-            total = Self.plainTotal(status: plain.status, headers: plain.headers)
-            Log.info("下载探测（不带 Range）：HTTP \(plain.status) Content-Length=\(plain.headers["content-length"] ?? "无") → 总长 \(total)")
+        guard (200..<300).contains(probe.status) else {
+            throw TransferError(status: probe.status, retryAfter: RetryPolicy.parseRetryAfter(probe.headers["retry-after"]))
         }
-        _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
-        var chunks: [DownloadChunk]
-        if ranged && total > Self.minChunkSize * 2 {
-            let count = Int(min(Int64(max(1, connections)), max(1, total / Self.minChunkSize)))
-            let size = total / Int64(count)
-            chunks = (0..<count).map { i in
-                let start = Int64(i) * size
-                let end = i == count - 1 ? total - 1 : start + size - 1
-                return DownloadChunk(start: start, end: end, received: 0)
-            }
-        } else {
+        if let planned = Self.planTotal(status: probe.status, headers: probe.headers) { return planned }
+        // 分段回应不可信：不带 Range 再问一次总长度（拿不到就整体下载、长度未知）
+        let plain = try await head(range: false)
+        let total = Self.plainTotal(status: plain.status, headers: plain.headers)
+        Log.info("下载探测（不带 Range）：HTTP \(plain.status) Content-Length=\(plain.headers["content-length"] ?? "无") → 总长 \(total)")
+        return (total, false)
+    }
+
+    /// 按探测结果分片：支持 Range 且够大时按连接数切，否则单流
+    static func makeChunks(total: Int64, ranged: Bool, connections: Int) -> [DownloadChunk] {
+        guard ranged && total > minChunkSize * 2 else {
             // 不支持分段（或分段回应不规范）：单流、不带 Range 从头读到尾，总长只用来显示进度和校验
-            chunks = [DownloadChunk(start: 0, end: -1, received: 0)]
+            return [DownloadChunk(start: 0, end: -1, received: 0)]
         }
+        let count = Int(min(Int64(max(1, connections)), max(1, total / minChunkSize)))
+        let size = total / Int64(count)
+        return (0..<count).map { i in
+            let start = Int64(i) * size
+            let end = i == count - 1 ? total - 1 : start + size - 1
+            return DownloadChunk(start: start, end: end, received: 0)
+        }
+    }
+
+    /// 探测并建立分片计划：数据文件清空重建、预留长度，进度盒换成新计划
+    func plan() async throws {
+        let (total, ranged) = try await probe()
+        try startPlan(total: total, ranged: ranged)
+    }
+
+    private func startPlan(total: Int64, ranged: Bool) throws {
+        // 开始写之前先看空间够不够（预留长度的文件是稀疏的，不代表空间已经占下）
+        if total > 0 { try DiskSpace.ensure(needed: total, at: destination.deletingLastPathComponent()) }
+        _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let chunks = Self.makeChunks(total: total, ranged: ranged, connections: connections)
         if total > 0 {
             let handle = try FileHandle(forWritingTo: destination)
             try handle.truncate(atOffset: UInt64(total))
@@ -232,24 +269,76 @@ struct RangeTransfer {
         progress.reset(chunks: chunks, total: total)
     }
 
-    private func runChunk(_ index: Int, scheduler: ChunkScheduler? = nil) async throws {
+    /// 已下过一部分的计划还能不能接着用：新旧总长度都已知且不一致（换链后对上的已不是同一个文件），就得重下
+    static func planStillValid(knownTotal: Int64, probedTotal: Int64) -> Bool {
+        knownTotal <= 0 || probedTotal <= 0 || knownTotal == probedTotal
+    }
+
+    /// 换链后续传前核对：新链接的总长度和已有计划不一致时丢掉已下的分片，按新链接从头规划
+    private func verifyPlan() async throws {
+        let known = progress.total
+        let probed: (total: Int64, ranged: Bool)
+        do {
+            probed = try await withRetry { try await self.probe() }
+        } catch let e as TransferError where e.status != nil {
+            throw e
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            // 探测本身没成功（网络抖动）：保留已下部分，交给后面的分片请求处理
+            Log.info("换链后核对大小失败，沿用已下载部分：\(error.localizedDescription)")
+            return
+        }
+        guard !Self.planStillValid(knownTotal: known, probedTotal: probed.total) else { return }
+        Log.info("新直链的文件大小（\(probed.total)）与已下载部分（\(known)）不一致，重新下载")
+        try startPlan(total: probed.total, ranged: probed.ranged)
+    }
+
+    /// 探测请求的重试：网络错误与 408 / 429 / 5xx 按退避重试，其余错误直接抛出
+    private func withRetry<T>(_ body: () async throws -> T) async throws -> T {
         var attempt = 0
         while true {
             do {
-                try await fetchChunk(index, source: Self.sourceIndex(chunk: index, attempt: attempt, count: sources.count), scheduler: scheduler)
-                return
-            } catch is ChunkScheduler.Preempted {
-                // 慢连接被换掉：已写入的保留，立即从断点重连，不算失败、不退避
-                scheduler?.restarted(index, received: progress.chunk(index).received)
-            } catch let e as TransferError where e.message.hasPrefix("HTTP 4") {
-                // 多源时某条链接被拒绝，换下一条；每条都试过仍被拒绝才放弃
-                attempt += 1
-                if sources.count <= 1 || attempt >= sources.count { throw e }
+                return try await body()
+            } catch let e as TransferError where e.permanent || (e.status != nil && !e.isRetryableStatus) {
+                throw e
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 attempt += 1
                 if attempt > retryCount { throw error }
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 800_000_000)
+                try await RetryPolicy.sleep(attempt: attempt, retryAfter: (error as? TransferError)?.retryAfter)
+            }
+        }
+    }
+
+    private func runChunk(_ index: Int, scheduler: ChunkScheduler? = nil) async throws {
+        // attempt 只数「连续没进展」的失败：这一次收到了数据就从头数，长下载偶尔断几次不会把重试次数耗光
+        var attempt = 0
+        // 被拒（4xx）后换链接的次数，用来轮换多源
+        var rotation = 0
+        while true {
+            let before = progress.chunk(index).received
+            do {
+                try await fetchChunk(index, source: Self.sourceIndex(chunk: index, attempt: rotation, count: sources.count), scheduler: scheduler)
+                return
+            } catch is ChunkScheduler.Preempted {
+                // 慢连接被换掉：已写入的保留，立即从断点重连，不算失败、不退避
+                scheduler?.restarted(index, received: progress.chunk(index).received)
+            } catch let e as TransferError where e.status.map({ (400..<500).contains($0) && !RetryPolicy.isRetryable(status: $0) }) ?? false {
+                // 多源时某条链接被拒绝，换下一条；每条都试过仍被拒绝才放弃（单链接直接抛出，由应用重新取链）
+                rotation += 1
+                if sources.count <= 1 || rotation >= sources.count { throw e }
+            } catch let e as TransferError where e.permanent {
+                throw e
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                // 写盘失败（空间满了）重试也没用
+                if DiskSpace.isOutOfSpace(error) { throw TransferError(DiskSpace.writeFailedMessage, permanent: true) }
+                if progress.chunk(index).received > before { attempt = 0 }
+                attempt += 1
+                if attempt > retryCount { throw error }
+                // 多源时顺便换一条链接（服务器错误多半只是那一台）
+                if sources.count > 1 { rotation += 1 }
+                try await RetryPolicy.sleep(attempt: attempt, retryAfter: (error as? TransferError)?.retryAfter)
             }
         }
     }
@@ -301,7 +390,7 @@ struct RangeTransfer {
                     return true
                 }
                 guard r.status == 200 || r.status == 206 else {
-                    failure = TransferError(Self.statusMessage(r.status))
+                    failure = TransferError(status: r.status, retryAfter: RetryPolicy.parseRetryAfter(r.headers["retry-after"]))
                     return false
                 }
                 return true
@@ -358,6 +447,7 @@ struct RangeTransfer {
         case 404, 410: return "HTTP \(status)：文件不存在或直链已过期"
         case 412: return "HTTP 412：直链校验失败，请重新解析后下载"
         case 416: return "HTTP 416：请求范围无效"
+        case 429: return "HTTP 429：请求太频繁，服务器限流"
         case 0: return "网络连接失败"
         default: return "HTTP \(status)"
         }

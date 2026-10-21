@@ -86,7 +86,7 @@ struct SnifferView: View {
                         Menu {
                             Button { browser.webView.reload() } label: { Label("刷新", glyph: .refresh) }
                             Button {
-                                UIPasteboard.general.string = browser.currentURL
+                                Clipboard.copy(browser.currentURL)
                                 app.show("已复制网页地址")
                             } label: { Label("复制网页地址", glyph: .link) }
                             if let url = URL(string: browser.currentURL) {
@@ -302,7 +302,7 @@ struct SnifferView: View {
         }
         .contextMenu {
             Button {
-                UIPasteboard.general.string = media.url
+                Clipboard.copy(media.url)
                 app.show("已复制地址")
             } label: { Label("复制地址", glyph: .link) }
         }
@@ -342,6 +342,10 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     private(set) var loading = false
     var showingList = false
     @ObservationIgnored private var seen = Set<String>()
+    /// 等待探测的媒体与正在探测的数量：页面一下子请求几十个地址时，同时最多探测 maxProbes 个
+    @ObservationIgnored private var probeQueue: [SniffedMedia] = []
+    @ObservationIgnored private var activeProbes = 0
+    private static let maxProbes = 4
 
     /// 页面里出现过的 MSE 轨道：SourceBuffer 编号 → MIME
     private(set) var mseTracks: [String: String] = [:]
@@ -421,7 +425,21 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         let media = SniffedMedia(url: url, kind: SniffedMedia.classify(url), page: page.isEmpty ? currentURL : page,
                                  title: title.isEmpty ? self.title : title)
         medias.append(media)
-        Task { await probe(media) }
+        probeQueue.append(media)
+        pumpProbes()
+    }
+
+    /// 从队列里取出等待的媒体开始探测，保持同时进行的不超过 maxProbes 个
+    private func pumpProbes() {
+        while activeProbes < Self.maxProbes, !probeQueue.isEmpty {
+            let media = probeQueue.removeFirst()
+            activeProbes += 1
+            Task {
+                await probe(media)
+                activeProbes -= 1
+                pumpProbes()
+            }
+        }
     }
 
     /// 后台探测大小 / 时长，结果回填到列表

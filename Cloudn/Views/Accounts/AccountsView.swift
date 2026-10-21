@@ -83,6 +83,7 @@ struct AccountsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
+                .readableWidth()
             }
             .background(Color.paper)
             .task(id: accountsKey) { await refreshStatus() }
@@ -99,13 +100,14 @@ struct AccountsView: View {
                     app.show("无法读取所选文件", error: true)
                 }
             }
-            .sheet(item: $loginKind) { kind in
+            // 登录页没登成就关掉：撤销「添加账号」标记，免得之后别处重新登录被当成附加账号、主账号不更新
+            .sheet(item: $loginKind, onDismiss: clearPendingAdd) { kind in
                 WebLoginView(kind: kind)
             }
-            .sheet(item: $manualKind) { kind in
+            .sheet(item: $manualKind, onDismiss: clearPendingAdd) { kind in
                 ManualCookieView(kind: kind)
             }
-            .sheet(item: $passwordKind) { kind in
+            .sheet(item: $passwordKind, onDismiss: clearPendingAdd) { kind in
                 PasswordLoginView(kind: kind)
             }
             .navigationDestination(item: $drivePlatform) { MyDriveView(platform: $0) }
@@ -310,6 +312,10 @@ struct AccountsView: View {
         Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", glyph: .paste) }
     }
 
+    private func clearPendingAdd() {
+        app.accounts.pendingAdd = nil
+    }
+
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
         if kind.prefersPasswordLogin { passwordKind = kind; return }
@@ -341,8 +347,10 @@ private struct LogoutDialog: ViewModifier {
     @Environment(AppModel.self) private var app
 
     func body(content: Content) -> some View {
-        content.rowDialog("退出\(kind.displayName)？", isPresented: presenting($logoutKind) { $0 == kind },
-                          message: "将删除本机保存的登录凭据") {
+        // 退出会删掉该平台的全部账号（含附加账号），有多个时把数量说清楚
+        let count = app.accounts.count(for: kind)
+        return content.rowDialog("退出\(kind.displayName)？", isPresented: presenting($logoutKind) { $0 == kind },
+                                 message: count > 1 ? "将删除本机保存的 \(count) 个\(kind.displayName)账号的登录凭据" : "将删除本机保存的登录凭据") {
             Button("退出登录", role: .destructive) { Task { await app.accounts.logout(kind) } }
         }
     }

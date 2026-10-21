@@ -1,6 +1,8 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 import AVKit
 import CloudnKit
+import CryptoKit
+import ImageIO
 import QuickLook
 import SwiftUI
 import UIKit
@@ -20,9 +22,15 @@ struct FilePreviewView: View {
     @State private var converting: Double?
     @State private var convertError: String?
     @State private var convertNotes: [String] = []
-    @State private var convertSubtitles: [MKVRemuxer.Subtitle] = []
+    @State private var convertSubtitles: [ConvertedSubtitle] = []
     /// 读文件头判断能不能转：nil 还没判断，"" 可以转，其余为不能转的原因
     @State private var remuxIssue: String?
+    /// 正在进行的转换；关闭预览时取消
+    @State private var remuxTask: Task<Void, Never>?
+    /// 文件大小：打开时读一次（nil 表示还没读到），不在每次刷新界面时访问磁盘
+    @State private var fileSize: Int64?
+    /// 图片解码失败（文件损坏或格式不支持）时改显示「无法预览」卡片
+    @State private var imageFailed = false
 
     enum Mode { case player, image, text, document, unsupported }
 
@@ -37,7 +45,7 @@ struct FilePreviewView: View {
         let ext = url.pathExtension.lowercased()
         switch FileNames.kind(of: url.lastPathComponent) {
         case .video, .audio: return Self.playable.contains(ext) ? .player : .unsupported
-        case .image: return .image
+        case .image: return imageFailed ? .unsupported : .image
         case .text: return .text
         default: return QLPreviewController.canPreview(url as NSURL) ? .document : .unsupported
         }
@@ -66,6 +74,16 @@ struct FilePreviewView: View {
         .animation(.easeInOut(duration: 0.2), value: chromeVisible)
         .preferredColorScheme(immersive ? .dark : nil)
         .presentationBackground(.clear)
+        .task {
+            guard fileSize == nil else { return }
+            let source = url
+            fileSize = await Task.detached { FileChunks.size(of: source) }.value
+        }
+        .onDisappear {
+            // 关闭预览就不再等转换结果（已转好的部分照样留在缓存里，下次直接用）
+            remuxTask?.cancel()
+            remuxTask = nil
+        }
     }
 
     private var dismissDrag: DismissDrag {
@@ -88,7 +106,8 @@ struct FilePreviewView: View {
                 Color.black.onAppear { player = PlayerController.makePlayer(converted ?? url) }
             }
         case .image:
-            ZoomableImageFile(url: url, onTap: { chromeVisible.toggle() }, drag: dismissDrag).ignoresSafeArea()
+            ZoomableImageFile(url: url, onTap: { chromeVisible.toggle() }, onFailure: { imageFailed = true }, drag: dismissDrag)
+                .ignoresSafeArea()
         case .text:
             LocalTextView(url: url)
         case .document:
@@ -101,7 +120,7 @@ struct FilePreviewView: View {
     // MARK: 顶部操作栏
 
     private var meta: String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let size = fileSize ?? 0
         let ext = url.pathExtension.uppercased()
         return [ext.isEmpty ? nil : ext, size > 0 ? ByteFormat.string(size) : nil].compactMap { $0 }.joined(separator: " · ")
     }
@@ -157,19 +176,17 @@ struct FilePreviewView: View {
 
     // MARK: 不能直接预览
 
-    private var fileSize: Int64 {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
-    }
-
     private var canRemux: Bool {
-        Self.remuxable.contains(url.pathExtension.lowercased()) && fileSize >= 1024 && remuxIssue == ""
+        Self.remuxable.contains(url.pathExtension.lowercased()) && (fileSize ?? 0) >= 1024 && remuxIssue == ""
     }
 
     private var unsupportedCard: some View {
         let kind = FileNames.kind(of: url.lastPathComponent)
-        let tooSmall = (kind == .video || kind == .audio) && fileSize < 1024
+        let size = fileSize ?? 0
+        let tooSmall = (kind == .video || kind == .audio) && fileSize != nil && size < 1024
         let hint: String = switch kind {
-        case _ where tooSmall: "文件只有 \(ByteFormat.string(fileSize))，不是完整的视频，可能下载没有成功，请重新下载"
+        case _ where tooSmall: "文件只有 \(ByteFormat.string(size))，不是完整的视频，可能下载没有成功，请重新下载"
+        case .image where imageFailed: "图片无法解码，可能文件已损坏或格式不受支持，可以用其他应用打开"
         case _ where !(remuxIssue ?? "").isEmpty: remuxIssue ?? ""
         case _ where canRemux: "正在把 \(url.pathExtension.uppercased()) 换成 MP4 封装后播放：音视频原样搬过去，不重新编码、画质不变，通常几秒钟"
         case .video, .audio: "这个格式系统播放器不支持，可以用 VLC、Infuse 等应用打开"
@@ -222,53 +239,48 @@ struct FilePreviewView: View {
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
-            guard remuxIssue == nil, Self.remuxable.contains(url.pathExtension.lowercased()), fileSize >= 1024 else { return }
+        .task(id: fileSize) {
+            guard remuxIssue == nil, Self.remuxable.contains(url.pathExtension.lowercased()), let size = fileSize, size >= 1024 else { return }
             let source = url
-            remuxIssue = await Task.detached { MKVRemuxer.check(source) ?? "" }.value
+            // 转过且源文件没改动：缓存里的 MP4 直接能播，不必再读文件头
+            remuxIssue = await Task.detached { ConvertedCache.lookup(source) != nil ? "" : (MKVRemuxer.check(source) ?? "") }.value
             // 能转就直接转：只是把音视频原样换个容器（不重新编码、几秒钟），转好自动播放
-            if remuxIssue == "" { startRemux() }
+            if remuxIssue == "" && !Task.isCancelled { startRemux() }
         }
     }
 
     // MARK: MKV 转 MP4
 
-    /// 转出的 MP4 放在缓存目录（同一文件转过且没改动就直接复用）；转好后改播它
+    /// 转出的 MP4 放在缓存目录（同一文件转过且没改动就直接复用，见 ConvertedCache）；转好后改播它
     private func startRemux() {
         guard converting == nil else { return }
         convertError = nil
         converting = 0
         let source = url
-        Task {
+        let progress: @Sendable (Double) -> Void = { value in
+            Task { @MainActor in if converting != nil { converting = value } }
+        }
+        remuxTask = Task {
             do {
-                let (output, result) = try await Self.remux(source) { value in
-                    Task { @MainActor in if converting != nil { converting = value } }
-                }
+                let (output, meta) = try await Task.detached(priority: .userInitiated) {
+                    try ConvertedCache.convert(source, progress: progress)
+                }.value
+                // 预览已关闭：结果留在缓存里，不再切换播放器、不提示
+                guard !Task.isCancelled else { return }
                 converting = nil
-                convertNotes = result.skipped
-                convertSubtitles = result.subtitles
+                convertNotes = meta.skipped
+                convertSubtitles = meta.subtitles
                 player = nil
                 converted = output
                 var message = "已转换为 MP4"
-                if !result.skipped.isEmpty { message += "；" + result.skipped.joined(separator: "；") }
+                if !meta.skipped.isEmpty { message += "；" + meta.skipped.joined(separator: "；") }
                 app.show(message)
             } catch {
+                guard !Task.isCancelled else { return }
                 converting = nil
                 convertError = error.localizedDescription
             }
         }
-    }
-
-    nonisolated private static func remux(_ source: URL, progress: @escaping @Sendable (Double) -> Void) async throws
-        -> (URL, MKVRemuxer.Result) {
-        try await Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            let dir = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Converted", isDirectory: true)
-            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            let output = dir.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".mp4")
-            let result = try MKVRemuxer.remux(source, to: output, progress: progress)
-            return (output, result)
-        }.value
     }
 
     /// 把转好的 MP4（和文字字幕）存进下载列表，「文件」App 里可见、可存相册
@@ -354,9 +366,29 @@ struct PlayerController: UIViewControllerRepresentable {
 struct ZoomableImageFile: UIViewRepresentable {
     let url: URL
     var onTap: () -> Void = {}
+    /// 解码失败（文件损坏 / 格式不支持）
+    var onFailure: () -> Void = {}
     var drag: DismissDrag?
 
-    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap, drag: drag) }
+    func makeCoordinator() -> Coordinator {
+        let coordinator = Coordinator(onTap: onTap, drag: drag)
+        coordinator.onFailure = onFailure
+        return coordinator
+    }
+
+    /// 按需缩小解码：长边不超过屏幕的约 3 倍像素，几十兆像素的大图也不会一次解出整张、占满内存
+    nonisolated static func downsampled(_ url: URL, maxPixel: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ] as CFDictionary
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        return UIImage(cgImage: image)
+    }
 
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = UIScrollView()
@@ -367,7 +399,7 @@ struct ZoomableImageFile: UIViewRepresentable {
         scroll.showsHorizontalScrollIndicator = false
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.backgroundColor = .clear
-        let imageView = UIImageView(image: UIImage(contentsOfFile: url.path))
+        let imageView = UIImageView()
         imageView.contentMode = .scaleAspectFit
         imageView.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(imageView)
@@ -389,18 +421,49 @@ struct ZoomableImageFile: UIViewRepresentable {
         // 未放大时往下拖关闭；放大后交给滚动视图平移
         context.coordinator.scroll = scroll
         if drag != nil { context.coordinator.attach(to: scroll) }
+        // 在后台解码，解好再放上去；主线程不做整张图的解码
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.color = .white
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: scroll.frameLayoutGuide.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: scroll.frameLayoutGuide.centerYAnchor)
+        ])
+        spinner.startAnimating()
+        let screen = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds }.first
+        let maxPixel = max(screen?.width ?? 1024, screen?.height ?? 1366) * 3
+        let source = url
+        let coordinator = context.coordinator
+        context.coordinator.loading = Task { @MainActor [weak imageView, weak spinner] in
+            let image = await Task.detached(priority: .userInitiated) { Self.downsampled(source, maxPixel: maxPixel) }.value
+            guard !Task.isCancelled else { return }
+            spinner?.removeFromSuperview()
+            if let image {
+                imageView?.image = image
+            } else {
+                coordinator.onFailure()
+            }
+        }
         return scroll
     }
 
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         context.coordinator.onTap = onTap
+        context.coordinator.onFailure = onFailure
         context.coordinator.drag = drag
+    }
+
+    static func dismantleUIView(_ scroll: UIScrollView, coordinator: Coordinator) {
+        coordinator.loading?.cancel()
     }
 
     final class Coordinator: DismissPanCoordinator, UIScrollViewDelegate {
         var onTap: () -> Void
+        var onFailure: () -> Void = {}
         weak var imageView: UIImageView?
         weak var scroll: UIScrollView?
+        var loading: Task<Void, Never>?
         init(onTap: @escaping () -> Void, drag: DismissDrag?) {
             self.onTap = onTap
             super.init(drag: drag)
@@ -430,7 +493,7 @@ struct ZoomableImageFile: UIViewRepresentable {
 
 // MARK: - 文本
 
-/// 本地文本：只读前 2MB，编码自动识别（UTF-8 / GB18030）
+/// 本地文本：只读前 2MB，编码自动识别（UTF-8 / GB18030）。读文件、识别编码都在后台做，显示用 UITextView（大文本也不卡）
 struct LocalTextView: View {
     let url: URL
     @State private var text: String?
@@ -439,18 +502,15 @@ struct LocalTextView: View {
     var body: some View {
         Group {
             if let text {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if truncated {
-                            Label("文件较大，只显示前 2MB", glyph: .warning).font(.footnote).foregroundStyle(Color.ink3)
-                        }
-                        Text(text)
-                            .font(.mono)
-                            .foregroundStyle(Color.ink)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    if truncated {
+                        Label("文件较大，只显示前 2MB", glyph: .warning)
+                            .font(.footnote)
+                            .foregroundStyle(Color.ink3)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
                     }
-                    .padding(16)
+                    ReadOnlyTextView(text: text)
                 }
             } else {
                 Spinner(size: 26).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -458,9 +518,13 @@ struct LocalTextView: View {
         }
         .task {
             let limit = TextPreviewView.limit
-            let data = (try? FileChunks.read(url, offset: 0, length: limit)) ?? Data()
-            truncated = FileChunks.size(of: url) > Int64(limit)
-            text = TextPreviewView.decode(data)
+            let source = url
+            let (decoded, isTruncated) = await Task.detached(priority: .userInitiated) { () -> (String, Bool) in
+                let data = (try? FileChunks.read(source, offset: 0, length: limit)) ?? Data()
+                return (TextPreviewView.decode(data), FileChunks.size(of: source) > Int64(limit))
+            }.value
+            truncated = isTruncated
+            text = decoded
         }
     }
 }
@@ -534,6 +598,122 @@ class DismissPanCoordinator: NSObject, UIGestureRecognizerDelegate {
         case .ended: drag?.onEnd(y, pan.velocity(in: pan.view).y)
         case .cancelled, .failed: drag?.onEnd(0, 0)
         default: break
+        }
+    }
+}
+
+// MARK: - MKV 转换缓存
+
+/// 转换出的字幕（转好的结果连同字幕一起缓存，复用时也能「保存到下载」）
+struct ConvertedSubtitle: Codable, Sendable {
+    var language: String
+    var name: String
+    var srt: String
+}
+
+/// MKV 转出的 MP4 放在 Caches/Converted：按源文件路径 + 大小 + 修改时间的哈希取名，不同文件不会互相覆盖；
+/// 同一文件转过且没改动就直接复用。旁边的 .json 记着跳过的轨道与字幕。启动时清理旧文件（见 trim）
+enum ConvertedCache {
+    static let maxAge: TimeInterval = 7 * 24 * 3600
+    static let maxBytes: Int64 = 2 * 1024 * 1024 * 1024
+
+    struct Meta: Codable, Sendable {
+        var skipped: [String]
+        var subtitles: [ConvertedSubtitle]
+    }
+
+    static var directory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Converted", isDirectory: true)
+    }
+
+    /// 缓存键：源文件路径（去掉会随应用更新变化的容器路径）+ 大小 + 修改时间
+    static func key(for source: URL) -> String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: source.path) else { return nil }
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let path = source.standardizedFileURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        let digest = SHA256.hash(data: Data("\(path)|\(size)|\(modified)".utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 已有的转换结果（顺手更新修改时间，清理时按最近使用保留）
+    static func lookup(_ source: URL) -> (URL, Meta)? {
+        guard let key = key(for: source) else { return nil }
+        return cached(key)
+    }
+
+    private static func cached(_ key: String) -> (URL, Meta)? {
+        let fm = FileManager.default
+        let video = directory.appendingPathComponent(key + ".mp4")
+        guard let size = (try? fm.attributesOfItem(atPath: video.path)[.size] as? NSNumber)?.int64Value, size > 0 else { return nil }
+        try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: video.path)
+        let meta = (try? Data(contentsOf: metaURL(key))).flatMap { try? JSONDecoder().decode(Meta.self, from: $0) }
+        return (video, meta ?? Meta(skipped: [], subtitles: []))
+    }
+
+    private static func metaURL(_ key: String) -> URL { directory.appendingPathComponent(key + ".json") }
+
+    /// 有缓存直接返回；否则转到一个临时名字，成功后再改成正式名字（转到一半被打断不会留下坏文件冒充缓存）
+    static func convert(_ source: URL, progress: @escaping @Sendable (Double) -> Void) throws -> (URL, Meta) {
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let key = key(for: source) else { throw CloudnError("无法读取文件") }
+        if let hit = cached(key) { return hit }
+        let partial = directory.appendingPathComponent("\(key)-\(UUID().uuidString).partial")
+        let result: MKVRemuxer.Result
+        do {
+            result = try MKVRemuxer.remux(source, to: partial, progress: progress)
+        } catch {
+            try? fm.removeItem(at: partial)
+            throw error
+        }
+        let video = directory.appendingPathComponent(key + ".mp4")
+        if fm.fileExists(atPath: video.path) {
+            // 同一文件同时转了两次（如关掉又马上打开）：用先转好的那份
+            try? fm.removeItem(at: partial)
+        } else {
+            try fm.moveItem(at: partial, to: video)
+        }
+        let meta = Meta(skipped: result.skipped,
+                        subtitles: result.subtitles.map { ConvertedSubtitle(language: $0.language, name: $0.name, srt: $0.srt) })
+        if let data = try? JSONEncoder().encode(meta) { try? data.write(to: metaURL(key), options: .atomic) }
+        return (video, meta)
+    }
+
+    /// 启动时清理：超过 7 天没用过的、总量超过 2GB 的（从最久没用的删起）、中断留下的半成品
+    static func trim(now: Date = Date()) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys) else { return }
+        var videos: [(url: URL, date: Date, size: Int64)] = []
+        for file in files {
+            let values = try? file.resourceValues(forKeys: Set(keys))
+            let date = values?.contentModificationDate ?? .distantPast
+            let age = now.timeIntervalSince(date)
+            switch file.pathExtension {
+            case "partial":
+                // 正在写的半成品修改时间一直在更新；一小时没动过的是上次被打断留下的
+                if age > 3600 { try? fm.removeItem(at: file) }
+            case "mp4":
+                if age > maxAge {
+                    try? fm.removeItem(at: file)
+                } else {
+                    videos.append((file, date, Int64(values?.fileSize ?? 0)))
+                }
+            default:
+                break
+            }
+        }
+        var total: Int64 = 0
+        for (index, video) in videos.sorted(by: { $0.date > $1.date }).enumerated() {
+            total += video.size
+            // 最近用的那个总是留着
+            if total > maxBytes && index > 0 { try? fm.removeItem(at: video.url) }
+        }
+        // 视频删掉后，旁边的说明文件也删
+        for file in files where file.pathExtension == "json" {
+            let video = file.deletingPathExtension().appendingPathExtension("mp4")
+            if !fm.fileExists(atPath: video.path) { try? fm.removeItem(at: file) }
         }
     }
 }

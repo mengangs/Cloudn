@@ -46,6 +46,10 @@ final class AppModel {
     @ObservationIgnored private var suspendedIds: [UUID] = []
     /// 已自动重新取过链的任务（每个任务只自动换一次，避免反复失败反复换）
     @ObservationIgnored private var autoRefreshed = Set<UUID>()
+    /// 实况照片已下完、另一半还在下载的一半：等另一半下完一起存成实况照片、再一起移到外部文件夹
+    @ObservationIgnored private var heldLiveHalves: [UUID: DownloadItem] = [:]
+    /// 已存成实况照片的配对（文件夹 + 图片名）：两半几乎同时下完时两边的回调都会去存，只存一次
+    @ObservationIgnored private var savedLivePairs = Set<String>()
 
     init() {
         let fm = FileManager.default
@@ -62,8 +66,18 @@ final class AppModel {
         videoService = VideoParseService(credentials: accounts.vault, webExtractor: HeadlessWebExtractor())
 
         let snapshot = settings.snapshot
-        let engine = DownloadEngine(baseDirectory: support, downloadsDirectory: documents) { snapshot.get() }
+        // 被系统在后台拉起（投递后台下载事件）时不开前台下载：很快会被挂起，排队的单文件任务改交给后台会话
+        let launchedInBackground = UIApplication.shared.applicationState == .background
+        let engine = DownloadEngine(baseDirectory: support, downloadsDirectory: documents,
+                                    launchedInBackground: launchedInBackground) { snapshot.get() }
         background = BackgroundTransfers(engine: engine, staging: support.appendingPathComponent("background", isDirectory: true))
+        let transfers = background
+        Task { await engine.setBackgroundSubmitter { [weak transfers] jobs in transfers?.submit(jobs) } }
+        // 兜底：被系统在后台拉起、之后用户才打开应用时，场景的 .active 不一定会走到 scenePhaseChanged，
+        // 应用一变成活跃就把引擎切回前台（重复调用无副作用）
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { transfers.cancel(itemIds: Set(await engine.enterForeground())) }
+        }
         downloads = DownloadStore(engine: engine, resolvers: resolvers, videoService: videoService, background: background)
         torrents = TorrentFetchStore(cacheDirectory: engine.torrentCacheDirectory,
                                      extraTrackers: { [settings] in settings.useExtraTrackers ? TorrentDefaults.publicTrackers : [] })
@@ -102,36 +116,90 @@ final class AppModel {
                 Log.error("自动重新取链失败：\(item.displayName)：\(error.localizedDescription)")
             }
         }
-        notify(title: "下载失败", body: "\(item.displayName)：\(message.isEmpty ? "未知错误" : message)")
+        if notifiesInBackground { Notifier.downloadFailed(item.displayName, message: message.isEmpty ? "未知错误" : message) }
+        // 实况照片的另一半下载失败：已下完的这一半不再等，单独存
+        await releaseHeldLiveHalves()
     }
 
-    /// 应用不在前台时发本地通知（包括被系统在后台唤醒、没有界面的时候）
-    private func notify(title: String, body: String) {
-        guard UIApplication.shared.applicationState != .active, settings.notifyOnFinish else { return }
-        Notifier.post(title: title, body: body)
+    /// 应用不在前台时发本地通知（包括被系统在后台唤醒、没有界面的时候）；多个任务的完成 / 失败合并成一条
+    private var notifiesInBackground: Bool {
+        UIApplication.shared.applicationState != .active && settings.notifyOnFinish
     }
 
-    /// 实况照片的另一半还在下载：先不存，等另一半下完时一起存成实况照片
-    private func partnerPending(_ item: DownloadItem) -> Bool {
+    /// 实况照片的另一半还在下载（排队、下载中、暂停）：先不存，等另一半下完时一起存成实况照片。
+    /// 读引擎的最新列表（界面镜像可能还没收到刚完成的状态）
+    private func partnerPending(_ item: DownloadItem) async -> Bool {
         let names = Set(LivePhoto.partnerNames(for: item.request.fileName))
         guard !names.isEmpty else { return false }
-        return downloads.items.contains {
+        return await downloads.engine.snapshot().contains {
             $0.id != item.id && $0.request.folder == item.request.folder && names.contains($0.request.fileName)
                 && $0.status != .completed && $0.status != .failed
         }
     }
 
     private func didFinish(_ item: DownloadItem) async {
-        notify(title: "下载完成", body: item.displayName)
+        if notifiesInBackground { Notifier.downloadFinished(item.displayName) }
         guard let url = downloads.engine.fileURL(for: item) else { return }
-        if settings.autoSaveToPhotos, MediaTools.canSaveToPhotos(url), !partnerPending(item) {
-            do {
-                try await MediaTools.saveToPhotosSmart(url)
-            } catch {
-                show(error.localizedDescription, error: true)
-            }
+        let wantsPhotos = settings.autoSaveToPhotos && MediaTools.canSaveToPhotos(url)
+        if wantsPhotos, await partnerPending(item) {
+            // 另一半还没下完：这一半先留在下载目录（不移到外部文件夹），否则配对时找不到它
+            heldLiveHalves[item.id] = item
+            await releaseHeldLiveHalves()
+            return
+        }
+        // 已在等它的另一半：存成一张实况照片，再把两半都移走
+        let partners = heldLiveHalves.values.filter {
+            $0.request.folder == item.request.folder && LivePhoto.isPartner($0.request.fileName, of: item.request.fileName)
+        }
+        for partner in partners { heldLiveHalves[partner.id] = nil }
+        if wantsPhotos {
+            // 另一半在等它时，那一半的回调已经走完，不会再来存
+            await saveToPhotos(item, file: url, partnerMayFollow: partners.isEmpty)
         }
         await exportIfNeeded(item, file: url)
+        for partner in partners {
+            if let file = downloads.engine.fileURL(for: partner) { await exportIfNeeded(partner, file: file) }
+        }
+        await releaseHeldLiveHalves()
+    }
+
+    /// 在等另一半的实况照片：另一半已不会再完成（下载失败、被删除）的，单独存相册、移到外部文件夹
+    private func releaseHeldLiveHalves() async {
+        for (id, held) in heldLiveHalves {
+            // 中途可能已被另一半的完成回调取走
+            guard heldLiveHalves[id] != nil else { continue }
+            if await partnerPending(held) { continue }
+            // 另一半刚下完、它的完成回调还没轮到：由那边一起存成实况照片
+            let finishedAt = held.finishedAt ?? .distantPast
+            let partnerJustDone = await downloads.engine.snapshot().contains {
+                $0.status == .completed && $0.request.folder == held.request.folder
+                    && LivePhoto.isPartner($0.request.fileName, of: held.request.fileName)
+                    && ($0.finishedAt ?? .distantPast) >= finishedAt
+            }
+            if partnerJustDone || heldLiveHalves[id] == nil { continue }
+            heldLiveHalves[id] = nil
+            guard let url = downloads.engine.fileURL(for: held) else { continue }
+            Log.info("实况照片的另一半没能下完，单独保存：\(held.displayName)")
+            await saveToPhotos(held, file: url, partnerMayFollow: false)
+            await exportIfNeeded(held, file: url)
+        }
+    }
+
+    /// 自动存相册：实况照片的两半配对存一次（另一半的回调再来时跳过）。
+    /// partnerMayFollow：另一半的完成回调可能还会来（两半几乎同时下完）
+    private func saveToPhotos(_ item: DownloadItem, file: URL, partnerMayFollow: Bool) async {
+        if let key = LivePhoto.pairKey(for: item.request.fileName).map({ item.request.folder + "/" + $0 }) {
+            if savedLivePairs.remove(key) != nil {
+                // 另一半已经把这一对存好了
+                return
+            }
+            if partnerMayFollow, LivePhoto.pair(for: file) != nil { savedLivePairs.insert(key) }
+        }
+        do {
+            try await MediaTools.saveToPhotosSmart(file)
+        } catch {
+            show(error.localizedDescription, error: true)
+        }
     }
 
     /// 设置了「完成后移动到」时，把文件（保留子目录）移到所选文件夹
@@ -243,9 +311,14 @@ final class AppModel {
         case .active:
             autoCheckForUpdates()
             endBackgroundTask()
+            Notifier.resetSummary()
             let ids = suspendedIds
             suspendedIds = []
+            let sessions = background
             Task {
+                // 交给后台会话的任务收回前台（已写回的段保留），多连接、限速重新生效；会话里没下完的段撤掉
+                let reclaimed = await engine.enterForeground()
+                sessions.cancel(itemIds: Set(reclaimed))
                 await engine.endSuspension()
                 if !ids.isEmpty { await engine.resume(ids) }
             }
@@ -256,12 +329,13 @@ final class AppModel {
         default:
             return
         }
+        // 运行中的单文件任务交给后台会话；之后排队的单文件任务也探测后陆续交过去，不再开前台下载
+        let transfers = self.background
+        Task { transfers.submit(await engine.enterBackground()) }
         guard downloads.activeCount > 0, backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "downloads") { [weak self] in
             Task { @MainActor in await self?.suspendForegroundTransfers() }
         }
-        let transfers = self.background
-        Task { transfers.submit(await engine.handOffToBackground()) }
     }
 
     /// 后台执行时间用完：暂停仍在前台下载的任务，干净落盘后再交还系统

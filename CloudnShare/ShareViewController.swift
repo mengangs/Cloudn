@@ -3,7 +3,8 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// 分享扩展：在 Safari、微信等应用里「分享 → Cloudn」，把链接或文案交给主应用解析。
-/// 先通过 cloudn://resolve?text=… 唤起主应用；万一被系统拦下，内容也已放进剪贴板，打开 Cloudn 即会提示粘贴。
+/// 先通过 cloudn://resolve?text=… 唤起主应用；只有唤起失败时才把内容放进剪贴板（打开 Cloudn 即会提示粘贴），
+/// 唤起成功就不动用户的剪贴板。
 final class ShareViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -16,14 +17,15 @@ final class ShareViewController: UIViewController {
             finish(message: "没有识别到可解析的链接")
             return
         }
-        UIPasteboard.general.string = text
         var comps = URLComponents()
         comps.scheme = "cloudn"
         comps.host = "resolve"
         comps.queryItems = [URLQueryItem(name: "text", value: text)]
-        if let url = comps.url, openHostApp(url) {
+        if let url = comps.url, await openHostApp(url) {
             finish(message: nil)
         } else {
+            // 唤起失败才借用剪贴板兜底
+            UIPasteboard.general.string = text
             finish(message: "已复制到剪贴板，打开 Cloudn 即可解析")
         }
     }
@@ -52,16 +54,30 @@ final class ShareViewController: UIViewController {
     }
 
     /// 扩展里 UIApplication 的打开接口在编译期不可用：沿响应链找到能响应
-    /// openURL:options:completionHandler: 的对象（即应用对象），按方法实现直接调用
-    private func openHostApp(_ url: URL) -> Bool {
-        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+    /// openURL:options:completionHandler: 的对象（即应用对象），按方法实现直接调用。
+    /// 等系统回报是否真的打开了；3 秒没有回音按失败处理（走剪贴板兜底）
+    @MainActor
+    private func openHostApp(_ url: URL) async -> Bool {
+        typealias Completion = @convention(block) (Bool) -> Void
+        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, Completion?) -> Void
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
             if current.responds(to: selector), let imp = current.method(for: selector) {
                 let open = unsafeBitCast(imp, to: OpenURL.self)
-                open(current, selector, url as NSURL, NSDictionary(), nil)
-                return true
+                return await withCheckedContinuation { continuation in
+                    // 回调与超时只有先到的那个生效（都在主线程上）
+                    let once = ResumeOnce()
+                    let finish: (Bool) -> Void = { ok in
+                        guard !once.done else { return }
+                        once.done = true
+                        continuation.resume(returning: ok)
+                    }
+                    open(current, selector, url as NSURL, NSDictionary(), { ok in
+                        DispatchQueue.main.async { finish(ok) }
+                    })
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(false) }
+                }
             }
             responder = current.next
         }
@@ -79,4 +95,9 @@ final class ShareViewController: UIViewController {
         })
         present(alert, animated: true)
     }
+}
+
+/// 续体只能恢复一次：系统回调和超时谁先到用谁
+private final class ResumeOnce {
+    var done = false
 }

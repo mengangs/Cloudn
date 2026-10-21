@@ -11,6 +11,12 @@ struct AuthExportView: View {
     @State private var confirm = ""
     @State private var file: URL?
     @State private var error: String?
+    /// 正在派生密钥、加密（PBKDF2 二十万轮，放在后台算）
+    @State private var generating = false
+
+    private var canGenerate: Bool {
+        passphrase.count >= 6 && passphrase == confirm && !app.accounts.accounts.isEmpty && !generating
+    }
 
     var body: some View {
         NavigationStack {
@@ -21,7 +27,7 @@ struct AuthExportView: View {
                             .submitLabel(.next)
                         SecureField("再输一次", text: $confirm)
                             .submitLabel(.done)
-                            .onSubmit { if passphrase.count >= 6 && passphrase == confirm && file == nil { generate() } }
+                            .onSubmit { if canGenerate && file == nil { generate() } }
                     } footer: {
                         Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
                     }
@@ -34,8 +40,13 @@ struct AuthExportView: View {
                         }
                     } else {
                         Section {
-                            Button("生成备份文件") { generate() }
-                                .disabled(passphrase.count < 6 || passphrase != confirm || app.accounts.accounts.isEmpty)
+                            Button { generate() } label: {
+                                HStack(spacing: 8) {
+                                    Text(generating ? "正在生成…" : "生成备份文件")
+                                    if generating { Spinner(size: 16) }
+                                }
+                            }
+                            .disabled(!canGenerate)
                         } footer: {
                             // 说清楚为什么按钮不能点
                             if !confirm.isEmpty && passphrase != confirm {
@@ -55,16 +66,40 @@ struct AuthExportView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
         }
+        // 改了任一口令，之前生成的文件就不再对应当前口令：作废并删掉，要重新生成
+        .onChange(of: passphrase) { discardFile() }
+        .onChange(of: confirm) { discardFile() }
+        // 临时目录里的备份文件不留在本机
+        .onDisappear { discardFile() }
     }
 
     private func generate() {
-        do {
-            let data = try AuthBackup.export(app.accounts.accounts, extras: app.accounts.extras, passphrase: passphrase)
-            file = try AuthBackup.writeTemporaryFile(data)
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+        guard canGenerate else { return }
+        generating = true
+        let accounts = app.accounts.accounts, extras = app.accounts.extras, secret = passphrase
+        Task {
+            defer { generating = false }
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try AuthBackup.writeTemporaryFile(try AuthBackup.export(accounts, extras: extras, passphrase: secret))
+                }.value
+                // 生成期间口令又改了：这份作废
+                guard secret == passphrase, secret == confirm else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                file = url
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
+    }
+
+    private func discardFile() {
+        guard let file else { return }
+        try? FileManager.default.removeItem(at: file)
+        self.file = nil
     }
 }
 

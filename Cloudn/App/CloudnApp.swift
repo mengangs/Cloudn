@@ -9,6 +9,8 @@ struct CloudnApp: App {
 
     init() {
         Typeface.applyNavigationBarFonts()
+        // 清理 MKV 转换缓存：超过 7 天没看的、总量超过 2GB 的旧文件
+        Task.detached(priority: .background) { ConvertedCache.trim() }
     }
 
     var body: some Scene {
@@ -62,32 +64,43 @@ struct NoticeSheet: View {
     let onAccept: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            Image("Logo")
-                .resizable()
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-                .padding(.top, 48)
-            Text("使用前请了解")
-                .font(.pageTitle)
-                .foregroundStyle(Color.ink)
-            VStack(alignment: .leading, spacing: 0) {
-                NoticeRow(icon: .link, title: "能做什么", text: "粘贴网盘分享、短视频或 GitHub 链接，浏览内容并直接下载。")
-                RowDivider(leading: 50)
-                NoticeRow(icon: .lock, title: "凭据在哪", text: "登录凭据只保存在本机钥匙串，只发给对应平台，不经过任何第三方服务器。")
-                RowDivider(leading: 50)
-                NoticeRow(icon: .warning, title: "使用边界", text: "仅供个人学习与技术交流。请只解析你有权访问的内容，遵守各平台服务条款与当地法律。")
+        // 内容放进滚动视图：大字号、横屏或小屏上也能滚到底；「我已了解」固定在底部，始终点得到
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                Image("Logo")
+                    .resizable()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
+                    .padding(.top, 48)
+                Text("使用前请了解")
+                    .font(.pageTitle)
+                    .foregroundStyle(Color.ink)
+                VStack(alignment: .leading, spacing: 0) {
+                    NoticeRow(icon: .link, title: "能做什么", text: "粘贴网盘分享、短视频或 GitHub 链接，浏览内容并直接下载。")
+                    RowDivider(leading: 50)
+                    NoticeRow(icon: .lock, title: "凭据在哪", text: "登录凭据只保存在本机钥匙串，只发给对应平台，不经过任何第三方服务器。")
+                    RowDivider(leading: 50)
+                    NoticeRow(icon: .warning, title: "使用边界", text: "仅供个人学习与技术交流。请只解析你有权访问的内容，遵守各平台服务条款与当地法律。")
+                }
+                .card()
             }
-            .card()
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
+            .readableWidth()
+        }
+        .safeAreaInset(edge: .bottom) {
             Button(action: onAccept) {
                 Text("我已了解").frame(maxWidth: .infinity)
             }
             .buttonStyle(PillButtonStyle(kind: .primary))
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
             .padding(.bottom, 16)
+            .readableWidth()
+            .background(Color.paper)
         }
-        .padding(.horizontal, 24)
         .background(Color.paper)
         .presentationDetents([.large])
     }

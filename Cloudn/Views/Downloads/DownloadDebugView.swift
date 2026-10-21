@@ -13,6 +13,8 @@ struct DownloadDebugView: View {
     @State private var sha256: String?
     @State private var hashing = false
     @State private var logLines: [String] = []
+    /// 可计算校验值的文件（已完成且不是目录）；任务完成时查一次，不在界面刷新时查磁盘
+    @State private var hashTarget: URL?
 
     private var item: DownloadItem? { app.downloads.items.first { $0.id == itemId } }
 
@@ -44,6 +46,10 @@ struct DownloadDebugView: View {
             }
         }
         .task { logLines = await Self.relatedLog(item?.request.fileName ?? "") }
+        .task(id: item?.status == .completed ? (item?.outputPath ?? item?.exportedTo ?? "") : nil) {
+            guard let item, item.status == .completed, let url = app.downloads.fileURL(item) else { hashTarget = nil; return }
+            hashTarget = DownloadsView.isDirectory(url) ? nil : url
+        }
     }
 
     private func content(_ item: DownloadItem) -> some View {
@@ -70,7 +76,7 @@ struct DownloadDebugView: View {
                         Text("分片（\(item.chunks.filter(\.isDone).count)/\(item.chunks.count) 完成）")
                     }
                 }
-                if item.status == .completed, let url = app.downloads.fileURL(item), !DownloadsView.isDirectory(url) {
+                if item.status == .completed, let url = hashTarget {
                     Section {
                         if let sha256 {
                             Text(sha256).font(.monoSmall).textSelection(.enabled)

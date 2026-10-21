@@ -214,6 +214,26 @@ public struct VideoParseResult: Sendable, Identifiable {
 
     public var videoCount: Int { medias.filter { $0.kind == .video }.count }
     public var imageCount: Int { medias.filter { $0.kind == .image }.count }
+
+    /// 实况照片：图片 id → 配对的视频（与图片同名加 `_live` 后缀，如 `作品_1.jpg` + `作品_1_live.mp4`）。
+    /// 配上对的视频在界面上挂在图片上，不再单独列为视频
+    public var livePairs: [UUID: VideoMedia] { Self.livePairs(medias) }
+
+    static func livePairs(_ medias: [VideoMedia]) -> [UUID: VideoMedia] {
+        let suffix = "_live"
+        var images: [String: UUID] = [:]
+        for media in medias where media.kind == .image {
+            let stem = (media.fileName as NSString).deletingPathExtension
+            if images[stem] == nil { images[stem] = media.id }
+        }
+        var pairs: [UUID: VideoMedia] = [:]
+        for media in medias where media.kind == .video {
+            let stem = (media.fileName as NSString).deletingPathExtension
+            guard stem.hasSuffix(suffix), let image = images[String(stem.dropLast(suffix.count))], pairs[image] == nil else { continue }
+            pairs[image] = media
+        }
+        return pairs
+    }
 }
 
 extension VideoParseResult: Hashable {
@@ -226,10 +246,13 @@ public enum VideoParseErrorKind: Sendable { case blocked, notFound, network, uns
 public struct VideoParseError: Error, LocalizedError, Sendable {
     public let kind: VideoParseErrorKind
     public let detail: String
+    /// 建议改用网页嗅探打开的地址（如短链展开后的终址）；nil 表示用原链接
+    public let sniffURL: String?
 
-    public init(_ kind: VideoParseErrorKind, _ detail: String) {
+    public init(_ kind: VideoParseErrorKind, _ detail: String, sniffURL: String? = nil) {
         self.kind = kind
         self.detail = detail
+        self.sniffURL = sniffURL
     }
 
     /// 面向用户的一句话（细节留在 detail）

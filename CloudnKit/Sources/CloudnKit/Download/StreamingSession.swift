@@ -151,15 +151,22 @@ extension HTTPClient {
     /// 只取前 limit 字节：带 Range 请求，服务端忽略 Range 时也会在取够之后主动断开，不会把整个文件读进内存。
     /// partial 为 true 表示文件比 limit 长（只拿到了开头）
     public static func fetchPrefix(_ url: String, headers: [(String, String)], limit: Int) async throws -> (status: Int, data: Data, partial: Bool) {
+        let r = try await fetchPrefixResponse(url, headers: headers, limit: limit)
+        return (r.status, r.data, r.partial)
+    }
+
+    /// 同 fetchPrefix，另外带回响应头（探测大小时读 Content-Range / Content-Length）
+    public static func fetchPrefixResponse(_ url: String, headers: [(String, String)], limit: Int,
+                                           timeout: TimeInterval = 60) async throws -> PrefixResponse {
         guard let u = URL(string: url) else { throw HTTPError.invalidURL(url) }
-        var request = URLRequest(url: u)
+        var request = URLRequest(url: u, timeoutInterval: timeout)
         request.httpShouldHandleCookies = false
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.setValue("bytes=0-\(max(0, limit - 1))", forHTTPHeaderField: "Range")
         let buffer = PrefixBuffer()
         do {
             try await prefixStreamer.run(request, onResponse: { response in
-                buffer.set(status: response.status)
+                buffer.set(status: response.status, headers: response.headers)
                 return true
             }, onData: { data in
                 if buffer.append(data) >= limit { throw PrefixBuffer.Enough() }
@@ -167,20 +174,35 @@ extension HTTPClient {
         } catch is PrefixBuffer.Enough {
             // 取够了
         }
-        let (status, data) = buffer.snapshot()
-        return (status, data.prefix(limit), status == 206 || data.count > limit)
+        let (status, responseHeaders, data) = buffer.snapshot()
+        return PrefixResponse(status: status, headers: responseHeaders, data: data.prefix(limit),
+                              partial: status == 206 || data.count > limit)
     }
+}
+
+/// fetchPrefixResponse 的结果：响应头的键已转小写
+public struct PrefixResponse: Sendable {
+    public let status: Int
+    public let headers: [String: String]
+    public let data: Data
+    /// 文件比 limit 长（只拿到了开头）
+    public let partial: Bool
+
+    public var isSuccess: Bool { (200..<300).contains(status) }
+    public func header(_ name: String) -> String? { headers[name.lowercased()] }
 }
 
 private final class PrefixBuffer: @unchecked Sendable {
     struct Enough: Error {}
     private let lock = NSLock()
     private var status = 0
+    private var headers: [String: String] = [:]
     private var data = Data()
 
-    func set(status: Int) {
+    func set(status: Int, headers: [String: String]) {
         lock.lock()
         self.status = status
+        self.headers = headers
         lock.unlock()
     }
 
@@ -191,9 +213,9 @@ private final class PrefixBuffer: @unchecked Sendable {
         return data.count
     }
 
-    func snapshot() -> (Int, Data) {
+    func snapshot() -> (Int, [String: String], Data) {
         lock.lock()
         defer { lock.unlock() }
-        return (status, data)
+        return (status, headers, data)
     }
 }

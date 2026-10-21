@@ -30,6 +30,9 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     @ObservationIgnored private unowned let app: AppModel
     @ObservationIgnored private var cache: [String: [ShareFile]] = [:]
+    /// 预览 / 在线查看 / 复制直链取到的临时转存（夸克 / UC 兜底、115、光鸭）：清理凭据 → 账号序号。
+    /// 下载入队的由下载完成后清理；这些没有下载任务兜底，预览关闭、复制约一分钟后、离开分享页时在这里清理
+    @ObservationIgnored private var temporaryCopies: [String: Int] = [:]
 
     init(app: AppModel, share: ParsedShare, pwd: String?, sourceText: String) {
         self.app = app
@@ -42,9 +45,17 @@ final class ShareBrowserModel: Hashable, Identifiable {
     var title: String { session?.title ?? share.platform.displayName }
     var currentDir: String { crumbs.last?.id ?? session?.rootId ?? "0" }
 
-    /// 未登录时给用户的能力说明（nil 表示不需要提示）
+    /// 对应平台的主账号登录已失效（「我的」页检测出来的）
+    var loginExpired: Bool {
+        guard let kind = share.platform.accountKind else { return false }
+        return app.accounts.isExpired(kind)
+    }
+
+    /// 未登录 / 登录已失效时给用户的能力说明（nil 表示不需要提示）
     var guestNotice: String? {
-        guard let kind = share.platform.accountKind, !app.accounts.isLoggedIn(kind) else { return nil }
+        guard let kind = share.platform.accountKind else { return nil }
+        if app.accounts.isExpired(kind) { return "\(kind.displayName)登录已失效：取链、转存可能失败，重新登录后再试" }
+        guard !app.accounts.isLoggedIn(kind) else { return nil }
         switch share.platform {
         case .quark: return "未登录夸克：可直接下载约 50MB 以内的文件，登录后不限大小"
         case .uc: return "未登录 UC：也可以直接下载，登录后视频可取原画"
@@ -94,6 +105,8 @@ final class ShareBrowserModel: Hashable, Identifiable {
             a.isDirectory != b.isDirectory ? a.isDirectory : a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
         cache[dir] = sorted
+        // 等待期间已切到别的目录（或重新打开了分享）：结果只进缓存，不覆盖当前列表
+        guard self.session == session, dir == currentDir else { return }
         files = sorted
     }
 
@@ -111,14 +124,17 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     func reloadCurrent(force: Bool) async {
         if session == nil { await open(); return }
+        let dir = currentDir
         loading = true
         errorMessage = nil
-        defer { loading = false }
         do {
-            try await load(currentDir, force: force)
+            try await load(dir, force: force)
         } catch {
-            errorMessage = error.localizedDescription
+            // 已切到别的目录：旧目录的错误不显示
+            if dir == currentDir { errorMessage = error.localizedDescription }
         }
+        // 已切到别的目录：加载状态交给新目录那次去收
+        if dir == currentDir { loading = false }
     }
 
     // MARK: 下载
@@ -129,6 +145,34 @@ final class ShareBrowserModel: Hashable, Identifiable {
         defer { busyFileIds.remove(file.fid) }
         return try await AccountSlot.$current.withValue(slot) {
             try await resolver.downloadLink(session, file: file)
+        }
+    }
+
+    /// 预览、在线查看、复制直链用的取链：需要临时转存的记下清理凭据，用完调 releaseTemporary
+    func temporaryLink(for file: ShareFile) async throws -> DownloadLink {
+        let link = try await link(for: file)
+        if let token = link.cleanupToken { temporaryCopies[token] = 0 }
+        return link
+    }
+
+    /// 清理一条临时转存；delay 秒后再清（复制出去的直链留点时间给别的应用开始下载）
+    func releaseTemporary(_ link: DownloadLink?, after delay: TimeInterval = 0) {
+        guard let token = link?.cleanupToken, let slot = temporaryCopies.removeValue(forKey: token), let resolver else { return }
+        Task {
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            await AccountSlot.$current.withValue(slot) { await resolver.cleanup(token: token) }
+        }
+    }
+
+    /// 离开分享页：还没清理的临时转存全部清掉（已排了延时清理的不在这里）
+    func releaseAllTemporary() {
+        guard !temporaryCopies.isEmpty, let resolver else { return }
+        let pending = temporaryCopies
+        temporaryCopies = [:]
+        Task {
+            for (token, slot) in pending {
+                await AccountSlot.$current.withValue(slot) { await resolver.cleanup(token: token) }
+            }
         }
     }
 

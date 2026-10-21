@@ -22,7 +22,8 @@ import Foundation
 public enum TSRemuxer {
     /// 把 `ts` 的视频轨（以及没有单独音频文件时它自带的 AAC）转封装到 `output`。
     /// `audio` 是主播放列表里独立音轨的 TS，取其中的 AAC，与视频按各自 PTS 相对最早时刻对齐。
-    public static func remux(video ts: URL, audio: URL? = nil, to output: URL) throws {
+    /// `shouldCancel` 在读每一批数据前检查一次，返回 true 时抛出 CancellationError 并删掉未完成的输出（暂停 / 删除任务时用）。
+    public static func remux(video ts: URL, audio: URL? = nil, to output: URL, shouldCancel: () -> Bool = { false }) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: output)
         guard fm.createFile(atPath: output.path, contents: nil) else { throw TransferError("无法创建 MP4 文件") }
@@ -39,11 +40,12 @@ public enum TSRemuxer {
         let videoTrack = VideoTrackBuilder()
         let audioTrack = AudioTrackBuilder()
         let ownAudio: AudioTrackBuilder? = audio == nil ? audioTrack : nil
-        try TSDemuxer(url: ts, video: videoTrack, audio: ownAudio, clock: clock, sink: sink).run()
+        try TSDemuxer(url: ts, video: videoTrack, audio: ownAudio, clock: clock, sink: sink).run(shouldCancel: shouldCancel)
         try videoTrack.finish(clock: clock, sink: sink)
         if let audio {
-            try TSDemuxer(url: audio, video: nil, audio: audioTrack, clock: clock, sink: sink).run()
+            try TSDemuxer(url: audio, video: nil, audio: audioTrack, clock: clock, sink: sink).run(shouldCancel: shouldCancel)
         }
+        if shouldCancel() { throw CancellationError() }
         let hasVideo = videoTrack.sampleCount > 0
         let hasAudio = audioTrack.sampleCount > 0 && audioTrack.config != nil
         guard hasVideo || hasAudio else { throw TransferError("TS 里没有可转封装的 H.264 / HEVC / AAC 数据") }
@@ -276,7 +278,7 @@ final class TSDemuxer {
         self.sink = sink
     }
 
-    func run() throws {
+    func run(shouldCancel: () -> Bool = { false }) throws {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         let size = Self.packetSize
@@ -286,6 +288,8 @@ final class TSDemuxer {
         var eof = false
         while true {
             if buf.count - pos < size + 1 && !eof {
+                // 每读一批（约 770KB）检查一次是否已取消
+                if shouldCancel() { throw CancellationError() }
                 let data = try file.read(upToCount: chunk) ?? Data()
                 if data.isEmpty {
                     eof = true

@@ -260,6 +260,17 @@ final class TSRemuxerTests: XCTestCase {
         XCTAssertEqual(mp4.samples(astbl), Self.audioPayloads())
     }
 
+    /// 任务被暂停：转封装中途停下，抛出 CancellationError，不留半成品
+    func testRemuxStopsWhenCancelled() throws {
+        let ts = base.appendingPathComponent("in.ts")
+        try Data(Self.makeTS(video: true, audio: true)).write(to: ts)
+        let out = base.appendingPathComponent("out.mp4")
+        XCTAssertThrowsError(try TSRemuxer.remux(video: ts, to: out, shouldCancel: { true })) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+    }
+
     func testRemuxWithoutSupportedStreamsThrows() throws {
         let ts = base.appendingPathComponent("id3.ts")
         try Data(Self.makeTS(video: false, audio: false)).write(to: ts)

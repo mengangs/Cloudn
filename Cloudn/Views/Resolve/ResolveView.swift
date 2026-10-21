@@ -14,6 +14,8 @@ struct ResolveView: View {
     @State private var confirmClearHistory = false
     @State private var working = false
     @State private var workTask: Task<Void, Never>?
+    /// 当前这次解析的编号：被新的解析顶掉的旧任务结束时不再收起进度环
+    @State private var workID: UUID?
     @State private var shareModel: ShareBrowserModel?
     @State private var videoResult: VideoParseResult?
     @State private var githubLink: GitHubLink?
@@ -25,30 +27,35 @@ struct ResolveView: View {
     /// 平台解析失败后，询问是否改用网页嗅探
     @State private var sniffOffer: SniffOffer?
     @State private var batchJob: BatchJob?
+    /// 解析失败后就地登录的平台；登录成功回来后重新解析 loginRetry 里的链接
+    @State private var loginKind: AccountKind?
+    @State private var loginRetry: LoginRetry?
     /// 剪贴板里有链接、且这一条还没处理过
     @State private var clipboardOffer = false
-    /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次
-    @AppStorage("clipboardHandledChange") private var handledChange = -1
+    /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次；应用自己复制的内容也记在这里（见 Clipboard.copy）
+    @AppStorage(Clipboard.handledChangeKey) private var handledChange = -1
     @FocusState private var focused: Bool
 
     private var trimmed: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var detected: DetectedInput? { DetectedInput.detect(input) }
-    /// 识别不出链接、但像迅雷中文口令
-    private var isKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
+    private var isXunleiKouling: Bool { detected == nil && XunleiKouling.looksLikeKouling(input) }
+    private var isQuarkKouling: Bool { detected == nil && QuarkKouling.extract(input) != nil }
+    /// 识别不出链接、但像中文口令（迅雷，或要经第三方解析的夸克 / UC）
+    private var isKouling: Bool { isXunleiKouling || isQuarkKouling }
+    /// 夸克 / UC 口令要发给第三方服务解析：没开总是允许时先问
+    @State private var askingKoulingConsent = false
     private var canSubmit: Bool { detected != nil || isKouling }
     /// 一次粘贴了多个视频链接：批量解析下载
     private var batchLinks: [String] { Self.videoLinks(in: input) }
 
-    /// 文本里所有能识别的视频 / 图集链接（去重，保持顺序）
+    /// 文本里所有能识别的视频 / 图集链接（按作品去重：同一作品的不同写法只留第一个，保持顺序）
     static func videoLinks(in text: String) -> [String] {
         guard text.count < 200_000, let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
-        var out: [String] = []
-        for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            guard let url = match.url?.absoluteString, url.hasPrefix("http"), VideoLinkParser.parse(url) != nil,
-                  !out.contains(url) else { continue }
-            out.append(url)
+        let urls = detector.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match -> String? in
+            guard let url = match.url?.absoluteString, url.hasPrefix("http") else { return nil }
+            return url
         }
-        return out
+        return VideoLinkParser.uniqueLinks(urls)
     }
 
     var body: some View {
@@ -60,6 +67,7 @@ struct ResolveView: View {
                         .foregroundStyle(Color.ink)
                         .padding(.horizontal, 4)
                         .padding(.top, 12)
+                    if !app.batchJobs.isEmpty { batchSection }
                     if !app.bookmarks.bookmarks.isEmpty { bookmarkSection }
                     if !app.bookmarks.history.isEmpty { historySection }
                     supportFooter
@@ -87,6 +95,10 @@ struct ResolveView: View {
             .background(Color.paper)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $shareModel) { ShareBrowserView(model: $0) }
+            // 离开分享页（返回或换了一个分享）：清掉预览 / 复制直链留下的临时转存
+            .onChange(of: shareModel) { old, new in
+                if let old, old != new { old.releaseAllTemporary() }
+            }
             .navigationDestination(item: $videoResult) { VideoResultView(result: $0) }
             .navigationDestination(item: $githubLink) { link in
                 switch link {
@@ -104,12 +116,37 @@ struct ResolveView: View {
             }
             .fullScreenCover(item: $sniffTarget) { SnifferView(url: $0.url) }
             .sheet(item: $batchJob) { BatchView(job: $0) }
+            .alert("使用第三方服务解析口令？", isPresented: $askingKoulingConsent) {
+                Button("取消", role: .cancel) {}
+                Button("仅这一次") { resolveKouling(consented: true) }
+                Button("总是允许") {
+                    app.settings.allowCommandService = true
+                    resolveKouling(consented: true)
+                }
+            } message: {
+                Text("夸克 / UC 中文口令无法在本机还原，需要把口令文字发给第三方「\(QuarkKouling.serviceName)」服务换取分享 ID。只发送口令文字，不含任何账号信息；可在「设置 › 解析」中关闭。")
+            }
             .alert(sniffOffer?.message ?? "", isPresented: Binding(get: { sniffOffer != nil }, set: { if !$0 { sniffOffer = nil } })) {
                 Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
+                if let kind = sniffOffer?.loginKind {
+                    Button("去登录") {
+                        loginRetry = LoginRetry(text: sniffOffer?.text ?? "", kind: kind,
+                                                stamp: app.accounts.list(kind).first?.updatedAt)
+                        loginKind = kind
+                    }
+                }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("可以在网页里打开这个链接，播放后自动抓取视频地址下载。")
+                Text(sniffOffer?.loginKind.map { "登录\($0.displayName)后可以重新解析；也可以在网页里打开这个链接，播放后自动抓取视频地址下载。" }
+                     ?? "可以在网页里打开这个链接，播放后自动抓取视频地址下载。")
             }
+            .sheet(item: $loginKind, onDismiss: {
+                // 真的登录了（主账号是新保存的）才重新解析刚才失败的链接；取消登录不重试
+                defer { loginRetry = nil }
+                guard let retry = loginRetry, !retry.text.isEmpty,
+                      let account = app.accounts.list(retry.kind).first, account.updatedAt != retry.stamp else { return }
+                open(text: retry.text)
+            }) { LoginSheet(kind: $0) }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView { bookmark in
                     showBookmarks = false
@@ -280,7 +317,7 @@ struct ResolveView: View {
         case .video(let v): return .video(v.platform)
         case .github: return .github
         case .magnet: return .magnet
-        case .direct, nil: return isKouling ? .share(.xunlei) : nil
+        case .direct, nil: return isKouling ? .share(isXunleiKouling && !QuarkKouling.mentionsQuarkOrUC(input) ? .xunlei : .quark) : nil
         }
     }
 
@@ -296,7 +333,10 @@ struct ResolveView: View {
         case .github: return "GitHub 仓库"
         case .direct: return "链接 · 文件直接下载，网页则嗅探其中的视频"
         case .magnet(let m): return m.displayName.isEmpty ? "磁力链接" : "磁力链接 · " + m.displayName
-        case nil: return isKouling ? "迅雷口令" : "没有识别到链接"
+        case nil:
+            guard isKouling else { return "没有识别到链接" }
+            if QuarkKouling.mentionsQuarkOrUC(input) || !isXunleiKouling { return "夸克 / UC 口令" }
+            return isQuarkKouling ? "迅雷 / 夸克口令" : "迅雷口令"
         }
     }
 
@@ -356,6 +396,43 @@ struct ResolveView: View {
         }
     }
 
+    // MARK: 批量任务
+
+    /// 批量下载任务：关掉进度页后从这里回去查看进度、继续或重试失败的
+    private var batchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(title: "批量任务")
+                if app.batchJobs.contains(where: { $0.finished && $0.failedCount == 0 }) {
+                    Button("清除已完成") { withAnimation { app.batchJobs.removeAll { $0.finished && $0.failedCount == 0 } } }
+                        .font(.subheadline)
+                }
+            }
+            VStack(spacing: 0) {
+                let jobs = Array(app.batchJobs.reversed())
+                ForEach(Array(jobs.enumerated()), id: \.element.id) { index, job in
+                    BatchJobRow(job: job) { batchJob = job }
+                        .contextMenu {
+                            if job.running {
+                                Button { job.cancel() } label: { Label { Text("停止") } icon: { Image(icon: .close) } }
+                            } else if job.failedCount > 0 {
+                                Button { job.retryFailed(app: app) } label: { Label { Text("重试失败的") } icon: { Image(icon: .refresh) } }
+                            } else if !job.finished {
+                                Button { job.start(app: app) } label: { Label { Text("继续") } icon: { Image(icon: .play) } }
+                            }
+                            if !job.running {
+                                Button(role: .destructive) { withAnimation { app.batchJobs.removeAll { $0.id == job.id } } } label: {
+                                    Label { Text("移除") } icon: { Image(icon: .trash) }
+                                }
+                            }
+                        }
+                    if index < jobs.count - 1 { RowDivider() }
+                }
+            }
+            .card()
+        }
+    }
+
     // MARK: 收藏与最近
 
     private var bookmarkSection: some View {
@@ -408,7 +485,7 @@ struct ResolveView: View {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, h in
                     HistoryRow(item: h, progress: downloadProgress(for: h.text)) { open(text: h.text) }
                         .contextMenu {
-                            Button { UIPasteboard.general.string = h.text } label: { Label { Text("复制链接") } icon: { Image(icon: .link) } }
+                            Button { Clipboard.copy(h.text) } label: { Label { Text("复制链接") } icon: { Image(icon: .link) } }
                             Button { app.bookmarks.add(title: h.title, text: h.text, source: h.source) } label: {
                                 Label { Text("收藏") } icon: { Image(icon: .star) }
                             }
@@ -502,7 +579,15 @@ struct ResolveView: View {
     private func cancelWork() {
         workTask?.cancel()
         workTask = nil
+        workID = nil
         working = false
+    }
+
+    /// 解析失败时要不要给「去登录」：平台支持登录，且报错提到登录、还没登录或登录已失效
+    private func loginSuggestion(for platform: VideoPlatform, message: String) -> AccountKind? {
+        guard let kind = platform.accountKind else { return nil }
+        let mentionsLogin = message.contains("登录") || message.localizedCaseInsensitiveContains("login")
+        return mentionsLogin || !app.accounts.isLoggedIn(kind) || app.accounts.isExpired(kind) ? kind : nil
     }
 
     private func submit() {
@@ -542,9 +627,13 @@ struct ResolveView: View {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // 专门的解析失败时，退一步用网页嗅探试试
+                    // 专门的解析失败时，退一步用网页嗅探试试（短链展开到不支持的页面时，嗅探展开后的地址）；
+                    // 需要登录 / 登录已失效的平台，同时给出「去登录」
                     guard !Task.isCancelled else { throw error }
-                    sniffOffer = SniffOffer(url: link.url, message: error.localizedDescription)
+                    let message = error.localizedDescription
+                    let sniffURL = (error as? VideoParseError)?.sniffURL ?? link.url
+                    sniffOffer = SniffOffer(url: sniffURL, message: message, text: text,
+                                            loginKind: loginSuggestion(for: link.platform, message: message))
                 }
             }
         case .github(let link):
@@ -603,8 +692,17 @@ struct ResolveView: View {
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {
         workTask?.cancel()
         working = true
+        let id = UUID()
+        workID = id
         workTask = Task { @MainActor in
-            defer { working = false }
+            // 只有自己仍是当前这次解析时才收起进度环：被顶掉的旧任务晚结束，不能把新任务的进度环关掉
+            defer {
+                if workID == id {
+                    working = false
+                    workTask = nil
+                    workID = nil
+                }
+            }
             do {
                 try await operation()
             } catch is CancellationError {
@@ -614,11 +712,35 @@ struct ResolveView: View {
         }
     }
 
-    /// 迅雷中文口令：直接问迅雷换成带提取码的分享链接，再按普通分享打开
-    private func resolveKouling() {
+    /// 中文口令：带夸克 / UC 标记的直接按夸克口令解析；否则先问迅雷，迅雷没有对应分享再按夸克 / UC 口令解析。
+    /// 夸克 / UC 口令只能经第三方「星海」服务换取分享 ID（只发口令文字），没开「总是允许」时先征得同意
+    private func resolveKouling(consented: Bool = false) {
         let text = input
+        let quarkFirst = QuarkKouling.mentionsQuarkOrUC(text)
+        let tryXunlei = !quarkFirst && XunleiKouling.looksLikeKouling(text)
+        let canQuark = QuarkKouling.extract(text) != nil
+        let allowed = app.settings.allowCommandService || consented
         run {
-            let url = try await XunleiKouling.resolve(text)
+            var lastError: Error?
+            if tryXunlei {
+                do {
+                    let url = try await XunleiKouling.resolve(text)
+                    try Task.checkCancellation()
+                    guard let share = ShareLinkParser.parse(url) else { throw CloudnError("口令对应的链接无法识别") }
+                    shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
+                    return
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                }
+            }
+            guard canQuark else { throw lastError ?? CloudnError("无法识别该口令") }
+            guard allowed else {
+                askingKoulingConsent = true
+                return
+            }
+            let url = try await QuarkKouling.resolve(text)
             try Task.checkCancellation()
             guard let share = ShareLinkParser.parse(url) else { throw CloudnError("口令对应的链接无法识别") }
             shareModel = ShareBrowserModel(app: app, share: share, pwd: share.pwd, sourceText: url)
@@ -679,14 +801,69 @@ private struct HistoryRow: View {
     }
 }
 
+/// 批量任务的一行：标题、进度、失败数；点开回到进度页
+private struct BatchJobRow: View {
+    let job: BatchJob
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    if job.running {
+                        ProgressRing(value: Double(job.doneCount + job.failedCount) / Double(max(1, job.items.count)), size: 22)
+                    } else if job.failedCount > 0 {
+                        IconView(.warning, size: 18).foregroundStyle(Color.clayInk)
+                    } else if job.finished {
+                        IconView(.checkCircle, size: 18).foregroundStyle(Color.success)
+                    } else {
+                        IconView(.clock, size: 18).foregroundStyle(Color.ink3)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .background(Color.fillMuted, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(job.title).font(.body).lineLimit(1).foregroundStyle(Color.ink)
+                    Text(detail).font(.caption).foregroundStyle(job.failedCount > 0 ? Color.clayInk : Color.ink2).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(job.title)，\(detail)")
+    }
+
+    private var detail: String {
+        var text = "\(job.doneCount) / \(job.items.count) 已加入下载"
+        if job.failedCount > 0 { text += " · \(job.failedCount) 个失败" }
+        if job.running { text += " · 解析中…" } else if !job.finished { text += " · 已停止" }
+        return text
+    }
+}
+
 /// 网页嗅探要打开的地址
 private struct SniffTarget: Identifiable {
     let url: String
     var id: String { url }
 }
 
+/// 「去登录」之后要重新解析的链接；stamp 是登录前主账号的保存时间，用来判断是否真的重新登录了
+private struct LoginRetry {
+    let text: String
+    let kind: AccountKind
+    let stamp: Date?
+}
+
 /// 解析失败后的嗅探提议
 private struct SniffOffer {
     let url: String
     let message: String
+    /// 原始输入：登录后重新解析用
+    var text = ""
+    /// 可以就地登录的平台（需要登录 / 登录已失效时）
+    var loginKind: AccountKind?
 }

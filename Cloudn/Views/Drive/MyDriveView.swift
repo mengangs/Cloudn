@@ -97,7 +97,9 @@ struct DriveFolderView: View {
                 }
             }
         }
-        .paperList()
+        .scrollContentBackground(.hidden)
+        .readableWidth()
+        .background(Color.paper)
         .overlay { if loading && items.isEmpty { Spinner(size: 28) } }
         .refreshable { await load() }
         .searchable(text: $query, prompt: "在当前文件夹中搜索")
@@ -167,7 +169,8 @@ struct DriveFolderView: View {
         }
         .swipeActions(edge: .trailing) {
             if caps.contains(.delete) {
-                Button(role: .destructive) { deleting = item } label: { Label("删除", glyph: .trash) }
+                // 不用 destructive 角色：它会触发列表删除动画，确认框刚弹出就被收回、行又弹回来
+                Button { deleting = item } label: { Label("删除", glyph: .trash) }
                     .tint(Color.clayInk)
             }
         }
@@ -262,7 +265,7 @@ struct DriveFolderView: View {
     private func share(_ file: ShareFile, expiry: ShareExpiry) {
         perform(nil) {
             let link = try await manager.createShare([file], expiry: expiry)
-            UIPasteboard.general.string = link.text
+            Clipboard.copy(link.text)
             app.show(expiry.isForever ? "分享链接已复制" : "分享链接已复制 · \(expiry.label)有效")
         }
     }

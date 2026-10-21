@@ -86,7 +86,13 @@ final class UploadStore {
 
     func dismiss(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
-        if items[i].isActive { cancel(id) } else { items.remove(at: i) }
+        if items[i].isActive {
+            cancel(id)
+            return
+        }
+        let item = items.remove(at: i)
+        // 失败后不再重试：相册导出的临时文件删掉（作用域在失败时已放掉，这里不再重复放）
+        if case .failed = item.status { release(item.file, temporary: item.temporary, scoped: false) }
     }
 
     private func pump() {
@@ -118,16 +124,27 @@ final class UploadStore {
             onMessage?("「\(item.name)」已上传到\(item.platform.displayName)", false)
             items.removeAll { $0.id == id }
             release(item)
-        } catch is CancellationError {
+        } catch _ where !items.contains(where: { $0.id == id }) {
+            // 用户取消（任务已从列表移除）：上传请求被取消时抛的多是 URLError.cancelled 而不是 CancellationError，
+            // 不论抛的是什么都按取消收尾：放掉作用域、删掉临时文件
             release(item)
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // 还在列表里却被取消（系统中断）：按失败处理，留着可重试
+            let message = Self.isCancellation(error) ? "上传被中断，请重试"
+                : ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             Log.error("上传失败：\(item.name)：\(message)")
             set(id, .failed(message))
             // 失败的留着可重试；作用域先放掉，重试时再申请
             if item.scoped { item.file.stopAccessingSecurityScopedResource() }
         }
         current = nil
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let e = error as? URLError, e.code == .cancelled { return true }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
     }
 
     private func update(_ id: UUID, phase: UploadPhase, fraction: Double) {

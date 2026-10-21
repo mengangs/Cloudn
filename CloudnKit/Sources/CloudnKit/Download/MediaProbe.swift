@@ -32,17 +32,24 @@ public enum MediaProbe {
         isHLS ? await probeHLS(url, headers: headers, client: client) : await probeFile(url, headers: headers, client: client)
     }
 
-    /// 先 HEAD；拿不到长度（或服务器不支持 HEAD）再用 Range 取 1 字节读 Content-Range
+    /// 先 HEAD；拿不到长度（或服务器不支持 HEAD）再带 Range 只取开头 1 字节读 Content-Range。
+    /// 取开头用流式请求：服务端忽略 Range 回整个文件时，收到第一块数据就断开，不会把文件读进内存
     static func probeFile(_ url: String, headers: [String: String], client: HTTPClient) async -> MediaProbeResult? {
         let pairs = headers.sortedPairs
         if let r = try? await client.send(HTTPRequest(url: url, method: "HEAD", headers: pairs, timeout: 12)), r.isSuccess,
            let length = Int64(r.header("Content-Length") ?? ""), length > 0 {
             return MediaProbeResult(size: length)
         }
-        guard let r = try? await client.send(HTTPRequest(url: url, headers: pairs + [("Range", "bytes=0-0")], timeout: 12)),
-              r.isSuccess else { return nil }
-        if let total = r.header("Content-Range").flatMap({ totalFromContentRange($0) }) { return MediaProbeResult(size: total) }
-        if r.status == 200, let length = Int64(r.header("Content-Length") ?? ""), length > 0 { return MediaProbeResult(size: length) }
+        guard let r = try? await HTTPClient.fetchPrefixResponse(url, headers: pairs, limit: 1, timeout: 12) else { return nil }
+        return sizeFromRangeProbe(status: r.status, headers: r.headers).map { MediaProbeResult(size: $0) }
+    }
+
+    /// Range 探测的响应 → 文件总大小：优先 Content-Range 的总长；服务端忽略 Range 回 200 时取 Content-Length。
+    /// headers 的键为小写
+    static func sizeFromRangeProbe(status: Int, headers: [String: String]) -> Int64? {
+        guard (200..<300).contains(status) else { return nil }
+        if let total = headers["content-range"].flatMap({ totalFromContentRange($0) }) { return total }
+        if status == 200, let length = Int64(headers["content-length"] ?? ""), length > 0 { return length }
         return nil
     }
 

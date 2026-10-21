@@ -17,5 +17,8 @@ struct DownloadActivityAttributes: ActivityAttributes {
         var title: String
         /// 补充说明（「正在获取种子信息」「已暂停，回到应用继续」等）；为空不显示
         var note: String = ""
+        /// 没有进行中、也没有暂停的任务时，下载失败的个数（大于 0 表示这一轮以失败告终）。
+        /// 可选：旧版本写的状态里没有这个字段，解码时为 nil，照样能读
+        var failed: Int? = nil
     }
 }

@@ -29,10 +29,14 @@ final class AppSettings {
     var directFirst: Bool {
         didSet { defaults.set(directFirst, forKey: "directFirst"); resolverOptions.directFirst = directFirst }
     }
-    /// 完成后移动到的文件夹（安全作用域书签）；nil 表示留在应用的下载目录
-    var exportFolderBookmark: Data? {
+    /// 完成后移动到的文件夹（安全作用域书签）；nil 表示留在应用的下载目录。只经 setExportFolder 修改
+    private(set) var exportFolderBookmark: Data? {
         didSet { defaults.set(exportFolderBookmark, forKey: "exportFolderBookmark") }
     }
+    /// 书签解析出的文件夹：启动和更换文件夹时各解析一次，界面读取不碰磁盘、不改状态
+    private(set) var exportFolder: URL? = nil
+    /// 当前持有安全访问的文件夹（与 exportFolder 同一个；start / stop 成对，见 resolveExportFolder）
+    @ObservationIgnored private var exportFolderAccess: URL?
     var clipboardHint: Bool {
         didSet { defaults.set(clipboardHint, forKey: "clipboardHint") }
     }
@@ -58,6 +62,10 @@ final class AppSettings {
     /// 多账号下载：批量下载时按文件轮换使用同平台的多个账号
     var multiAccountDownload: Bool {
         didSet { defaults.set(multiAccountDownload, forKey: "multiAccountDownload") }
+    }
+    /// 允许把夸克 / UC 中文口令发给第三方「星海」服务解析（唯一用到第三方服务的地方；首次使用时询问）
+    var allowCommandService: Bool {
+        didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
     }
     /// 单文件多源分片：大文件同时用多个账号各自取到的直链分摊分片（依赖多账号下载）
     var multiSourceDownload: Bool {
@@ -151,6 +159,7 @@ final class AppSettings {
         liveActivity = defaults.bool(forKey: "liveActivity")
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
+        allowCommandService = defaults.bool(forKey: "allowCommandService")
         useExtraTrackers = defaults.bool(forKey: "useExtraTrackers")
         multiSourceDownload = defaults.bool(forKey: "multiSourceDownload")
         accentHex = defaults.string(forKey: "accentHex") ?? ""
@@ -170,6 +179,7 @@ final class AppSettings {
         resolverOptions.directFirst = directFirst
         publish()
         applyProxy()
+        resolveExportFolder()
     }
 
     /// 代理设置（填写完整时才生效）
@@ -201,35 +211,48 @@ final class SettingsSnapshot: @unchecked Sendable {
 // MARK: - 完成后移动到所选文件夹
 
 extension AppSettings {
-    /// 解析书签得到文件夹地址；书签过期时就地刷新，彻底失效返回 nil
-    var exportFolder: URL? {
-        guard let data = exportFolderBookmark else { return nil }
-        var stale = false
-        guard let url = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale) else { return nil }
-        if stale {
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            if let fresh = try? url.bookmarkData() { exportFolderBookmark = fresh }
+    /// 解析书签得到文件夹地址并缓存；书签过期时就地刷新，彻底失效为 nil。
+    /// 对所选文件夹只保持一次安全访问：打开、分享（分享面板异步读文件）、删除已移过去的文件都要用到，
+    /// 这些操作分散在别处、没法逐次包住；更换或清除文件夹时先结束旧的访问，所以 start / stop 始终成对，
+    /// 不会像以前那样每次界面刷新都多开一次、永不释放
+    private func resolveExportFolder() {
+        if let previous = exportFolderAccess {
+            previous.stopAccessingSecurityScopedResource()
+            exportFolderAccess = nil
         }
-        return url
+        guard let data = exportFolderBookmark else {
+            exportFolder = nil
+            return
+        }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale) else {
+            exportFolder = nil
+            return
+        }
+        if url.startAccessingSecurityScopedResource() { exportFolderAccess = url }
+        if stale, let fresh = try? url.bookmarkData() { exportFolderBookmark = fresh }
+        exportFolder = url
     }
 
-    /// 已移到外部文件夹的下载文件的位置（exportedTo 记的是「文件夹名/子目录/文件名」）。
-    /// 会开启该文件夹的安全访问，供打开、分享、删除使用
+    /// 已移到外部文件夹的下载文件的位置（exportedTo 记的是「文件夹名/子目录/文件名」）；文件不在了返回 nil。
+    /// 文件夹的安全访问由 resolveExportFolder 统一持有，这里不再开启
     func exportedFileURL(_ item: DownloadItem) -> URL? {
         guard let text = item.exportedTo, let folder = exportFolder else { return nil }
         let relative = text.split(separator: "/").dropFirst().joined(separator: "/")
         guard !relative.isEmpty else { return nil }
-        _ = folder.startAccessingSecurityScopedResource()
         let url = folder.appendingPathComponent(relative)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     func setExportFolder(_ url: URL?) {
-        guard let url else { exportFolderBookmark = nil; return }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        exportFolderBookmark = try? url.bookmarkData()
+        if let url {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            exportFolderBookmark = try? url.bookmarkData()
+        } else {
+            exportFolderBookmark = nil
+        }
+        resolveExportFolder()
     }
 }
 
@@ -240,13 +263,33 @@ extension AppSettings {
         ("赭石", "A0682A", "D9A066"), ("葡萄", "6E4E7E", "B596C4"), ("墨黑", "2B2A27", "E6E1D6")
     ]
 
-    /// 当前强调色（浅色 / 深色各一份）；未自定义时是资源里的陶土色
+    /// 当前强调色（浅色 / 深色各一份）；未自定义时是资源里的陶土色。
+    /// 自选的颜色没有预设的深色版本，按对比度自动提亮一份，免得深底上看不见
     var accentUIColor: UIColor {
         guard let light = UIColor(hexString: accentHex) else {
             return UIColor(named: "AccentColor") ?? UIColor(red: 0.71, green: 0.33, blue: 0.18, alpha: 1)
         }
-        let dark = Self.accentPresets.first { $0.hex == accentHex }.flatMap { UIColor(hexString: $0.dark) } ?? light
+        let dark = Self.accentPresets.first { $0.hex == accentHex }.flatMap { UIColor(hexString: $0.dark) }
+            ?? Self.darkModeVariant(of: light)
         return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+
+    /// 深色模式用的强调色：逐步向白色混合，直到对深色卡片底（#23221F）的对比度达到 4.5:1；本来就够亮的原样返回
+    static func darkModeVariant(of color: UIColor) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return color }
+        func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGFloat { 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) }
+        let surface = luminance(0x23 / 255, 0x22 / 255, 0x1F / 255)
+        var t: CGFloat = 0
+        while t < 0.9 {
+            let (mr, mg, mb) = (r + (1 - r) * t, g + (1 - g) * t, b + (1 - b) * t)
+            if (luminance(mr, mg, mb) + 0.05) / (surface + 0.05) >= 4.5 {
+                return UIColor(red: mr, green: mg, blue: mb, alpha: a)
+            }
+            t += 0.05
+        }
+        return UIColor(red: r + (1 - r) * 0.9, green: g + (1 - g) * 0.9, blue: b + (1 - b) * 0.9, alpha: a)
     }
 
     var accentColor: Color { Color(uiColor: accentUIColor) }

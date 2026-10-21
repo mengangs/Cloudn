@@ -8,11 +8,15 @@ public enum VideoHTTP {
     public static let uaIPhone =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
+    /// 取消照原样抛出（批量任务「停止」时正在解析的那条要回到等待，而不是记成网络失败）；其余错误的原文留在 detail 里
     static func send(_ request: HTTPRequest, client: HTTPClient = .shared) async throws -> HTTPResponse {
         do {
             return try await client.send(request)
+        } catch let error as CancellationError {
+            throw error
         } catch {
-            throw VideoParseError(.network, "请求失败：\(request.url)")
+            if Task.isCancelled { throw CancellationError() }
+            throw VideoParseError(.network, "请求失败：\(request.url)（\(error.localizedDescription)）")
         }
     }
 

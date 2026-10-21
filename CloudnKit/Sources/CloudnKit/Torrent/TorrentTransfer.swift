@@ -68,6 +68,8 @@ struct TorrentTransfer {
             group.addTask { await discover(swarm, peerId: peerId) }
             while !(await swarm.isComplete) {
                 try Task.checkCancellation()
+                // 写盘失败（空间满了等）重下也没用：整个下载失败，提示原因
+                if let failure = await swarm.failure { throw TransferError(failure, permanent: true) }
                 for address in await swarm.takeConnectable(limit: Self.maxPeers) {
                     group.addTask { await runPeer(address, swarm: swarm, peerId: peerId) }
                 }
@@ -210,15 +212,22 @@ struct TorrentTransfer {
                     lastUseful = Date()
                     useful = true
                     if let full = await swarm.deliver(peer: pid, index: index, begin: begin, block: block) {
-                        let ok = await swarm.pieceHash(index) == TorrentInfo.sha1(full)
-                        var stored = ok
-                        if ok, let storage = await swarm.storage {
-                            do { try storage.write(piece: index, data: full) } catch {
+                        guard await swarm.pieceHash(index) == TorrentInfo.sha1(full) else {
+                            // 校验失败：数据有问题，这块重新下载
+                            await swarm.pieceResult(index, ok: false)
+                            continue
+                        }
+                        if let storage = await swarm.storage {
+                            do {
+                                try storage.write(piece: index, data: full)
+                            } catch {
+                                // 写盘失败不是数据的问题，重下只会反复失败：记下错误，整个下载停下
                                 Log.error("BT 写入失败：\(error.localizedDescription)")
-                                stored = false
+                                await swarm.pieceWriteFailed(index, message: TorrentStorage.writeFailureMessage(error))
+                                throw error
                             }
                         }
-                        await swarm.pieceResult(index, ok: stored)
+                        await swarm.pieceResult(index, ok: true)
                     }
                 case .extended(0, let payload):
                     if let (head, _) = try? Bencode.decodePrefix(payload) {

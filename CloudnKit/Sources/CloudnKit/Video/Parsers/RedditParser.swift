@@ -247,8 +247,8 @@ struct RedditParser: VideoParser {
     static func postData(_ json: JSON) throws -> JSON {
         if json["error"].int == 403 || json["reason"].string.isEmpty == false {
             switch json["reason"].string {
-            case "quarantined": throw VideoParseError(.unknown, "该社区已被隔离，需要已确认进入的 Reddit 账号才能查看（暂不支持登录 Reddit）")
-            case "private": throw VideoParseError(.unknown, "该社区为私密社区，需要已获准的 Reddit 账号才能查看（暂不支持登录 Reddit）")
+            case "quarantined": throw VideoParseError(.unknown, "该社区已被隔离，需要已确认进入该社区的 Reddit 账号才能查看，请到「我的」页登录 Reddit")
+            case "private": throw VideoParseError(.unknown, "该社区为私密社区，需要已获准加入的 Reddit 账号才能查看，请到「我的」页登录 Reddit")
             case "banned": throw VideoParseError(.notFound, "该社区已被封禁")
             default: throw VideoParseError(.blocked, "Reddit 拒绝访问（\(json["reason"].string)）")
             }

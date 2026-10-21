@@ -28,6 +28,9 @@ final class BatchJob: Identifiable {
     private(set) var items: [Item]
     private(set) var running = false
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// 每次开始 / 停止加一：停止后旧的那一轮可能还在收尾（等网络请求返回），它看到编号变了就不再改动状态，
+    /// 「停止」后马上「继续」也不会出现两轮同时跑
+    @ObservationIgnored private var runToken = 0
     @ObservationIgnored private let group: DownloadGroup
 
     init(title: String, entries: [(title: String, url: String)]) {
@@ -43,14 +46,17 @@ final class BatchJob: Identifiable {
     func start(app: AppModel) {
         guard !running else { return }
         running = true
+        runToken += 1
+        let token = runToken
         task = Task { [weak self] in
-            await self?.run(app: app)
+            await self?.run(app: app, token: token)
         }
     }
 
     func cancel() {
         task?.cancel()
         task = nil
+        runToken += 1
         running = false
         for i in items.indices where items[i].state == .parsing { items[i].state = .waiting }
     }
@@ -63,17 +69,20 @@ final class BatchJob: Identifiable {
         start(app: app)
     }
 
-    private func run(app: AppModel) async {
-        defer { running = false }
+    private func run(app: AppModel, token: Int) async {
+        defer { if token == runToken { running = false } }
         let folder = FileNames.base(title, fallback: "批量下载")
         var first = true
         for i in items.indices where items[i].state == .waiting {
-            if Task.isCancelled { return }
+            if Task.isCancelled || token != runToken { return }
             if !first { try? await Task.sleep(nanoseconds: 800_000_000) }
             first = false
-            if Task.isCancelled { return }
+            if Task.isCancelled || token != runToken { return }
             items[i].state = .parsing
-            items[i].state = await parse(items[i].url, app: app, folder: folder)
+            let state = await parse(items[i].url, app: app, folder: folder)
+            // 已经停止（或换了新一轮）：这一条交给 cancel() 复位成等待，不再写回
+            guard token == runToken else { return }
+            items[i].state = state
         }
     }
 
@@ -81,20 +90,37 @@ final class BatchJob: Identifiable {
         guard let link = VideoLinkParser.parse(url) else { return .failed("链接无法识别") }
         do {
             let result = try await app.videoService.parse(link)
+            if Task.isCancelled { return .waiting }
             let medias = result.defaultDownloads
             guard !medias.isEmpty else {
                 return .failed(result.entries.isEmpty ? "没有可下载的媒体" : "这也是一个合集，请单独打开")
             }
-            for media in medias {
+            // 已在下载列表里（正在下 / 已下完）的跳过：重复粘贴、停止后继续都不会重复入队
+            let existing = Self.queuedKeys(app.downloads.items)
+            for media in medias where !existing.contains(Self.key(url: media.url)) && !existing.contains(Self.key(page: result.url, file: media.fileName)) {
                 app.downloads.enqueue(media: media, result: result, folder: folder, group: group)
             }
             return .added(medias.count)
         } catch is CancellationError {
             return .waiting
         } catch {
+            if Task.isCancelled { return .waiting }
             return .failed(error.localizedDescription)
         }
     }
+
+    /// 下载列表里没失败的任务：按直链、以及「作品页 + 文件名」（直链带签名，重新解析会变）各记一个键
+    private static func queuedKeys(_ items: [DownloadItem]) -> Set<String> {
+        var keys = Set<String>()
+        for item in items where item.status != .failed {
+            keys.insert(key(url: item.request.url))
+            if case .video(let page, let file, _) = item.request.refresh, !page.isEmpty { keys.insert(key(page: page, file: file)) }
+        }
+        return keys
+    }
+
+    private static func key(url: String) -> String { "u|" + url }
+    private static func key(page: String, file: String) -> String { page.isEmpty ? "" : "p|\(page)|\(file)" }
 }
 
 extension AppModel {

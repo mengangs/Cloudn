@@ -123,6 +123,8 @@ final class WebLoginStore {
     var committed = false
     /// 每次重试加一，用来重新计时
     var attempt = 0
+    /// 海外平台：连不上时提示开 VPN / 代理；国内网站只提示检查网络
+    @ObservationIgnored var overseas = false
     @ObservationIgnored let dataStore: WKWebsiteDataStore = {
         let store = WKWebsiteDataStore.nonPersistent()
         store.useAppProxy()
@@ -141,7 +143,9 @@ final class WebLoginStore {
     func timedOut(_ url: URL) {
         Log.error("网页登录：打开 \(url.host ?? "") 超时（20 秒没有收到页面）")
         webView?.stopLoading()
-        loadError = "连接 \(url.host ?? "登录页") 超时，没有收到页面。\n\n海外平台在国内网络下无法直接访问，请开启 VPN（全局或让该网站走代理），或在「设置 › 网络代理」里填写代理"
+        loadError = overseas
+            ? "连接 \(url.host ?? "登录页") 超时，没有收到页面。\n\n海外平台在国内网络下无法直接访问，请开启 VPN（全局或让该网站走代理），或在「设置 › 网络代理」里填写代理"
+            : "网络连接超时，请检查网络后重试"
     }
 
     func failed(_ error: Error) {
@@ -152,7 +156,7 @@ final class WebLoginStore {
         Log.error("网页登录：页面加载失败 \(e.domain) \(e.code) \(e.localizedDescription)")
         var message = e.localizedDescription
         if e.domain == NSURLErrorDomain, [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
-                                          NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed].contains(e.code) {
+                                          NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed].contains(e.code), overseas {
             message += "\n\n海外平台在国内网络下无法直接访问，请开启 VPN，或在「设置 › 网络代理」里填写代理"
         }
         loadError = message
@@ -190,6 +194,7 @@ struct LoginWebView: UIViewRepresentable {
     let store: WebLoginStore
 
     func makeUIView(context: Context) -> WKWebView {
+        store.overseas = OverseasAccount.kinds.contains(kind)
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store.dataStore
         let mobileSafari = kind.loginUserAgent == VideoHTTP.uaIPhone

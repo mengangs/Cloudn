@@ -17,6 +17,8 @@ struct DownloadsView: View {
     @State private var expanded = Set<UUID>()
     /// 正在看调试信息的任务
     @State private var debugging: DownloadItem?
+    /// 已完成任务的文件信息（长按菜单用），按任务缓存，列表刷新时不查磁盘
+    @State private var fileFacts = FileFactsCache()
 
     enum Filter: String, CaseIterable, Identifiable {
         case all = "全部", active = "进行中", done = "已完成"
@@ -76,6 +78,10 @@ struct DownloadsView: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture { selecting ? toggle([item.id]) : primaryAction(item) }
+        // 读屏：整张卡片读成一项，多选时报「已选定」
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selecting && on ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityAction { selecting ? toggle([item.id]) : primaryAction(item) }
         .contextMenu { menu(item) }
         .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
             if item.status == .completed {
@@ -125,21 +131,25 @@ struct DownloadsView: View {
         .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .onTapGesture {
-            if selecting {
-                if allOn { selection.subtract(ids) } else { selection.formUnion(ids) }
-            } else {
-                withAnimation(.snappy(duration: 0.25)) {
-                    if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
-                }
-            }
-        }
+        .onTapGesture { tapGroup(group.id, ids: ids, allOn: allOn, open: open) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selecting && allOn ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityHint(selecting ? "" : (open ? "收起" : "展开"))
+        .accessibilityAction { tapGroup(group.id, ids: ids, allOn: allOn, open: open) }
         .contextMenu { groupMenu(members) }
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(open ? "收起" : "展开")
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
+    }
+
+    private func tapGroup(_ id: UUID, ids: Set<UUID>, allOn: Bool, open: Bool) {
+        if selecting {
+            if allOn { selection.subtract(ids) } else { selection.formUnion(ids) }
+        } else {
+            withAnimation(.snappy(duration: 0.25)) {
+                if open { expanded.remove(id) } else { expanded.insert(id) }
+            }
+        }
     }
 
     @ViewBuilder
@@ -180,6 +190,7 @@ struct DownloadsView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 0)
+            .readableWidth()
             .background(Color.paper)
             .navigationTitle("下载")
             .toolbar {
@@ -340,19 +351,21 @@ struct DownloadsView: View {
 
     @ViewBuilder
     private func menu(_ item: DownloadItem) -> some View {
-        if item.status == .completed, let url = app.downloads.fileURL(item) {
-            if Self.isDirectory(url) {
+        // 文件信息按任务缓存：菜单内容随列表一起构建，不能每次刷新都查磁盘
+        if item.status == .completed, let facts = fileFacts.facts(for: item, resolve: { app.downloads.fileURL(item) }) {
+            let url = facts.url
+            if facts.isDirectory {
                 Button { Self.revealInFiles(url) } label: { Label("在「文件」中查看", glyph: .folder) }
             } else {
                 Button { previewURL = url } label: { Label("打开", glyph: .eye) }
             }
             ShareLink(item: url) { Label("分享 / 存储到文件", glyph: .share) }
-            if MediaTools.canSaveToPhotos(url) {
+            if facts.canSaveToPhotos {
                 Button {
                     Task {
                         do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
                     }
-                } label: { Label(LivePhoto.pair(for: url) != nil ? "保存为实况照片" : "保存到相册", glyph: .image) }
+                } label: { Label(facts.isLivePhoto ? "保存为实况照片" : "保存到相册", glyph: .image) }
             }
         } else {
             if item.status.isActive {
@@ -364,7 +377,7 @@ struct DownloadsView: View {
                 Button { refresh(item) } label: { Label("重新获取直链并继续", glyph: .refresh) }
             }
         }
-        Button { UIPasteboard.general.string = item.request.url; app.show("已复制下载地址") } label: {
+        Button { Clipboard.copy(item.request.url); app.show("已复制下载地址") } label: {
             Label("复制下载地址", glyph: .link)
         }
         Button { debugging = item } label: { Label("调试信息", glyph: .doc) }
@@ -401,6 +414,37 @@ struct DownloadsView: View {
                 app.show(error.localizedDescription, error: true)
             }
         }
+    }
+}
+
+/// 已完成任务的文件信息缓存：是否目录、能否存相册、是否实况照片。
+/// 普通类、不参与界面观察，构建菜单时读写不会触发刷新；文件位置变了（移到外部文件夹）就重新查
+@MainActor
+final class FileFactsCache {
+    struct Facts {
+        let url: URL
+        let isDirectory: Bool
+        let canSaveToPhotos: Bool
+        let isLivePhoto: Bool
+    }
+
+    private struct Entry {
+        let location: String?
+        let facts: Facts?
+    }
+
+    private var entries: [UUID: Entry] = [:]
+
+    func facts(for item: DownloadItem, resolve: () -> URL?) -> Facts? {
+        let location = item.outputPath ?? item.exportedTo
+        if let entry = entries[item.id], entry.location == location { return entry.facts }
+        let facts = resolve().map { url in
+            let canSave = MediaTools.canSaveToPhotos(url)
+            return Facts(url: url, isDirectory: DownloadsView.isDirectory(url), canSaveToPhotos: canSave,
+                         isLivePhoto: canSave && LivePhoto.pair(for: url) != nil)
+        }
+        entries[item.id] = Entry(location: location, facts: facts)
+        return facts
     }
 }
 
