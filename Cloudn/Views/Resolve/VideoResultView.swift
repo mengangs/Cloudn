@@ -424,8 +424,10 @@ struct VideoResultView: View {
         } label: {
             Color.fillMuted
                 .aspectRatio(3 / 4, contentMode: .fit)
-                .overlay { RemoteImage(url: media.url, headers: media.headers) }
+                .overlay { RemoteImage(url: media.url, headers: media.headers).allowsHitTesting(false) }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // 裁切只管画面不管触摸：铺满的大图会越过格子盖住旁边一格，点左边那格反被右边那张接走
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(on ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.hairline), lineWidth: on ? 2.5 : 1)

@@ -79,7 +79,8 @@ public final class VideoParseService: Sendable {
         return VideoParseResult(platform: result.platform, title: result.title, author: result.author, avatar: result.avatar,
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
                                 url: result.url, medias: medias, notice: result.notice,
-                                entries: result.entries, subtitles: result.subtitles)
+                                entries: result.entries, subtitles: result.subtitles, authorID: result.authorID,
+                                fileBase: result.fileBase)
     }
 
     /// 展开后仍是短链（快手的短链由解析器自己展开，除外）：

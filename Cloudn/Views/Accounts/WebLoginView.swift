@@ -29,6 +29,22 @@ struct WebLoginView: View {
                             .background(Color.surface)
                             .allowsHitTesting(false)
                         }
+                        if store.blank && store.loadError == nil {
+                            VStack(spacing: 12) {
+                                IconView(.warning, size: 28).foregroundStyle(Color.clayInk)
+                                Text("登录页没有显示内容").font(.headline).foregroundStyle(Color.ink)
+                                Text(store.blankHint).font(.footnote).foregroundStyle(Color.ink2).multilineTextAlignment(.center)
+                                Button("重试") { store.reload(kind.loginURL) }
+                                    .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
+                                if !store.desktop {
+                                    Button("改用电脑版页面") { store.switchToDesktop(kind.loginURL) }
+                                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 42))
+                                }
+                            }
+                            .padding(24)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.surface)
+                        }
                         if let error = store.loadError {
                             VStack(spacing: 12) {
                                 IconView(.warning, size: 28).foregroundStyle(Color.clayInk)
@@ -123,8 +139,14 @@ final class WebLoginStore {
     var committed = false
     /// 每次重试加一，用来重新计时
     var attempt = 0
+    /// 页面打开了却一片空白（脚本 / 资源没加载出来）
+    var blank = false
+    var blankHint = ""
+    /// 已改用电脑版页面（桌面 UA）
+    var desktop = false
     /// 海外平台：连不上时提示开 VPN / 代理；国内网站只提示检查网络
     @ObservationIgnored var overseas = false
+    @ObservationIgnored private var blankCheck: Task<Void, Never>?
     @ObservationIgnored let dataStore: WKWebsiteDataStore = {
         let store = WKWebsiteDataStore.nonPersistent()
         store.useAppProxy()
@@ -132,8 +154,40 @@ final class WebLoginStore {
     }()
     @ObservationIgnored weak var webView: WKWebView?
 
+    /// 页面空白时改用电脑版页面：有的站点手机版脚本在内嵌网页里跑不起来
+    func switchToDesktop(_ url: URL) {
+        desktop = true
+        webView?.customUserAgent = VideoHTTP.uaChrome
+        Log.info("网页登录：改用电脑版页面")
+        reload(url)
+    }
+
+    /// 页面加载后隔几秒看有没有内容：空白就记下加载失败的资源，并给出提示
+    func scheduleBlankCheck() {
+        blankCheck?.cancel()
+        blankCheck = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, let self, let webView = self.webView, self.loadError == nil else { return }
+            let script = "(function(){var b=document.body;var t=b?(b.innerText||'').trim().length:0;"
+                + "var n=document.querySelectorAll('input,button,a').length;"
+                + "var e=(window.__cloudnErrors||[]).slice(0,8).join(' | ');return t+'|'+n+'|'+e;})()"
+            guard let value = try? await webView.evaluateJavaScript(script) as? String else { return }
+            let parts = value.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            let text = Int(parts.first ?? "") ?? 0
+            let controls = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+            let errors = parts.count > 2 ? parts[2] : ""
+            guard text < 5 && controls == 0 else { return }
+            Log.error("网页登录：页面空白 \(webView.url?.host ?? "")（加载失败的资源：\(errors.isEmpty ? "无记录" : errors)）")
+            self.blankHint = self.overseas
+                ? "页面打开了，但脚本或图片资源没有加载出来（常见原因：VPN 只让主站走代理，没包含它的资源域名，如 cdninstagram.com、fbcdn.net）。\n\n可以把 VPN 切到全局模式后重试，或改用电脑版页面。"
+                : "页面打开了，但内容没有加载出来，可以重试或改用电脑版页面。"
+            self.blank = true
+        }
+    }
+
     func reload(_ url: URL) {
         loadError = nil
+        blank = false
         committed = false
         attempt += 1
         Log.info("网页登录：重试打开 \(url.absoluteString)")
@@ -203,6 +257,9 @@ struct LoginWebView: UIViewRepresentable {
             // 写死的旧版本号与真实内核对不上时，部分站点（如 Instagram）会给出空白页
             config.applicationNameForUserAgent = "Version/\(Self.safariVersion) Mobile/15E148 Safari/604.1"
         }
+        // 记下加载失败的脚本 / 图片等资源，页面空白时写进诊断日志
+        config.userContentController.addUserScript(WKUserScript(source: Self.resourceErrorScript, injectionTime: .atDocumentStart,
+                                                                forMainFrameOnly: true))
         if let script = kind.loginPageScript {
             config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
@@ -222,6 +279,12 @@ struct LoginWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static let resourceErrorScript = """
+    (function(){try{window.__cloudnErrors=[];window.addEventListener('error',function(e){var t=e.target;
+      var s=t&&(t.src||t.href);if(s){window.__cloudnErrors.push(String(s).split('?')[0]);}
+      else if(e.message){window.__cloudnErrors.push('js:'+String(e.message).slice(0,80));}},true);}catch(x){}})()
+    """
 
     /// 强制按桌面宽度渲染
     static func viewportScript(width: Int) -> String {
@@ -292,11 +355,18 @@ struct LoginWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-            Task { @MainActor in store?.committed = true }
+            // 资源被墙时连接挂着不断，didFinish 可能迟迟不来：从开始渲染起也计时检查空白
+            Task { @MainActor in
+                store?.committed = true
+                store?.scheduleBlankCheck()
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            Task { @MainActor in store?.committed = true }
+            Task { @MainActor in
+                store?.committed = true
+                store?.scheduleBlankCheck()
+            }
             // 页面加载完却没有内容（脚本出错、被拦截）：记下来便于排查
             let probe = "(document.body ? document.body.innerText.length + ' 字 / ' + document.body.children.length + ' 个元素' : '没有 body') + ' · ' + navigator.userAgent"
             webView.evaluateJavaScript(probe) { value, _ in

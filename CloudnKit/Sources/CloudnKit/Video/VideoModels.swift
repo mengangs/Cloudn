@@ -185,10 +185,16 @@ public struct VideoParseResult: Sendable, Identifiable {
     public let entries: [VideoEntry]
     /// 可下载的字幕
     public let subtitles: [SubtitleTrack]
+    /// 作者在平台上的账号（如抖音号）；拿不到为空
+    public let authorID: String
+    /// 媒体文件名用的主干（文件名都以它开头）；按「作者_账号_发布时间」重命名时据此替换，为空表示不支持重命名
+    public let fileBase: String
 
     public init(platform: VideoPlatform, title: String, author: String = "", avatar: String = "", cover: String = "",
                 text: String = "", timestamp: Int64 = 0, url: String = "", medias: [VideoMedia] = [], notice: String = "",
-                entries: [VideoEntry] = [], subtitles: [SubtitleTrack] = []) {
+                entries: [VideoEntry] = [], subtitles: [SubtitleTrack] = [], authorID: String = "", fileBase: String = "") {
+        self.authorID = authorID
+        self.fileBase = fileBase
         self.platform = platform
         self.title = title
         self.author = author
@@ -218,6 +224,19 @@ public struct VideoParseResult: Sendable, Identifiable {
     /// 实况照片：图片 id → 配对的视频（与图片同名加 `_live` 后缀，如 `作品_1.jpg` + `作品_1_live.mp4`）。
     /// 配上对的视频在界面上挂在图片上，不再单独列为视频
     public var livePairs: [UUID: VideoMedia] { Self.livePairs(medias) }
+
+    /// 按「作者_账号_发布时间」改写文件名（只替换开头的 fileBase，清晰度 / 序号 / _live 后缀保留）；
+    /// 缺作者或发布时间、或文件名不以 fileBase 开头时原样返回
+    public func authorStyledName(_ fileName: String) -> String {
+        guard !fileBase.isEmpty, fileName.hasPrefix(fileBase), !author.isEmpty, timestamp > 0 else { return fileName }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let date = formatter.string(from: Date(timeIntervalSince1970: TimeInterval(timestamp)))
+        let base = FileNames.base([author, authorID, date].filter { !$0.isEmpty }.joined(separator: "_"), fallback: fileBase)
+        return base + fileName.dropFirst(fileBase.count)
+    }
 
     static func livePairs(_ medias: [VideoMedia]) -> [UUID: VideoMedia] {
         let suffix = "_live"

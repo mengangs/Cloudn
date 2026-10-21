@@ -43,6 +43,7 @@ struct SettingsView: View {
                             Toggle("单文件多源分片（实验性）", isOn: $settings.multiSourceDownload)
                         }
                         Toggle("夸克 / UC 中文口令解析", isOn: $settings.allowCommandService)
+                        Toggle("抖音按「昵称_抖音号_发布时间」命名", isOn: $settings.authorStyledNames)
                     } header: {
                         Text("解析")
                     } footer: {

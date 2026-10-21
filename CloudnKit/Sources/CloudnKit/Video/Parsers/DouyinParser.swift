@@ -53,7 +53,8 @@ struct DouyinParser: VideoParser {
         }
         let cover = p["cover"].string
         return VideoParseResult(platform: platform, title: title, author: p["author"].string,
-                                cover: cover.isEmpty ? (images.first ?? "") : cover, url: link.url, medias: medias)
+                                cover: cover.isEmpty ? (images.first ?? "") : cover, timestamp: p["createTime"].int64,
+                                url: link.url, medias: medias, authorID: p["authorID"].string, fileBase: base)
     }
 
     private func parseSSR(_ link: DetectedVideoLink, type: String) async throws -> VideoParseResult {
@@ -93,7 +94,9 @@ struct DouyinParser: VideoParser {
         let author = item["author"]
         return VideoParseResult(platform: platform, title: title, author: author["nickname"].string,
                                 avatar: author.object("avatar_thumb", "avatar_medium")["url_list"][0].string,
-                                cover: cover, timestamp: item["create_time"].int64, url: link.url, medias: medias)
+                                cover: cover, timestamp: item["create_time"].int64, url: link.url, medias: medias,
+                                authorID: [author["unique_id"].string, author["short_id"].string].first { !$0.isEmpty } ?? "",
+                                fileBase: base)
     }
 
     /// 实况图里的视频地址：字段名各版本不一，在这张图的数据里找第一个视频地址
@@ -365,6 +368,8 @@ struct DouyinParser: VideoParser {
         if (!title) { var t = document.title || ''; var p = t.lastIndexOf(' - 抖音'); title = p > 0 ? t.substring(0, p) : t; }
         return JSON.stringify({
           title: title, author: (d && d.author && (d.author.nickname || d.author.unique_id)) || '',
+          authorID: (d && d.author && (d.author.unique_id || d.author.short_id || d.author.uniqueId || d.author.shortId)) || '',
+          createTime: (d && (d.create_time || d.createTime)) || 0,
           video: video, images: images, lives: lives, domImages: domImages,
           cover: (v && (firstUrl(v.cover) || firstUrl(v.origin_cover))) || '',
           bitRates: (v && (v.bit_rate || v.bitRate)) || [],

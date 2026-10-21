@@ -103,7 +103,9 @@ final class DownloadStore {
         // 记下作品页与这是第几个媒体：直链过期后重新解析作品页换链
         let index = result.medias.firstIndex { $0.id == media.id } ?? 0
         let refresh: RefreshSource? = result.url.isEmpty ? nil : .video(pageURL: result.url, fileName: media.fileName, index: index)
-        enqueue(DownloadRequest(url: media.url, headers: media.headers, fileName: media.fileName, folder: folder, kind: kind,
+        // 抖音可选按「昵称_抖音号_发布时间」命名（存进相册也带这个文件名）；换链仍按原文件名找回媒体
+        let fileName = result.platform == .douyin && UserDefaults.standard.bool(forKey: AppSettings.authorStyledNamesKey) ? result.authorStyledName(media.fileName) : media.fileName
+        enqueue(DownloadRequest(url: media.url, headers: media.headers, fileName: fileName, folder: folder, kind: kind,
                                 expectedSize: media.size, source: result.platform.displayName, group: group, refresh: refresh))
     }
 

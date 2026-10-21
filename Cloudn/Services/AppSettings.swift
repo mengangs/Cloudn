@@ -63,6 +63,11 @@ final class AppSettings {
     var multiAccountDownload: Bool {
         didSet { defaults.set(multiAccountDownload, forKey: "multiAccountDownload") }
     }
+    /// 抖音作品文件按「昵称_抖音号_发布时间」命名（默认按标题）
+    var authorStyledNames: Bool {
+        didSet { defaults.set(authorStyledNames, forKey: Self.authorStyledNamesKey) }
+    }
+    static let authorStyledNamesKey = "authorStyledNames"
     /// 允许把夸克 / UC 中文口令发给第三方「星海」服务解析（唯一用到第三方服务的地方；首次使用时询问）
     var allowCommandService: Bool {
         didSet { defaults.set(allowCommandService, forKey: "allowCommandService") }
@@ -160,6 +165,7 @@ final class AppSettings {
         acceptedNotice = defaults.bool(forKey: "acceptedNotice")
         multiAccountDownload = defaults.bool(forKey: "multiAccountDownload")
         allowCommandService = defaults.bool(forKey: "allowCommandService")
+        authorStyledNames = defaults.bool(forKey: Self.authorStyledNamesKey)
         useExtraTrackers = defaults.bool(forKey: "useExtraTrackers")
         multiSourceDownload = defaults.bool(forKey: "multiSourceDownload")
         accentHex = defaults.string(forKey: "accentHex") ?? ""

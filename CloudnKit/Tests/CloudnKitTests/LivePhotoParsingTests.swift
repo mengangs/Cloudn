@@ -39,3 +39,16 @@ final class DouyinOriginalTests: XCTestCase {
         XCTAssertFalse(DouyinParser.shouldPromote(original: 0, top: -1))
     }
 }
+
+/// 抖音按「昵称_抖音号_发布时间」命名：只替换文件名开头的主干，后缀保留
+final class AuthorStyledNameTests: XCTestCase {
+    func testRename() {
+        let r = VideoParseResult(platform: .douyin, title: "下雨落叶", author: "小米粒", timestamp: 1_792_540_748,
+                                 authorID: "xmlsy123", fileBase: "下雨落叶")
+        XCTAssertEqual(r.authorStyledName("下雨落叶.mp4"), "小米粒_xmlsy123_2026-10-21_07-59-08.mp4")
+        XCTAssertEqual(r.authorStyledName("下雨落叶_2_live.mp4"), "小米粒_xmlsy123_2026-10-21_07-59-08_2_live.mp4")
+        XCTAssertEqual(r.authorStyledName("别的.mp4"), "别的.mp4")
+        let noTime = VideoParseResult(platform: .douyin, title: "t", author: "a", fileBase: "t")
+        XCTAssertEqual(noTime.authorStyledName("t.mp4"), "t.mp4")
+    }
+}
