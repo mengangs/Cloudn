@@ -18,4 +18,13 @@ final class LivePhotoParsingTests: XCTestCase {
         XCTAssertFalse(media.url.contains("playwm"))
         XCTAssertNil(DouyinParser.liveMedia("", stem: "x", headers: [:]))
     }
+
+    func testDouyinLiveVideoSearch() throws {
+        let item = try XCTUnwrap(JSON(text: #"{"url_list":["https://p9-pc-sign.douyinpic.com/tos-cn-i-0813c000-ce/abc~noop.jpeg?x=1"],"download_url_list":["https://p3.douyinpic.com/abc~tplv-dy-aweme-images:q75.jpeg"],"clip_type":5,"video":{"cover":{"url_list":["https://p3.douyinpic.com/cover.jpeg"]},"play_addr":{"uri":"v0d00","url_list":["https://v3-web.douyinvod.com/abc/video/tos/cn/mp4?a=1"]}}}"#))
+        XCTAssertEqual(DouyinParser.liveVideoURL(in: item), "https://v3-web.douyinvod.com/abc/video/tos/cn/mp4?a=1")
+        let other = try XCTUnwrap(JSON(text: #"{"urlList":["https://p3.douyinpic.com/a.webp"],"liveVideo":{"playAddr":[{"src":"https://www.douyin.com/aweme/v1/play/?video_id=v1&ratio=1080p"}]}}"#))
+        XCTAssertEqual(DouyinParser.liveVideoURL(in: other), "https://www.douyin.com/aweme/v1/play/?video_id=v1&ratio=1080p")
+        let plain = try XCTUnwrap(JSON(text: #"{"url_list":["https://p3.douyinpic.com/a~noop.jpeg"]}"#))
+        XCTAssertEqual(DouyinParser.liveVideoURL(in: plain), "")
+    }
 }

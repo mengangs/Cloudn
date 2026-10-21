@@ -76,8 +76,7 @@ struct DouyinParser: VideoParser {
                 guard let url = img.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) else { continue }
                 if cover.isEmpty { cover = url }
                 medias.append(VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1).jpg", headers: mediaHeaders, quality: "原图"))
-                let play = img["video"].object("play_addr", "playAddr")
-                let live = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) ?? ""
+                let live = Self.liveVideoURL(in: img)
                 if let media = Self.liveMedia(live, stem: "\(base)_\(i + 1)", headers: mediaHeaders) { medias.append(media) }
             }
         } else {
@@ -92,6 +91,32 @@ struct DouyinParser: VideoParser {
         return VideoParseResult(platform: platform, title: title, author: author["nickname"].string,
                                 avatar: author.object("avatar_thumb", "avatar_medium")["url_list"][0].string,
                                 cover: cover, timestamp: item["create_time"].int64, url: link.url, medias: medias)
+    }
+
+    /// 实况图里的视频地址：字段名各版本不一，在这张图的数据里找第一个视频地址
+    static func liveVideoURL(in node: JSON, depth: Int = 0) -> String {
+        guard depth <= 6 else { return "" }
+        if let text = node.raw as? String { return isVideoURL(text) ? text : "" }
+        if let dict = node.raw as? [String: Any] {
+            let keys = dict.keys.sorted { ($0 == "video" ? 0 : 1, $0) < ($1 == "video" ? 0 : 1, $1) }
+            for key in keys {
+                let found = liveVideoURL(in: node[key], depth: depth + 1)
+                if !found.isEmpty { return found }
+            }
+        } else if node.raw is [Any] {
+            for item in node.array {
+                let found = liveVideoURL(in: item, depth: depth + 1)
+                if !found.isEmpty { return found }
+            }
+        }
+        return ""
+    }
+
+    static func isVideoURL(_ url: String) -> Bool {
+        guard url.hasPrefix("http") else { return false }
+        let path = url.substringBefore("?").lowercased()
+        if [".jpg", ".jpeg", ".png", ".webp", ".heic", ".image"].contains(where: { path.hasSuffix($0) }) || path.contains("~tplv") { return false }
+        return ["douyinvod", "aweme/v1/play", "video_id=", "mime_type=video", ".mp4"].contains { url.contains($0) }
     }
 
     /// 实况照片的视频部分：与图片同名加 _live 后缀，App 据此把两者配成一张实况照片存入相册
@@ -236,6 +261,19 @@ struct DouyinParser: VideoParser {
         var d = null;
         if (raw) { try { var root = JSON.parse(raw); d = root.aweme_detail || (root.data && root.data.aweme_detail) || null; } catch (e) {} }
         function firstUrl(n) { if (!n) return ''; var l = n.url_list || n.urlList; return (l && l.length) ? String(l[0] || '') : ''; }
+        // 实况图的视频：字段名各版本不一（video.play_addr / playAddr / bit_rate…），在这张图的数据里找第一个视频地址
+        function isVideoUrl(u) { return /^https?:/.test(u) && /douyinvod|aweme\/v1\/play|video_id=|mime_type=video|\.mp4/.test(u) && !/\.(jpe?g|png|webp|heic|image)/.test(u.split('?')[0]); }
+        function liveVideo(n, depth) {
+          depth = depth || 0;
+          if (n === null || n === undefined || depth > 6) return '';
+          if (typeof n === 'string') return isVideoUrl(n) ? n : '';
+          if (typeof n !== 'object') return '';
+          var keys = Array.isArray(n) ? null : Object.keys(n);
+          if (keys) { keys.sort(function (a, b) { return (b === 'video' ? 1 : 0) - (a === 'video' ? 1 : 0); }); }
+          var list = keys ? keys.map(function (k) { return n[k]; }) : n;
+          for (var i = 0; i < list.length; i++) { var r = liveVideo(list[i], depth + 1); if (r) return r; }
+          return '';
+        }
         var v = (d && d.video) || null, video = '';
         if (v) {
           video = firstUrl(v.play_addr) || firstUrl(v.playAddr) || firstUrl(v.play_addr_h264);
@@ -246,8 +284,7 @@ struct DouyinParser: VideoParser {
         var src = (d && (d.images || (d.image_post_info && d.image_post_info.images))) || null;
         if (src) { for (var j = 0; j < src.length; j++) { var it = src[j]; var u = firstUrl(it) || firstUrl(it.display_image) || firstUrl(it.owner_watermark_image); if (u) {
           images.push(u);
-          var lv = it.video ? (firstUrl(it.video.play_addr) || firstUrl(it.video.playAddr) || firstUrl(it.video.play_addr_h264)) : '';
-          lives.push(lv.replace('/playwm/', '/play/'));
+          lives.push(liveVideo(it).replace('/playwm/', '/play/'));
         } } }
         var domImages = [];
         var all = document.querySelectorAll('img');
