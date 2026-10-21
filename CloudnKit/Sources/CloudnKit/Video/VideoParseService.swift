@@ -76,9 +76,11 @@ public final class VideoParseService: Sendable {
         var cookie = ""
         if let kind = resolved.platform.accountKind { cookie = await credentials.cookie(for: kind) ?? "" }
         let result = try await parser.parse(resolved, cookie: cookie)
+        // 只给了一个多清晰度 m3u8 的，拆成可挑选的清晰度
+        let medias = await HLSVariants.expand(result.medias.map { $0.withSecureURLs() })
         return VideoParseResult(platform: result.platform, title: result.title, author: result.author, avatar: result.avatar,
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
-                                url: result.url, medias: result.medias.map { $0.withSecureURLs() }, notice: result.notice,
+                                url: result.url, medias: medias, notice: result.notice,
                                 entries: result.entries, subtitles: result.subtitles)
     }
 

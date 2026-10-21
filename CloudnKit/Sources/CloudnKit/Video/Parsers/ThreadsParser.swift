@@ -30,6 +30,17 @@ struct ThreadsParser: VideoParser {
     struct Media: Equatable {
         let kind: MediaKind
         let url: String
+        var quality: String = ""
+        /// 同一视频的其余清晰度（video_versions 里第一条之外的，从高到低）
+        var alternatives: [OverseasVariants.Option] = []
+
+        /// video_versions → 视频（第一条为默认）；没有可用链接时为 nil
+        static func video(_ versions: [JSON]) -> Media? {
+            guard !versions.isEmpty, !versions[0]["url"].string.isEmpty else { return nil }
+            let options = OverseasVariants.metaVideoVersions(versions)
+            guard let first = options.first else { return nil }
+            return Media(kind: .video, url: first.url, quality: first.quality, alternatives: Array(options.dropFirst()))
+        }
     }
 
     /// 登录态：带 Cookie 打开首页（不跟随跳转），被送回登录页即失效；Threads 没有轻量的「当前用户」接口，
@@ -100,8 +111,13 @@ struct ThreadsParser: VideoParser {
         var medias: [VideoMedia] = []
         for (i, m) in list.enumerated() {
             let ext = m.kind == .video ? "mp4" : "jpg"
-            let name = single ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
-            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: name, headers: headers))
+            let stem = single ? base : "\(base)_\(i + 1)"
+            if m.kind == .video {
+                let options = [OverseasVariants.Option(url: m.url, quality: m.quality)] + m.alternatives
+                medias += OverseasVariants.medias(options, stem: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
+            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: "\(stem).\(ext)", headers: headers))
         }
         let cover = post["image_versions2"]["candidates"][0]["url"].string
         let url = username.isEmpty ? link.url : "https://www.threads.com/@\(username)/post/\(code)"
@@ -145,14 +161,12 @@ struct ThreadsParser: VideoParser {
             let url = post["image_versions2"]["candidates"][0]["url"].string
             return url.isEmpty ? [] : [Media(kind: .image, url: url)]
         case 2:
-            let url = post["video_versions"][0]["url"].string
-            return url.isEmpty ? [] : [Media(kind: .video, url: url)]
+            return Media.video(post["video_versions"].array).map { [$0] } ?? []
         case 8:
             var out: [Media] = []
             for m in post["carousel_media"].array {
-                let video = m["video_versions"][0]["url"].string
-                if !video.isEmpty {
-                    out.append(Media(kind: .video, url: video))
+                if let video = Media.video(m["video_versions"].array) {
+                    out.append(video)
                     continue
                 }
                 let image = m["image_versions2"]["candidates"][0]["url"].string

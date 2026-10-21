@@ -17,6 +17,17 @@ struct InstagramParser: VideoParser {
     struct Media: Equatable {
         let kind: MediaKind
         let url: String
+        var quality: String = ""
+        /// 同一视频的其余清晰度（video_versions 里第一条之外的，从高到低）
+        var alternatives: [OverseasVariants.Option] = []
+
+        /// video_versions → 视频（第一条为默认）；没有可用链接时为 nil
+        static func video(_ versions: [JSON]) -> Media? {
+            guard !versions.isEmpty, !versions[0]["url"].string.isEmpty else { return nil }
+            let options = OverseasVariants.metaVideoVersions(versions)
+            guard let first = options.first else { return nil }
+            return Media(kind: .video, url: first.url, quality: first.quality, alternatives: Array(options.dropFirst()))
+        }
     }
 
     struct Post {
@@ -123,7 +134,7 @@ struct InstagramParser: VideoParser {
         return h
     }
 
-    private func build(_ link: DetectedVideoLink, code: String, post: Post) -> VideoParseResult {
+    func build(_ link: DetectedVideoLink, code: String, post: Post) -> VideoParseResult {
         let headers = ["User-Agent": Self.userAgent, "Referer": "https://www.instagram.com/"]
         let title = post.title.isEmpty ? String(post.caption.prefix(40)) : post.title
         let base = FileNames.base(title, fallback: "instagram_\(code)")
@@ -131,8 +142,13 @@ struct InstagramParser: VideoParser {
         var medias: [VideoMedia] = []
         for (i, m) in post.medias.enumerated() {
             let ext = m.kind == .video ? "mp4" : "jpg"
-            let name = single ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
-            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: name, headers: headers))
+            let stem = single ? base : "\(base)_\(i + 1)"
+            if m.kind == .video {
+                let options = [OverseasVariants.Option(url: m.url, quality: m.quality)] + m.alternatives
+                medias += OverseasVariants.medias(options, stem: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
+            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: "\(stem).\(ext)", headers: headers))
         }
         let cover = post.medias.first(where: { $0.kind == .image })?.url ?? ""
         return VideoParseResult(platform: platform, title: title.isEmpty ? "Instagram \(code)" : title, author: post.author,
@@ -244,8 +260,7 @@ struct InstagramParser: VideoParser {
     }
 
     private static func v1Media(_ item: JSON) -> Media? {
-        let video = item["video_versions"][0]["url"].string
-        if item["media_type"].int == 2 && !video.isEmpty { return Media(kind: .video, url: video) }
+        if item["media_type"].int == 2, let video = Media.video(item["video_versions"].array) { return video }
         let image = item["image_versions2"]["candidates"][0]["url"].string
         return image.isEmpty ? nil : Media(kind: .image, url: image)
     }

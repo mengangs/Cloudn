@@ -35,7 +35,7 @@ final class OverseasBatch2bTests: XCTestCase {
          "video":{"title":"T","owner":{"name":"Alice"},"thumbs":{"640":"https://i/640.jpg","1280":"https://i/1280.jpg","base":"https://i/base"}}}
         """#)
         XCTAssertNoThrow(try VimeoParser.checkConfig(config))
-        XCTAssertEqual(VimeoParser.bestStream(config), VimeoParser.Stream(url: "https://vod/1080.mp4", isHLS: false, quality: "1080p"))
+        XCTAssertEqual(VimeoParser.bestStream(config), VimeoParser.Stream(url: "https://vod/1080.mp4", isHLS: false, quality: "1080P"))
         XCTAssertEqual(VimeoParser.thumbnail(config["video"]), "https://i/1280.jpg")
     }
 
@@ -84,7 +84,7 @@ final class OverseasBatch2bTests: XCTestCase {
 
         let mp4Only = json(#"{"qualities":{"380":[{"type":"video/mp4","url":"https://v/H264-512x384/a.mp4"}],"720":[{"type":"video/mp4","url":"https://v/H264-1280x720/b.mp4"}]}}"#)
         XCTAssertEqual(DailymotionParser.bestStream(mp4Only)?.url, "https://v/H264-1280x720/b.mp4")
-        XCTAssertEqual(DailymotionParser.bestStream(mp4Only)?.quality, "720p")
+        XCTAssertEqual(DailymotionParser.bestStream(mp4Only)?.quality, "720P")
 
         let geo = json(#"{"error":{"code":"DM007","title":"Video geo-restricted by the owner."}}"#)
         XCTAssertThrowsError(try DailymotionParser.checkError(geo)) { error in
@@ -107,7 +107,7 @@ final class OverseasBatch2bTests: XCTestCase {
         """#)
         let stream = TwitchParser.bestClipStream(clip)
         XCTAssertEqual(stream?.url, "https://production.assets.clips.twitchcdn.net/1080.mp4?sig=sig123&token=%7B%22a%22%3A1%7D")
-        XCTAssertEqual(stream?.quality, "1080p60")
+        XCTAssertEqual(stream?.quality, "1080P60")
 
         let legacy = json(#"{"playbackAccessToken":{"signature":"s","value":"v"},"videoQualities":[{"quality":"360","frameRate":30,"sourceURL":"https://c/360.mp4?x=1"}]}"#)
         XCTAssertEqual(TwitchParser.bestClipStream(legacy)?.url, "https://c/360.mp4?x=1&sig=s&token=v")

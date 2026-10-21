@@ -48,16 +48,16 @@ struct IxiguaParser: VideoParser {
     private func parsePC(_ id: String) async throws -> VideoParseResult? {
         let html = try await VideoHTTP.getText("https://www.ixigua.com/\(id)", headers: pageHeaders, what: "西瓜视频作品页")
         guard let video = Self.packerVideo(fromHTML: html) else { return nil }
-        guard let best = Self.bestMedia(video["videoResource"]) else { return nil }
+        let variants = Self.variants(video["videoResource"])
+        guard !variants.isEmpty else { return nil }
         let title = video["title"].string
         let base = FileNames.base(title, fallback: "ixigua_\(id)")
-        let media = VideoMedia(url: best.url, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders,
-                               quality: best.quality, audioURL: best.audioURL)
+        let medias = DomesticVariant.medias(variants, base: base, headers: mediaHeaders)
         let user = video["user_info"]
         let cover = video.string("poster_url", "cover_url")
         return VideoParseResult(platform: platform, title: title, author: user["name"].string, avatar: user["avatar_url"].string,
                                 cover: cover, text: video["video_abstract"].string, timestamp: video["video_publish_time"].int64,
-                                url: "https://www.ixigua.com/\(id)", medias: [media])
+                                url: "https://www.ixigua.com/\(id)", medias: medias)
     }
 
     private func parseShare(_ id: String) async throws -> VideoParseResult {
@@ -104,17 +104,21 @@ struct IxiguaParser: VideoParser {
     private struct Candidate {
         let url: String
         let height: Int
+        let width: Int
         let size: Int64
         let bitrate: Int64
         let definition: String
+        let hevc: Bool
+
+        var shortSide: Int { width > 0 && height > 0 ? min(width, height) : height }
     }
 
     private static func candidate(_ m: JSON) -> Candidate? {
         let url = decodeMainURL(m["main_url"].string)
         guard !url.isEmpty else { return nil }
         let bitrate = m["real_bitrate"].int64 > 0 ? m["real_bitrate"].int64 : m["bitrate"].int64
-        return Candidate(url: url, height: m["vheight"].int, size: m["size"].int64, bitrate: bitrate,
-                         definition: m["definition"].string)
+        return Candidate(url: url, height: m["vheight"].int, width: m["vwidth"].int, size: m["size"].int64, bitrate: bitrate,
+                         definition: m["definition"].string, hevc: DomesticVariant.isHEVC(m["codec_type"].string))
     }
 
     private static func better(_ a: Candidate, than b: Candidate) -> Bool {
@@ -134,6 +138,51 @@ struct IxiguaParser: VideoParser {
 
     /// videoResource 下各档（normal / hdr …）的整段 mp4 与 DASH 分轨里挑最高清
     static func bestMedia(_ resource: JSON) -> (url: String, audioURL: String, quality: String)? {
+        guard let pick = bestPick(collect(resource)) else { return nil }
+        return (url: pick.video.url, audioURL: pick.audio?.url ?? "", quality: Self.quality(pick.video))
+    }
+
+    /// 各档清晰度：默认档同 bestMedia（最高清），其余为各分辨率 / 编码的整段 mp4；
+    /// 整段 mp4 没有的分辨率再补上 DASH 分轨（带最高码率音轨，交给 App 合轨）
+    static func variants(_ resource: JSON) -> [DomesticVariant] {
+        let all = collect(resource)
+        guard let pick = bestPick(all) else { return [] }
+        func variant(_ c: Candidate, audio: String) -> DomesticVariant {
+            DomesticVariant(url: c.url, label: DomesticVariant.label(width: c.width, height: c.height, hevc: c.hevc, fallback: c.definition),
+                            size: audio.isEmpty && c.size > 0 ? c.size : -1, audioURL: audio)
+        }
+        struct Key: Hashable { let side: Int; let hevc: Bool }
+        // 每个（分辨率, 编码）只留一条：整段 mp4 优先，同类取更好的
+        var chosen: [Key: (c: Candidate, dash: Bool)] = [:]
+        for c in all.progressive {
+            let k = Key(side: c.shortSide, hevc: c.hevc)
+            if let old = chosen[k], !better(c, than: old.c) { continue }
+            chosen[k] = (c, false)
+        }
+        if all.audio != nil {
+            for c in all.dashVideos {
+                let k = Key(side: c.shortSide, hevc: c.hevc)
+                if let old = chosen[k], !old.dash || !better(c, than: old.c) { continue }
+                chosen[k] = (c, true)
+            }
+        }
+        let rest = chosen.values.sorted { a, b in
+            if a.c.shortSide != b.c.shortSide { return a.c.shortSide > b.c.shortSide }
+            if a.c.hevc != b.c.hevc { return !a.c.hevc }
+            return a.c.bitrate > b.c.bitrate
+        }
+        let audioURL = all.audio?.url ?? ""
+        let first = variant(pick.video, audio: pick.audio?.url ?? "")
+        return DomesticVariant.normalized([first] + rest.map { variant($0.c, audio: $0.dash ? audioURL : "") })
+    }
+
+    private struct Collected {
+        var progressive: [Candidate] = []
+        var dashVideos: [Candidate] = []
+        var audio: Candidate?
+    }
+
+    private static func collect(_ resource: JSON) -> Collected {
         var progressive: [Candidate] = []
         var dashVideos: [Candidate] = []
         var dashAudios: [Candidate] = []
@@ -151,21 +200,26 @@ struct IxiguaParser: VideoParser {
                 if let c = candidate(a) { dashAudios.append(c) }
             }
         }
-        let bestProgressive = pickBest(progressive)
-        let bestDash = pickBest(dashVideos)
         var bestAudio: Candidate?
         for a in dashAudios {
             if let b = bestAudio, a.bitrate < b.bitrate || (a.bitrate == b.bitrate && a.size <= b.size) { continue }
             bestAudio = a
         }
-        if let dash = bestDash, let audio = bestAudio {
+        return Collected(progressive: progressive, dashVideos: dashVideos, audio: bestAudio)
+    }
+
+    /// 最高清的一档：DASH 分轨比整段 mp4 更高（且有音轨）时取分轨
+    private static func bestPick(_ all: Collected) -> (video: Candidate, audio: Candidate?)? {
+        let bestProgressive = pickBest(all.progressive)
+        let bestDash = pickBest(all.dashVideos)
+        if let dash = bestDash, let audio = all.audio {
             let progressiveHeight = bestProgressive?.height ?? 0
             if bestProgressive == nil || dash.height > progressiveHeight {
-                return (url: dash.url, audioURL: audio.url, quality: Self.quality(dash))
+                return (dash, audio)
             }
         }
         guard let p = bestProgressive else { return nil }
-        return (url: p.url, audioURL: "", quality: Self.quality(p))
+        return (p, nil)
     }
 
     private static func quality(_ c: Candidate) -> String {

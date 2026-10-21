@@ -18,7 +18,8 @@ struct LishipinParser: VideoParser {
         let pageURL = "https://www.pearvideo.com/video_\(id)"
         let html = (try? await VideoHTTP.getText(pageURL, headers: headers, what: "梨视频作品页")) ?? ""
 
-        var videoURL = Self.pageVideoURL(html) ?? ""
+        var variants = Self.pageVariants(html)
+        var videoURL = variants.first?.url ?? ""
         if videoURL.isEmpty {
             let api = "https://www.pearvideo.com/videoStatus.jsp?contId=\(id)&mrd=\(Double.random(in: 0..<1))"
             let apiHeaders = ["User-Agent": VideoHTTP.uaChrome, "Referer": "https://www.pearvideo.com/detail_\(id)"]
@@ -28,12 +29,13 @@ struct LishipinParser: VideoParser {
                 let msg = payload["resultMsg"].string
                 throw VideoParseError(.notFound, "梨视频没有返回播放地址\(msg.isEmpty ? "（作品可能已下线）" : "：\(msg)")")
             }
+            variants = [DomesticVariant(url: videoURL, label: "")]
         }
         let title = Self.title(html)
         let base = FileNames.base(title, fallback: "pearvideo_\(id)")
-        let media = VideoMedia(url: videoURL, kind: .video, fileName: "\(base).mp4", headers: headers)
         return VideoParseResult(platform: platform, title: title.isEmpty ? "梨视频 \(id)" : title, cover: Self.cover(html),
-                                text: Self.summary(html), url: pageURL, medias: [media])
+                                text: Self.summary(html), url: pageURL,
+                                medias: DomesticVariant.medias(variants, base: base, headers: headers))
     }
 
     // MARK: 纯逻辑
@@ -48,6 +50,29 @@ struct LishipinParser: VideoParser {
             best = (rank: rank, url: DomesticHTML.absolute(m[3]))
         }
         return best?.url
+    }
+
+    static let qualityNames = ["src": "原画", "hd": "高清", "sd": "标清", "ld": "流畅",
+                               "hdflv": "高清 FLV", "sdflv": "标清 FLV", "ldflv": "流畅 FLV"]
+
+    /// 页面里的各档：默认档同 pageVideoURL（最高一档），其余为页面里的其它 mp4 清晰度（不列 flv）
+    static func pageVariants(_ html: String) -> [DomesticVariant] {
+        guard let best = pageVideoURL(html) else { return [] }
+        let rx = Rx(#"([a-zA-Z]+)Url\s*=\s*(["'])((?:https?:)?//.+?)\2"#)
+        var found: [(rank: Int, variant: DomesticVariant)] = []
+        var seenKeys = Set<String>()
+        var bestLabel = ""
+        for m in rx.allMatches(in: html) {
+            guard let rank = order.firstIndex(of: m[1]), seenKeys.insert(m[1]).inserted else { continue }
+            let url = DomesticHTML.absolute(m[3])
+            let label = qualityNames[m[1]] ?? m[1]
+            if url == best && bestLabel.isEmpty { bestLabel = label }
+            if m[1].hasSuffix("flv") || url.substringBefore("?").lowercased().hasSuffix(".flv") { continue }
+            found.append((rank: rank, variant: DomesticVariant(url: url, label: label)))
+        }
+        let rest = found.sorted { $0.rank > $1.rank }.map { $0.variant }
+        let list = DomesticVariant.normalized([DomesticVariant(url: best, label: bestLabel)] + rest)
+        return list.count > 1 ? list : [DomesticVariant(url: best, label: "")]
     }
 
     /// videoStatus.jsp：srcUrl 中的 systemTime 段替换为 cont-{id}

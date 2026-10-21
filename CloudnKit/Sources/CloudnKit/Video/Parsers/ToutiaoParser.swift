@@ -51,10 +51,10 @@ struct ToutiaoParser: VideoParser {
         let fileBase = FileNames.base(title, fallback: "toutiao_\(id)")
         let token = data["play_auth_token_v2"].string
         if data["biz_tag"].string != "图文" && !token.isEmpty {
-            let video = try await fetchVideo(token: token)
-            let media = VideoMedia(url: video.url, kind: .video, fileName: "\(fileBase).mp4", headers: mediaHeaders, quality: video.quality)
+            let variants = try await fetchVideo(token: token)
             return VideoParseResult(platform: platform, title: title, author: author, avatar: avatar,
-                                    cover: data["poster_url"].string, url: "https://www.toutiao.com/video/\(id)/", medias: [media])
+                                    cover: data["poster_url"].string, url: "https://www.toutiao.com/video/\(id)/",
+                                    medias: DomesticVariant.medias(variants, base: fileBase, headers: mediaHeaders))
         }
 
         // 文章
@@ -67,9 +67,9 @@ struct ToutiaoParser: VideoParser {
         }
         let tokens = Self.articleVideoTokens(content)
         for (i, t) in tokens.enumerated() {
-            guard let video = try? await fetchVideo(token: t) else { continue }
-            let name = tokens.count == 1 ? "\(fileBase).mp4" : "\(fileBase)_v\(i + 1).mp4"
-            medias.append(VideoMedia(url: video.url, kind: .video, fileName: name, headers: mediaHeaders, quality: video.quality))
+            guard let variants = try? await fetchVideo(token: t) else { continue }
+            let name = tokens.count == 1 ? fileBase : "\(fileBase)_v\(i + 1)"
+            medias += DomesticVariant.medias(variants, base: name, group: "video\(i + 1)", headers: mediaHeaders)
         }
         guard !medias.isEmpty else { throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频") }
         return VideoParseResult(platform: platform, title: title, author: author, avatar: avatar, cover: images.first ?? "",
@@ -88,7 +88,8 @@ struct ToutiaoParser: VideoParser {
         throw VideoParseError(.unsupported, "今日头条分享链接展开失败，请复制完整链接后重试")
     }
 
-    private func fetchVideo(token: String) async throws -> (url: String, quality: String) {
+    /// 视频的各档清晰度（最高清在前）
+    private func fetchVideo(token: String) async throws -> [DomesticVariant] {
         guard let query = Self.playInfoQuery(token: token) else {
             throw VideoParseError(.unknown, "今日头条视频令牌解析失败")
         }
@@ -98,10 +99,11 @@ struct ToutiaoParser: VideoParser {
             let message = error.isObject ? error.string("Message", "message", "ErrorMessage") : error.string
             throw VideoParseError(.unknown, "今日头条视频地址获取失败：\(message.isEmpty ? "未知错误" : message)")
         }
-        guard let best = Self.bestPlayInfo(payload["Result"]["Data"]["PlayInfoList"].array) else {
+        let variants = Self.playVariants(payload["Result"]["Data"]["PlayInfoList"].array)
+        guard !variants.isEmpty else {
             throw VideoParseError(.unknown, "今日头条视频没有可用的播放地址")
         }
-        return best
+        return variants
     }
 
     // MARK: 纯逻辑
@@ -127,6 +129,32 @@ struct ToutiaoParser: VideoParser {
         let definition = best["Definition"].string
         let quality = height > 0 ? "\(height)p" : definition
         return (best["MainPlayUrl"].string, quality)
+    }
+
+    /// PlayInfoList → 各档：默认档同 bestPlayInfo（高度、体积最大），其余按分辨率降序、同分辨率 H.264 在前
+    static func playVariants(_ list: [JSON]) -> [DomesticVariant] {
+        guard let best = bestPlayInfo(list) else { return [] }
+        func variant(_ item: JSON) -> DomesticVariant {
+            DomesticVariant(url: item["MainPlayUrl"].string,
+                            label: DomesticVariant.label(width: item["Width"].int, height: item["Height"].int,
+                                                         hevc: DomesticVariant.isHEVC(item["Codec"].string), fallback: item["Definition"].string),
+                            size: item["Size"].int64)
+        }
+        let usable = list.filter { !$0["MainPlayUrl"].string.isEmpty }
+        let first = usable.first(where: { $0["MainPlayUrl"].string == best.url }).map(variant)
+            ?? DomesticVariant(url: best.url, label: best.quality)
+        var entries: [(item: JSON, side: Int, hevc: Bool)] = []
+        for item in usable where item["Height"].int > 0 && item["FileType"].string.lowercased() != "audio" {
+            let w = item["Width"].int
+            let h = item["Height"].int
+            entries.append((item: item, side: w > 0 ? min(w, h) : h, hevc: DomesticVariant.isHEVC(item["Codec"].string)))
+        }
+        entries.sort { a, b in
+            if a.side != b.side { return a.side > b.side }
+            if a.hevc != b.hevc { return !a.hevc }
+            return a.item["Size"].int64 > b.item["Size"].int64
+        }
+        return DomesticVariant.normalized([first] + entries.map { variant($0.item) })
     }
 
     static func microPostImages(_ thread: JSON) -> [String] {

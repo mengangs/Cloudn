@@ -111,12 +111,22 @@ final class AppModel {
         Notifier.post(title: title, body: body)
     }
 
+    /// 实况照片的另一半还在下载：先不存，等另一半下完时一起存成实况照片
+    private func partnerPending(_ item: DownloadItem) -> Bool {
+        let names = Set(LivePhoto.partnerNames(for: item.request.fileName))
+        guard !names.isEmpty else { return false }
+        return downloads.items.contains {
+            $0.id != item.id && $0.request.folder == item.request.folder && names.contains($0.request.fileName)
+                && $0.status != .completed && $0.status != .failed
+        }
+    }
+
     private func didFinish(_ item: DownloadItem) async {
         notify(title: "下载完成", body: item.displayName)
         guard let url = downloads.engine.fileURL(for: item) else { return }
-        if settings.autoSaveToPhotos, MediaTools.canSaveToPhotos(url) {
+        if settings.autoSaveToPhotos, MediaTools.canSaveToPhotos(url), !partnerPending(item) {
             do {
-                try await MediaTools.saveToPhotos(url)
+                try await MediaTools.saveToPhotosSmart(url)
             } catch {
                 show(error.localizedDescription, error: true)
             }

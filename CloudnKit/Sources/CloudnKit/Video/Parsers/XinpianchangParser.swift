@@ -35,25 +35,25 @@ struct XinpianchangParser: VideoParser {
                 resource = data["resource"]
             }
         }
-        var best = Self.bestResource(resource)
-        if best == nil { best = Self.bestResource(video["content"]) }
-        guard let pick = best else { throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频") }
+        var variants = Self.variants(resource)
+        if variants.isEmpty { variants = Self.variants(video["content"]) }
+        guard !variants.isEmpty else { throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频") }
 
         let title = detail["title"].string.nilIfBlank ?? data["title"].string
         let base = FileNames.base(title, fallback: "xinpianchang_\(id)")
-        let media: VideoMedia
-        if pick.isHLS {
-            var hlsHeaders = mediaHeaders
-            hlsHeaders.removeValue(forKey: "Range")
-            media = VideoMedia(url: pick.url, kind: .video, fileName: "\(base).mp4", isHLS: true, headers: hlsHeaders, quality: pick.quality)
-        } else {
-            media = VideoMedia(url: pick.url, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders, quality: pick.quality)
-        }
+        // m3u8 不能带 Range 头
+        var hlsHeaders = mediaHeaders
+        hlsHeaders.removeValue(forKey: "Range")
+        let medias = DomesticVariant.medias(variants.map { v in
+            var v = v
+            if v.isHLS { v.headers = hlsHeaders }
+            return v
+        }, base: base, headers: mediaHeaders)
         let user = detail["author"]["userinfo"]
         let cover = detail["cover"].string.nilIfBlank ?? data["cover"].string
         let text = detail["content"].string.nilIfBlank ?? data["description"].string
         return VideoParseResult(platform: platform, title: title, author: user["username"].string, avatar: user["avatar"].string,
-                                cover: cover, text: text, url: pageURL, medias: [media])
+                                cover: cover, text: text, url: pageURL, medias: medias)
     }
 
     // MARK: 纯逻辑
@@ -63,6 +63,24 @@ struct XinpianchangParser: VideoParser {
         guard let text = rx.first(in: html), let json = JSON(text: text.trimmed) else { return nil }
         let detail = json["props"]["pageProps"]["detail"]
         return detail.isObject ? detail : nil
+    }
+
+    /// 各档：默认档同 bestResource；整段 mp4 有多档时其余按高度、文件大小降序列出
+    static func variants(_ resource: JSON) -> [DomesticVariant] {
+        guard let best = bestResource(resource) else { return [] }
+        if best.isHLS { return [DomesticVariant(url: best.url, label: best.quality, isHLS: true)] }
+        func variant(_ p: JSON) -> DomesticVariant {
+            DomesticVariant(url: p["url"].string, label: DomesticVariant.label(width: p["width"].int, height: p["height"].int, fallback: p["profile"].string),
+                            size: p["filesize"].int64)
+        }
+        let list = resource["progressive"].array.filter { !$0["url"].string.isEmpty }
+        let first = list.first(where: { $0["url"].string == best.url }).map(variant) ?? DomesticVariant(url: best.url, label: best.quality)
+        let rest = list.sorted { a, b in
+            let ha = a["height"].int
+            let hb = b["height"].int
+            return ha != hb ? ha > hb : a["filesize"].int64 > b["filesize"].int64
+        }
+        return DomesticVariant.normalized([first] + rest.map(variant))
     }
 
     /// progressive 取最高（高度、文件大小），没有则用 hls

@@ -10,6 +10,10 @@ struct WeiboMediaRef: Equatable, Sendable {
     let quality: String
     /// 实况照片的视频部分：与前一张图同号
     var isLive: Bool = false
+    /// 同一视频的其余清晰度（本条是默认的最高一档），换算时与本条合成一个清晰度组
+    var variants: [DomesticVariant] = []
+    /// 字节数；未知为 -1
+    var size: Int64 = -1
 }
 
 /// 微博：status（手机站 JSON，失败或无媒体时用 weibo.com/ajax 兜底）/ fid（视频组件接口）/ tv（mid → id 后按 status）
@@ -129,12 +133,7 @@ struct WeiboParser: VideoParser {
     static func mobileMedias(_ data: JSON) -> [WeiboMediaRef] {
         var refs: [WeiboMediaRef] = []
         let pageInfo = data["page_info"]
-        let urls = pageInfo["urls"]
-        let candidates = [urls["mp4_1080p_mp4"], urls["mp4_720p_mp4"], urls["mp4_hd_mp4"], urls["mp4_ld_mp4"]].map { $0.string }
-        let video = candidates.first(where: { !$0.isEmpty }) ?? pageInfo["media_info"]["stream_url_hd"].string
-        if !video.isEmpty {
-            refs.append(WeiboMediaRef(url: https(video), kind: .video, ext: "mp4", quality: ""))
-        }
+        if let video = mobileVideoRef(pageInfo) { refs.append(video) }
         for pic in data["pics"].array {
             let still = https(pic["large"]["url"].string.isEmpty ? pic["url"].string : pic["large"]["url"].string)
             let type = pic["type"].string.lowercased()
@@ -153,6 +152,25 @@ struct WeiboParser: VideoParser {
         return refs
     }
 
+    /// 手机站 page_info.urls：1080P → 720P → 高清 → 标清，最高的一档为默认，其余作为可选清晰度
+    static let mobileQualityKeys = [("mp4_1080p_mp4", "1080P"), ("mp4_720p_mp4", "720P"), ("mp4_hd_mp4", "高清"), ("mp4_ld_mp4", "标清")]
+
+    static func mobileVideoRef(_ pageInfo: JSON) -> WeiboMediaRef? {
+        let urls = pageInfo["urls"]
+        var list: [DomesticVariant] = []
+        for (key, label) in mobileQualityKeys {
+            let url = urls[key].string
+            if !url.isEmpty { list.append(DomesticVariant(url: https(url), label: label)) }
+        }
+        list = DomesticVariant.normalized(list)
+        guard let first = list.first else {
+            let stream = pageInfo["media_info"]["stream_url_hd"].string
+            return stream.isEmpty ? nil : WeiboMediaRef(url: https(stream), kind: .video, ext: "mp4", quality: "")
+        }
+        let rest = Array(list.dropFirst())
+        return WeiboMediaRef(url: first.url, kind: .video, ext: "mp4", quality: rest.isEmpty ? "" : first.label, variants: rest)
+    }
+
     /// weibo.com/ajax status：pic_infos（按 pic_ids 排序）→ 混排 mix_media_info → page_info 视频
     static func ajaxMedias(_ data: JSON) -> [WeiboMediaRef] {
         let infos = data["pic_infos"]
@@ -161,9 +179,8 @@ struct WeiboParser: VideoParser {
         var refs: [WeiboMediaRef] = []
         for id in ids { refs += picMedias(infos[id]) }
         if refs.isEmpty { refs = mixMedias(data["mix_media_info"]) }
-        if refs.isEmpty && data["page_info"]["object_type"].string == "video" {
-            let video = pageVideoURL(data["page_info"])
-            if !video.isEmpty { refs.append(WeiboMediaRef(url: video, kind: .video, ext: "mp4", quality: "")) }
+        if refs.isEmpty && data["page_info"]["object_type"].string == "video", let video = pageVideoRef(data["page_info"]) {
+            refs.append(video)
         }
         return refs
     }
@@ -175,8 +192,7 @@ struct WeiboParser: VideoParser {
             case "pic":
                 refs += picMedias(item["data"])
             case "video":
-                let video = pageVideoURL(item["data"])
-                if !video.isEmpty { refs.append(WeiboMediaRef(url: video, kind: .video, ext: "mp4", quality: "")) }
+                if let video = pageVideoRef(item["data"]) { refs.append(video) }
             default:
                 continue
             }
@@ -212,40 +228,82 @@ struct WeiboParser: VideoParser {
 
     /// 视频 page_info：playback_list 里分辨率最高的一档，退回 mp4_* 直链
     static func pageVideoURL(_ pageInfo: JSON) -> String {
+        pageVideoRef(pageInfo)?.url ?? ""
+    }
+
+    /// 视频 page_info → 默认档（playback_list 里分辨率最高的一档，退回 mp4_* 直链）+ 其余可选清晰度
+    static func pageVideoRef(_ pageInfo: JSON) -> WeiboMediaRef? {
         let mediaInfo = pageInfo["media_info"]
-        var bestURL = ""
-        var bestPixels = -1
-        for playback in mediaInfo["playback_list"].array {
+        struct Entry {
+            let variant: DomesticVariant
+            let pixels: Int
+            let hevc: Bool
+            let order: Int
+            let isVideoFile: Bool
+        }
+        var entries: [Entry] = []
+        for (i, playback) in mediaInfo["playback_list"].array.enumerated() {
             let info = playback["play_info"]
             let url = info["url"].string
             guard !url.isEmpty else { continue }
-            let pixels = info["width"].int * info["height"].int
-            if pixels > bestPixels {
-                bestPixels = pixels
-                bestURL = url
+            let meta = playback["meta"]
+            let w = info["width"].int
+            let h = info["height"].int
+            let hevc = DomesticVariant.isHEVC(info["video_codecs"].string + " " + meta["video_codecs"].string)
+            let label = DomesticVariant.label(width: w, height: h, hevc: hevc,
+                                              fallback: meta.string("quality_label", "quality_desc", "label"))
+            let isVideoFile = w * h > 0 && !info["mime"].string.lowercased().hasPrefix("audio") && !url.contains(".m3u8")
+            entries.append(Entry(variant: DomesticVariant(url: https(url), label: label, size: info["size"].int64),
+                                 pixels: w * h, hevc: hevc, order: i, isVideoFile: isVideoFile))
+        }
+        // 默认档与以前一致：分辨率最大的第一条
+        var best: Entry?
+        for e in entries where e.pixels > (best?.pixels ?? -1) { best = e }
+        if let best {
+            let rest = entries.filter { $0.order != best.order && $0.isVideoFile }.sorted { a, b in
+                if a.pixels != b.pixels { return a.pixels > b.pixels }
+                if a.hevc != b.hevc { return !a.hevc }
+                return a.order < b.order
             }
+            let list = DomesticVariant.normalized([best.variant] + rest.map(\.variant))
+            let alts = Array(list.dropFirst())
+            return WeiboMediaRef(url: best.variant.url, kind: .video, ext: "mp4", quality: alts.isEmpty ? "" : best.variant.label,
+                                 variants: alts, size: best.variant.size)
         }
-        if bestURL.isEmpty {
-            bestURL = mediaInfo.string("mp4_720p_mp4", "mp4_hd_url", "mp4_sd_url", "stream_url_hd", "stream_url")
+        let fallback = mediaInfo.string("mp4_720p_mp4", "mp4_hd_url", "mp4_sd_url", "stream_url_hd", "stream_url")
+        guard !fallback.isEmpty else { return nil }
+        let keyed = [("mp4_720p_mp4", "720P"), ("mp4_hd_url", "高清"), ("mp4_sd_url", "标清")]
+        let others = keyed.compactMap { pair -> DomesticVariant? in
+            let u = mediaInfo[pair.0].string
+            return u.isEmpty ? nil : DomesticVariant(url: https(u), label: pair.1)
         }
-        return https(bestURL)
+        let defaultLabel = keyed.first(where: { mediaInfo[$0.0].string == fallback })?.1 ?? ""
+        let list = DomesticVariant.normalized([DomesticVariant(url: https(fallback), label: defaultLabel)] + others)
+        let alts = Array(list.dropFirst())
+        return WeiboMediaRef(url: https(fallback), kind: .video, ext: "mp4", quality: alts.isEmpty ? "" : defaultLabel, variants: alts)
     }
 
-    /// 中间形态 → VideoMedia：只有一个媒体时不编号；实况视频与前一张图同号（_live 后缀）
+    /// 中间形态 → VideoMedia：只有一个媒体时不编号；实况视频与前一张图同号（_live 后缀）；
+    /// 带其余清晰度的视频展开成一个清晰度组（默认档在前，其余文件名加清晰度后缀）
     static func medias(_ refs: [WeiboMediaRef], base: String, headers: [String: String]) -> [VideoMedia] {
         var out: [VideoMedia] = []
         var index = 0
-        for ref in refs {
-            let name: String
+        for (position, ref) in refs.enumerated() {
+            let stem: String
             if refs.count == 1 {
-                name = "\(base).\(ref.ext)"
+                stem = base
             } else if ref.isLive && index > 0 {
-                name = "\(base)_\(index)_live.\(ref.ext)"
+                stem = "\(base)_\(index)_live"
             } else {
                 index += 1
-                name = "\(base)_\(index).\(ref.ext)"
+                stem = "\(base)_\(index)"
             }
-            out.append(VideoMedia(url: ref.url, kind: ref.kind, fileName: name, headers: headers, quality: ref.quality))
+            if ref.variants.isEmpty {
+                out.append(VideoMedia(url: ref.url, kind: ref.kind, fileName: "\(stem).\(ref.ext)", headers: headers, quality: ref.quality))
+            } else {
+                let list = [DomesticVariant(url: ref.url, label: ref.quality, size: ref.size)] + ref.variants
+                out += DomesticVariant.medias(list, base: stem, ext: ref.ext, group: "video\(position + 1)", kind: ref.kind, headers: headers)
+            }
         }
         return out
     }
@@ -266,17 +324,34 @@ struct WeiboParser: VideoParser {
         guard data.isObject else { throw VideoParseError(.notFound, "微博视频数据为空（作品可能已删除）") }
         let title = data["title"].string
         let base = FileNames.base(title, fallback: "weibo_\(link.id)")
-        let urls = data["urls"]
-        // urls 是「清晰度 → 直链」，取数字最大的一档
-        let best = urls.keys.max(by: { Self.resolutionRank($0) < Self.resolutionRank($1) }).map { urls[$0].string } ?? ""
-        let videoURL = best.isEmpty ? data["stream_url"].string : best
         var medias: [VideoMedia] = []
-        if !videoURL.isEmpty {
-            medias.append(VideoMedia(url: Self.https(videoURL), kind: .video, fileName: "\(base).mp4", headers: mediaHeaders(cookie)))
+        let variants = Self.fidVariants(data)
+        if !variants.isEmpty {
+            medias = DomesticVariant.medias(variants, base: base, headers: mediaHeaders(cookie))
         }
         return VideoParseResult(platform: platform, title: title, author: data["reward"]["user"]["name"].string, avatar: data["reward"]["user"]["profile_image_url"].string,
                                 cover: Self.https(data["cover_image"].string), text: Self.clean(data["text"].string),
                                 url: link.url, medias: medias)
+    }
+
+    /// 视频组件接口：urls 是「清晰度 → 直链」，数字最大的一档为默认（与以前一致），其余按清晰度降序；没有时用 stream_url
+    static func fidVariants(_ data: JSON) -> [DomesticVariant] {
+        let urls = data["urls"]
+        let keys = urls.keys.filter { !urls[$0].string.isEmpty }
+        guard let bestKey = keys.max(by: { resolutionRank($0) < resolutionRank($1) }) else {
+            let stream = data["stream_url"].string
+            return stream.isEmpty ? [] : [DomesticVariant(url: https(stream), label: "")]
+        }
+        func label(_ key: String) -> String {
+            let rank = resolutionRank(key)
+            return key.unicodeScalars.contains(where: { $0.value > 127 }) || rank == 0 ? key : "\(rank)P"
+        }
+        let rest = keys.filter { $0 != bestKey }.sorted { a, b in
+            let ra = resolutionRank(a)
+            let rb = resolutionRank(b)
+            return ra != rb ? ra > rb : a < b
+        }
+        return DomesticVariant.normalized(([bestKey] + rest).map { DomesticVariant(url: https(urls[$0].string), label: label($0)) })
     }
 
     static func resolutionRank(_ key: String) -> Int {

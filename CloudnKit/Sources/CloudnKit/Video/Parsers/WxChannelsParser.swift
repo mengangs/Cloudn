@@ -161,6 +161,30 @@ struct WxChannelsParser: VideoParser {
         return nil
     }
 
+    /// 视频的各档：默认档同 videoURL（H.264 优先），同时给了 H.265 时作为另一档（同画质、体积更小）
+    static func videoVariants(_ feedInfo: JSON) -> [DomesticVariant] {
+        guard let picked = videoURL(feedInfo) else { return [] }
+        func size(_ info: JSON) -> Int64 {
+            let n = info["fileSize"].int64
+            return n > 0 ? n : info["file_size"].int64
+        }
+        let h264 = feedInfo["h264VideoInfo"]
+        let h265 = feedInfo["h265VideoInfo"]
+        let first: DomesticVariant
+        switch picked.quality {
+        case "H.264": first = DomesticVariant(url: picked.url, label: picked.quality, size: size(h264))
+        case "H.265": first = DomesticVariant(url: picked.url, label: picked.quality, size: size(h265))
+        default: first = DomesticVariant(url: picked.url, label: picked.quality)
+        }
+        var list = [first]
+        let alt = h265["videoUrl"].string
+        if picked.quality != "H.265" && !alt.isEmpty && alt != picked.url {
+            if list[0].label.isEmpty { list[0].label = "默认" }
+            list.append(DomesticVariant(url: alt, label: "H.265", size: size(h265)))
+        }
+        return DomesticVariant.normalized(list)
+    }
+
     /// 图片动态的原图（picInfo[].url）
     static func imageURLs(_ feedInfo: JSON) -> [String] {
         feedInfo["picInfo"].array.map { $0["url"].string.trimmed }.filter { !$0.isEmpty }
@@ -192,8 +216,9 @@ struct WxChannelsParser: VideoParser {
 
         var medias: [VideoMedia] = []
         var notice = ""
-        if let video = videoURL(info) {
-            medias.append(VideoMedia(url: video.url, kind: .video, fileName: "\(base).mp4", headers: headers, quality: video.quality))
+        let variants = videoVariants(info)
+        if !variants.isEmpty {
+            medias += DomesticVariant.medias(variants, base: base, headers: headers)
             if !decodeKey(info).isEmpty {
                 notice = "这条视频号视频返回了加密密钥，下载的文件可能需要解密后才能播放"
             }

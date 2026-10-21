@@ -127,7 +127,8 @@ final class OverseasBatch2aTests: XCTestCase {
           "V_EXP4":{"url":"https://v1.pinimg.com/videos/exp4/a.mp4","width":360,"height":640}}},
          "images":{"orig":{"url":"https://i.pinimg.com/originals/a.jpg","width":720}}}
         """#)!
-        XCTAssertEqual(PinterestParser.items(video), [PinterestParser.Item(kind: .video, url: "https://v1.pinimg.com/videos/720p/a.mp4", quality: "720p")])
+        XCTAssertEqual(PinterestParser.items(video), [PinterestParser.Item(kind: .video, url: "https://v1.pinimg.com/videos/720p/a.mp4", quality: "720P",
+                                                                           alternatives: [OverseasVariants.Option(url: "https://v1.pinimg.com/videos/exp4/a.mp4", quality: "360P")])])
         XCTAssertFalse(PinterestParser.isExternalEmbed(video))
 
         let hlsOnly = JSON(text: #"{"V_HLSV3_MOBILE":{"url":"https://v1.pinimg.com/videos/hls/b.m3u8"}}"#)!

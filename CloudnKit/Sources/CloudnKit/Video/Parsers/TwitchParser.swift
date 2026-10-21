@@ -57,20 +57,22 @@ struct TwitchParser: VideoParser {
                 throw VideoParseError(.notFound, "Twitch 剪辑不存在或已删除")
             }
         }
-        guard let stream = Self.bestClipStream(clip) else {
+        let streams = Self.clipStreams(clip)
+        guard !streams.isEmpty else {
             throw VideoParseError(.unsupported, "这个 Twitch 剪辑没有可下载的播放地址")
         }
 
         let title = clip["title"].string
         let base = FileNames.base(title, fallback: "twitch_clip_\(slug)")
-        let media = VideoMedia(url: stream.url, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders, quality: stream.quality)
+        let medias = OverseasVariants.medias(streams.map { OverseasVariants.Option(url: $0.url, quality: $0.quality) },
+                                             stem: base, group: "video", headers: mediaHeaders)
         let asset = clip["assets"][0]
         let cover = asset["thumbnailURL"].string.nilIfBlank ?? clip["thumbnailURL"].string
         let broadcaster = clip["broadcaster"]
         return VideoParseResult(platform: platform, title: title, author: broadcaster.string("displayName", "login"),
                                 avatar: broadcaster["profileImageURL"].string, cover: cover,
                                 timestamp: Self.parseISO8601(clip["createdAt"].string),
-                                url: "https://clips.twitch.tv/\(slug)", medias: [media])
+                                url: "https://clips.twitch.tv/\(slug)", medias: medias)
     }
 
     // MARK: 回放
@@ -149,28 +151,36 @@ struct TwitchParser: VideoParser {
 
     /// 剪辑：assets[0]（横屏原始比例）或旧结构的 videoQualities 里取最高清，拼上 sig/token
     static func bestClipStream(_ clip: JSON) -> ClipStream? {
+        clipStreams(clip).first
+    }
+
+    /// 剪辑的各档清晰度：按 (分辨率, 帧率) 从高到低（同值保持原顺序），每档都拼上 sig/token
+    static func clipStreams(_ clip: JSON) -> [ClipStream] {
         var qualities = clip["assets"][0]["videoQualities"].array
         if qualities.isEmpty { qualities = clip["videoQualities"].array }
-        var best: JSON?
-        for q in qualities where !q["sourceURL"].string.isEmpty {
-            guard let current = best else { best = q; continue }
-            let a = Int(q["quality"].string) ?? 0
-            let b = Int(current["quality"].string) ?? 0
-            if a > b || (a == b && q["frameRate"].double > current["frameRate"].double) { best = q }
+        var list: [(index: Int, height: Int, fps: Double, item: JSON)] = []
+        for (i, q) in qualities.enumerated() where !q["sourceURL"].string.isEmpty {
+            list.append((i, Int(q["quality"].string) ?? 0, q["frameRate"].double, q))
         }
-        guard let best else { return nil }
+        list.sort {
+            if $0.height != $1.height { return $0.height > $1.height }
+            if $0.fps != $1.fps { return $0.fps > $1.fps }
+            return $0.index < $1.index
+        }
         let token = clip["playbackAccessToken"]
         let signature = token["signature"].string
         let value = token["value"].string
-        var url = best["sourceURL"].string
-        if !signature.isEmpty && !value.isEmpty {
-            let sep = url.contains("?") ? "&" : "?"
-            url += "\(sep)sig=\(signature.urlQueryEncoded)&token=\(value.urlQueryEncoded)"
+        return list.map { entry in
+            var url = entry.item["sourceURL"].string
+            if !signature.isEmpty && !value.isEmpty {
+                let sep = url.contains("?") ? "&" : "?"
+                url += "\(sep)sig=\(signature.urlQueryEncoded)&token=\(value.urlQueryEncoded)"
+            }
+            let quality = entry.item["quality"].string
+            let fps = Int(entry.fps.rounded())
+            let label = Int(quality) == nil ? quality : (fps > 30 ? "\(quality)P\(fps)" : "\(quality)P")
+            return ClipStream(url: url, quality: label)
         }
-        let quality = best["quality"].string
-        let fps = Int(best["frameRate"].double.rounded())
-        let label = quality.isEmpty ? "" : (fps > 30 ? "\(quality)p\(fps)" : "\(quality)p")
-        return ClipStream(url: url, quality: label)
     }
 
     static func usherURL(id: String, token: String, signature: String, random: Int) -> String {

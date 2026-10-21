@@ -33,7 +33,10 @@ final class OverseasParserTests: XCTestCase {
         XCTAssertEqual(tweet.timestamp, 1539202764)
         XCTAssertEqual(tweet.medias, [
             TwitterParser.Media(kind: .image, url: "https://pbs.twimg.com/media/P1.png?name=orig", quality: "原图"),
-            TwitterParser.Media(kind: .video, url: "https://video.twimg.com/vid/avc1/1280x720/b.mp4", quality: "1280x720"),
+            TwitterParser.Media(kind: .video, url: "https://video.twimg.com/vid/avc1/1280x720/b.mp4", quality: "720P", alternatives: [
+                OverseasVariants.Option(url: "https://video.twimg.com/vid/avc1/640x360/c.mp4", quality: "360P"),
+                OverseasVariants.Option(url: "https://video.twimg.com/vid/avc1/480x270/a.mp4", quality: "270P")
+            ]),
             TwitterParser.Media(kind: .video, url: "https://video.twimg.com/tweet_video/g.mp4", quality: "GIF")
         ])
         XCTAssertEqual(TwitterParser.imageExtension("https://pbs.twimg.com/media/P1.png?name=orig"), "png")
@@ -97,7 +100,8 @@ final class OverseasParserTests: XCTestCase {
         let scope = try XCTUnwrap(TikTokParser.universalData(html))
         let item = try TikTokParser.extractItem(scope)
         XCTAssertEqual(item["desc"].string, "dance")
-        XCTAssertEqual(try TikTokParser.medias(item), [TikTokParser.Media(kind: .video, url: "https://v19.tiktokcdn.com/hi", quality: "1080P")])
+        XCTAssertEqual(try TikTokParser.medias(item), [TikTokParser.Media(kind: .video, url: "https://v19.tiktokcdn.com/hi", quality: "1080P", size: 300,
+                                                                          alternatives: [OverseasVariants.Option(url: "https://www.tiktok.com/aweme/v1/play/?lo", quality: "540P", size: 100)])])
         XCTAssertEqual(TikTokParser.pickCover(item["video"]), "https://p/cover.jpg")
     }
 

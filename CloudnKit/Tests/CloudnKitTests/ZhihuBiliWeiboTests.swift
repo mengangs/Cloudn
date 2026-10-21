@@ -175,8 +175,12 @@ final class ZhihuBiliWeiboTests: XCTestCase {
     func testWeiboMobileVideoUnchanged() {
         let data = JSON(text: #"{"page_info":{"urls":{"mp4_720p_mp4":"http://f.video.weibocdn.com/720.mp4","mp4_hd_mp4":"https://hd.mp4"}}}"#)!
         let refs = WeiboParser.mobileMedias(data)
-        XCTAssertEqual(refs, [WeiboMediaRef(url: "http://f.video.weibocdn.com/720.mp4", kind: .video, ext: "mp4", quality: "")])
-        XCTAssertEqual(WeiboParser.medias(refs, base: "v", headers: [:]).first?.fileName, "v.mp4")
+        // 默认档不变（720P），其余清晰度挂在 variants 上
+        XCTAssertEqual(refs, [WeiboMediaRef(url: "http://f.video.weibocdn.com/720.mp4", kind: .video, ext: "mp4", quality: "720P",
+                                            variants: [DomesticVariant(url: "https://hd.mp4", label: "高清")])])
+        let medias = WeiboParser.medias(refs, base: "v", headers: [:])
+        XCTAssertEqual(medias.map { $0.fileName }, ["v.mp4", "v_高清.mp4"])
+        XCTAssertEqual(medias.first?.url, "http://f.video.weibocdn.com/720.mp4")
     }
 
     func testWeiboAjaxPicInfos() {

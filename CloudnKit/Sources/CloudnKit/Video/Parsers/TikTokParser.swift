@@ -19,6 +19,9 @@ struct TikTokParser: VideoParser {
         let kind: MediaKind
         let url: String
         let quality: String
+        var size: Int64 = -1
+        /// 同一视频的其余清晰度（从高到低，不含 url 本身）
+        var alternatives: [OverseasVariants.Option] = []
     }
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
@@ -72,7 +75,7 @@ struct TikTokParser: VideoParser {
         return (html, jar)
     }
 
-    private func build(_ link: DetectedVideoLink, id: String, item: JSON, list: [Media], cookie: String) -> VideoParseResult {
+    func build(_ link: DetectedVideoLink, id: String, item: JSON, list: [Media], cookie: String) -> VideoParseResult {
         var headers = ["User-Agent": VideoHTTP.uaChrome, "Referer": "https://www.tiktok.com/"]
         if !cookie.isEmpty { headers["Cookie"] = cookie }
         let desc = item["desc"].string
@@ -81,8 +84,13 @@ struct TikTokParser: VideoParser {
         var medias: [VideoMedia] = []
         for (i, m) in list.enumerated() {
             let ext = m.kind == .video ? "mp4" : "jpg"
-            let name = single ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
-            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: name, headers: headers, quality: m.quality))
+            let stem = single ? base : "\(base)_\(i + 1)"
+            if m.kind == .video {
+                let options = [OverseasVariants.Option(url: m.url, quality: m.quality, size: m.size)] + m.alternatives
+                medias += OverseasVariants.medias(options, stem: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
+            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: "\(stem).\(ext)", headers: headers, quality: m.quality))
         }
         let author = item["author"]
         let unique = author["uniqueId"].string
@@ -190,36 +198,47 @@ struct TikTokParser: VideoParser {
     }
 
     static func bestVideo(_ video: JSON) -> Media? {
-        var best: Media?
-        var bestKey: (Int, Int, Int) = (-1, -1, -1)
-        func consider(_ url: String?, _ w: Int, _ h: Int, _ rate: Int, _ size: Int) {
-            guard let url else { return }
-            let key = (w * h, rate, size)
-            if best == nil || key > bestKey {
-                bestKey = key
-                best = Media(kind: .video, url: url, quality: (w > 0 && h > 0) ? "\(min(w, h))P" : "")
-            }
+        let options = videoOptions(video)
+        guard let best = options.first else { return nil }
+        return Media(kind: .video, url: best.url, quality: best.quality, size: best.size, alternatives: Array(options.dropFirst()))
+    }
+
+    /// 视频的各档清晰度，按 (分辨率, 码率, 体积) 从大到小（同值保持原顺序），第一档即默认下载的那一档。
+    /// 没有码率列表时退回 playAddr / downloadAddr，只有一档
+    static func videoOptions(_ video: JSON) -> [OverseasVariants.Option] {
+        func label(_ w: Int, _ h: Int, hevc: Bool) -> String {
+            let side = (w > 0 && h > 0) ? "\(min(w, h))P" : ""
+            return hevc && !side.isEmpty ? side + " · H.265" : side
         }
-        let rates = video.arrayValue("bit_rate", "bitrateInfo")
-        for rate in rates {
+        var list: [(index: Int, key: (Int, Int, Int), option: OverseasVariants.Option)] = []
+        for rate in video.arrayValue("bit_rate", "bitrateInfo") {
             let play = firstNonNull(rate, ["play_addr", "PlayAddr"])
+            guard let url = preferredVideoURL(play) else { continue }
             let w = firstInt(play, ["width", "Width"], fallback: video["width"].int)
             let h = firstInt(play, ["height", "Height"], fallback: video["height"].int)
             let bitrate = firstInt(rate, ["bit_rate", "Bitrate", "bitrate"], fallback: 0)
             let size = firstInt(play, ["data_size", "DataSize"], fallback: rate["data_size"].int)
-            consider(preferredVideoURL(play), w, h, bitrate, size)
+            let codec = rate.string("CodecType", "codec_type").lowercased()
+            let hevc = rate["is_bytevc1"].int == 1 || rate["is_h265"].int == 1
+                || codec.contains("265") || codec.contains("hev") || codec.contains("bytevc1")
+            list.append((list.count, (w * h, bitrate, size),
+                         OverseasVariants.Option(url: url, quality: label(w, h, hevc: hevc), size: size > 0 ? Int64(size) : -1)))
         }
-        if best != nil { return best }
+        if !list.isEmpty {
+            list.sort { $0.key != $1.key ? $0.key > $1.key : $0.index < $1.index }
+            return list.map { $0.option }
+        }
         let play = firstNonNull(video, ["play_addr", "playAddr"])
         if let url = preferredVideoURL(play) {
             let w = firstInt(play, ["width"], fallback: video["width"].int)
             let h = firstInt(play, ["height"], fallback: video["height"].int)
-            consider(url, w, h, 0, 0)
-            return best
+            return [OverseasVariants.Option(url: url, quality: label(w, h, hevc: false))]
         }
         let download = firstNonNull(video, ["download_addr", "downloadAddr"])
-        consider(preferredVideoURL(download), video["width"].int, video["height"].int, -1, 0)
-        return best
+        if let url = preferredVideoURL(download) {
+            return [OverseasVariants.Option(url: url, quality: label(video["width"].int, video["height"].int, hevc: false))]
+        }
+        return []
     }
 
     static func pickCover(_ video: JSON) -> String {

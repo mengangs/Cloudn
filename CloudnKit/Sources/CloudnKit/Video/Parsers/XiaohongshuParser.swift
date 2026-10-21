@@ -59,16 +59,21 @@ struct XiaohongshuParser: VideoParser {
         var medias: [VideoMedia] = []
         var cover = ""
         var notice = ""
-        if let video = Self.pickVideo(note) {
+        if Self.pickVideo(note) != nil {
             cover = Self.watermarkFree((coverCandidates.isEmpty ? rawImages : coverCandidates).first ?? "")
-            medias.append(VideoMedia(url: video.url, kind: .video, fileName: "\(base).mp4", headers: headers, quality: video.quality))
+            medias += DomesticVariant.medias(Self.videoVariants(note), base: base, headers: headers)
         } else if note["video"].isObject {
             // 是视频笔记却没取到直链：明确报错，别把封面当成作品图返回
             throw VideoParseError(.unknown, "小红书视频笔记没有取到视频直链")
         } else {
             let resolved = await resolveImages(rawImages, headers: headers)
+            let lives = note["imageList"].array.filter { !Self.rawImageURL($0).isEmpty }.map(Self.liveVideoURL)
             for (i, url) in resolved.urls.enumerated() {
                 medias.append(VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1).jpg", headers: headers, quality: "原图"))
+                // 实况图：紧跟同名加 _live 的视频，App 据此配成实况照片
+                if i < lives.count, !lives[i].isEmpty {
+                    medias.append(VideoMedia(url: lives[i], kind: .video, fileName: "\(base)_\(i + 1)_live.mp4", headers: headers, quality: "实况"))
+                }
             }
             if resolved.fallbacks > 0 { notice = "\(resolved.fallbacks) 张图片没有可用的去水印原图，已改用平台地址（可能带水印）" }
             cover = resolved.urls.first ?? ""
@@ -149,8 +154,55 @@ struct XiaohongshuParser: VideoParser {
         return nil
     }
 
+    /// 视频的各档：默认档同 pickVideo（H.265 优先），其余为各编码 / 分辨率的流（只列 H.264 / H.265，
+    /// AV1 / H.266 很多设备放不了），按分辨率降序、同分辨率 H.264 在前
+    static func videoVariants(_ note: JSON) -> [DomesticVariant] {
+        guard let picked = pickVideo(note) else { return [] }
+        let stream = note["video"]["media"]["stream"]
+        struct Entry {
+            let variant: DomesticVariant
+            let side: Int
+            let codecRank: Int
+        }
+        var entries: [Entry] = []
+        var first: DomesticVariant?
+        for (key, codec) in streamOrder {
+            for item in stream[key].array {
+                let url = item.string("masterUrl", "master_url")
+                guard !url.isEmpty else { continue }
+                let w = item["width"].int
+                let h = item["height"].int
+                let side = w > 0 && h > 0 ? min(w, h) : max(w, h, 0)
+                let label = side > 0 ? (key == "h264" ? "\(side)P" : "\(side)P · \(codec)") : codec
+                let v = DomesticVariant(url: url, label: label, size: item["size"].int64)
+                if url == picked.url && first == nil { first = v }
+                guard key == "h264" || key == "h265" else { continue }
+                entries.append(Entry(variant: v, side: side, codecRank: key == "h264" ? 0 : 1))
+            }
+        }
+        entries.sort { a, b in
+            if a.side != b.side { return a.side > b.side }
+            if a.codecRank != b.codecRank { return a.codecRank < b.codecRank }
+            return a.variant.size > b.variant.size
+        }
+        let head = first ?? DomesticVariant(url: picked.url, label: picked.quality)
+        return DomesticVariant.normalized([head] + entries.map(\.variant))
+    }
+
     /// 图集里一张图的原始地址（explore 是 urlDefault，discovery 是 url），带水印，只作换算输入
     static func rawImageURL(_ item: JSON) -> String { item.string("urlDefault", "url") }
+
+    /// 实况图的视频：imageList 项的 stream（H.264 优先，兼容性最好）；不是实况图为空串
+    static func liveVideoURL(_ item: JSON) -> String {
+        let stream = item["stream"]
+        for key in ["h264", "h265"] {
+            for entry in stream[key].array {
+                let url = entry.string("masterUrl", "master_url")
+                if !url.isEmpty { return url }
+            }
+        }
+        return ""
+    }
 
     /// 换算成去水印原图：丢掉 host 后前两段路径（时间桶 + 散列），再截掉 "!" 起的处理规格；取不到图片 ID 原样返回
     static func watermarkFree(_ raw: String) -> String {

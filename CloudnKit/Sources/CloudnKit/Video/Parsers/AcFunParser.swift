@@ -16,13 +16,13 @@ struct AcFunParser: VideoParser {
             throw VideoParseError(.notFound, "AcFun 页面里没有 videoInfo（可能已删除）")
         }
         guard let info = Self.decodeVideoInfo(raw) else { throw VideoParseError(.unknown, "AcFun 视频信息解析失败") }
-        guard let m3u8 = Self.pickM3U8(info) else { throw VideoParseError(.unknown, "AcFun 未取到视频流地址") }
+        let variants = Self.variants(info)
+        guard !variants.isEmpty else { throw VideoParseError(.unknown, "AcFun 未取到视频流地址") }
         let title = info["title"].string
         return VideoParseResult(
             platform: platform, title: title, author: info["user"]["name"].string, cover: info["coverUrl"].string,
             text: info["description"].string, url: link.url,
-            medias: [VideoMedia(url: m3u8.url, kind: .video, fileName: FileNames.base(title, fallback: "acfun_\(link.id)") + ".mp4",
-                                isHLS: true, headers: headers, quality: m3u8.quality)])
+            medias: DomesticVariant.medias(variants, base: FileNames.base(title, fallback: "acfun_\(link.id)"), headers: headers))
     }
 
     /// ajaxpipe 返回的内嵌 JSON 被多转义了一层：先按原样解析，不行再还原引号
@@ -37,10 +37,16 @@ struct AcFunParser: VideoParser {
 
     /// 取清晰度最高的一档（representation 按 4K → 360P 降序）
     static func pickM3U8(_ info: JSON) -> (url: String, quality: String)? {
+        variants(info).first.map { (url: $0.url, quality: $0.label) }
+    }
+
+    /// 各档清晰度的 m3u8（每档一个子列表，按 representation 原顺序 4K → 360P），第一档为默认
+    static func variants(_ info: JSON) -> [DomesticVariant] {
         let current = info["currentVideoInfo"]
         let ks = current["ksPlayJson"].isObject ? current["ksPlayJson"] : (JSON(text: current["ksPlayJson"].string) ?? JSON(nil))
         let reps = ks["adaptationSet"][0]["representation"].array.filter { !$0["url"].string.isEmpty }
-        guard let best = reps.first else { return nil }
-        return (best["url"].string, best.string("qualityLabel", "qualityType"))
+        return DomesticVariant.normalized(reps.map {
+            DomesticVariant(url: $0["url"].string, label: $0.string("qualityLabel", "qualityType"), isHLS: true)
+        })
     }
 }

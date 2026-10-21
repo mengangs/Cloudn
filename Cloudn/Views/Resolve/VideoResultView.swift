@@ -18,6 +18,9 @@ struct VideoResultView: View {
     @State private var batchJob: BatchJob?
     /// 正在保存的字幕
     @State private var savingSubtitle: UUID?
+    /// 下载前探测到的大小 / 清晰度 / 时长（平台没给的才探测）
+    @State private var probes: [UUID: MediaProbeResult] = [:]
+    @State private var probing = Set<UUID>()
 
     private var videos: [VideoMedia] { result.medias.filter { $0.kind != .image } }
 
@@ -98,6 +101,7 @@ struct VideoResultView: View {
         .animation(.snappy(duration: 0.25), value: selecting)
         .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }
         .sheet(item: $batchJob) { BatchView(job: $0) }
+        .task(id: result.medias.map(\.id)) { await probeAll() }
     }
 
     // MARK: 头部
@@ -192,8 +196,13 @@ struct VideoResultView: View {
                             Text(media.fileName).lineLimit(2).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
                             if options.count > 1 { qualityPicker(options, selected: media) }
                             HStack(spacing: 6) {
-                                if !media.quality.isEmpty && options.count == 1 { Text(media.quality) }
-                                if media.size > 0 { Text(ByteFormat.string(media.size)) }
+                                if options.count == 1, let quality = qualityText(media) { Text(quality) }
+                                if let size = sizeText(media) {
+                                    Text(size)
+                                } else if probing.contains(media.id) {
+                                    Text("正在获取大小…")
+                                }
+                                if let duration = probes[media.id]?.duration { Text(Self.clock(duration)) }
                                 if media.isHLS { Text("m3u8") }
                                 if !media.audioURL.isEmpty { Text("音视频分轨") }
                             }
@@ -237,7 +246,7 @@ struct VideoResultView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(selected.quality.isEmpty ? "选择清晰度" : selected.quality)
+                Text(qualityText(selected) ?? "选择清晰度")
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
             .font(.footnote.weight(.medium))
@@ -250,9 +259,51 @@ struct VideoResultView: View {
     }
 
     private func optionTitle(_ media: VideoMedia) -> String {
-        var parts = [media.quality.isEmpty ? media.fileName : media.quality]
-        if media.size > 0 { parts.append(ByteFormat.string(media.size)) }
+        var parts = [qualityText(media) ?? media.fileName]
+        if let size = sizeText(media) { parts.append(size) }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: 大小与清晰度探测
+
+    private func qualityText(_ media: VideoMedia) -> String? {
+        if !media.quality.isEmpty { return media.quality }
+        if let height = probes[media.id]?.height, height > 0 { return "\(height)P" }
+        return nil
+    }
+
+    private func sizeText(_ media: VideoMedia) -> String? {
+        if media.size > 0 { return ByteFormat.string(media.size) }
+        guard let info = probes[media.id], let size = info.size else { return nil }
+        return (info.estimated ? "约 " : "") + ByteFormat.string(size)
+    }
+
+    /// 平台没给大小或清晰度的，逐个探测（同时最多 4 个）；分轨视频的大小 = 画面 + 声音
+    private func probeAll() async {
+        let targets = videos.filter { $0.size <= 0 || $0.quality.isEmpty }
+        guard !targets.isEmpty else { return }
+        probing = Set(targets.map(\.id))
+        await withTaskGroup(of: (UUID, MediaProbeResult?).self) { group in
+            var pending = targets.makeIterator()
+            for _ in 0..<4 {
+                if let media = pending.next() { group.addTask { await Self.probe(media) } }
+            }
+            for await (id, info) in group {
+                probing.remove(id)
+                if let info { probes[id] = info }
+                if let media = pending.next() { group.addTask { await Self.probe(media) } }
+            }
+        }
+        probing = []
+    }
+
+    nonisolated private static func probe(_ media: VideoMedia) async -> (UUID, MediaProbeResult?) {
+        guard var info = await MediaProbe.probe(media.url, headers: media.headers, isHLS: media.isHLS) else { return (media.id, nil) }
+        if !media.audioURL.isEmpty, let size = info.size {
+            let audio = await MediaProbe.probe(media.audioURL, headers: media.headers, isHLS: false)
+            info.size = audio?.size.map { size + $0 }
+        }
+        return (media.id, info)
     }
 
     // MARK: 图集

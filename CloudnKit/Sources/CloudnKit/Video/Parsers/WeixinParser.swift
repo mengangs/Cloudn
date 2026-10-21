@@ -53,10 +53,10 @@ struct WeixinParser: VideoParser {
         }
 
         var medias: [VideoMedia] = []
-        let videos = Self.videos(json, html: html)
-        for (i, url) in videos.enumerated() {
-            let name = videos.count == 1 ? "\(base).mp4" : "\(base)_v\(i + 1).mp4"
-            medias.append(VideoMedia(url: url, kind: .video, fileName: name, headers: mediaHeaders))
+        let videos = Self.videoVariants(json, html: html)
+        for (i, list) in videos.enumerated() {
+            let stem = videos.count == 1 ? base : "\(base)_v\(i + 1)"
+            medias += DomesticVariant.medias(list, base: stem, group: "video\(i + 1)", headers: mediaHeaders)
         }
         for (i, url) in images.enumerated() {
             medias.append(VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1).\(Self.imageExtension(url))",
@@ -132,7 +132,13 @@ struct WeixinParser: VideoParser {
 
     /// 公众号视频：每个含 mp_video_trans_info 的节点取一路（文件最大的一档）；取不到再从页面里搜 mpvideo 直链
     static func videos(_ data: JSON, html: String) -> [String] {
-        var result: [String] = []
+        videoVariants(data, html: html).compactMap { $0.first?.url }
+    }
+
+    /// 每个视频的各档清晰度：默认档为文件最大的一档（同 videos），其余按文件大小降序；页面兜底的直链只有一档
+    static func videoVariants(_ data: JSON, html: String) -> [[DomesticVariant]] {
+        var result: [[DomesticVariant]] = []
+        var seen = Set<String>()
         var nodes: [JSON] = []
         collectVideoNodes(data, into: &nodes, depth: 0)
         for node in nodes {
@@ -145,10 +151,22 @@ struct WeixinParser: VideoParser {
             }
             guard let best else { continue }
             let url = DomesticHTML.unescape(best["url"].string)
-            if !result.contains(url) { result.append(url) }
+            guard seen.insert(url).inserted else { continue }
+            let rest = entries.sorted { a, b in
+                let sa = a["filesize"].int64
+                let sb = b["filesize"].int64
+                if sa != sb { return sa > sb }
+                return a["width"].int * a["height"].int > b["width"].int * b["height"].int
+            }
+            let list = [best] + rest
+            result.append(DomesticVariant.normalized(list.map { e in
+                let resolution = DomesticVariant.label(width: e["width"].int, height: e["height"].int)
+                let label = [e["video_quality_wording"].string, resolution].filter { !$0.isEmpty }.joined(separator: " ")
+                return DomesticVariant(url: DomesticHTML.unescape(e["url"].string), label: label, size: e["filesize"].int64)
+            }))
         }
         if !result.isEmpty { return result }
-        return pageVideoURLs(html)
+        return pageVideoURLs(html).map { [DomesticVariant(url: $0, label: "")] }
     }
 
     private static func collectVideoNodes(_ node: JSON, into nodes: inout [JSON], depth: Int) {

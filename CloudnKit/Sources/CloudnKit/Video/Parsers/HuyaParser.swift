@@ -20,18 +20,18 @@ struct HuyaParser: VideoParser {
             let msg = payload["message"].string
             throw VideoParseError(.notFound, "虎牙视频不存在或已删除\(msg.isEmpty ? "" : "：\(msg)")")
         }
-        guard let best = Self.bestDefinition(info["definitions"].array) else {
+        let variants = Self.variants(info["definitions"].array)
+        guard !variants.isEmpty else {
             throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频")
         }
         let title = info["videoTitle"].string
         let base = FileNames.base(title, fallback: "huya_\(id)")
-        let media = VideoMedia(url: best.url, kind: .video, fileName: "\(base).mp4", isHLS: best.isHLS, headers: headers,
-                               quality: best.quality)
         let author = info["nickName"].string.nilIfBlank ?? info["actorNick"].string
         let cover = info["videoBigCover"].string.nilIfBlank ?? info["videoCover"].string
         return VideoParseResult(platform: platform, title: title, author: author, avatar: info["actorAvatarUrl"].string,
                                 cover: cover, text: DomesticHTML.text(moment["content"].string), timestamp: moment["cTime"].int64,
-                                url: "https://www.huya.com/video/play/\(id).html", medias: [media])
+                                url: "https://www.huya.com/video/play/\(id).html",
+                                medias: DomesticVariant.medias(variants, base: base, headers: headers))
     }
 
     // MARK: 纯逻辑
@@ -60,6 +60,30 @@ struct HuyaParser: VideoParser {
             return (url: d["m3u8"].string, isHLS: true, quality: Self.quality(d))
         }
         return nil
+    }
+
+    /// 各档：默认档同 bestDefinition；其余为同类（有 mp4 时只列 mp4，否则列 m3u8）的其它清晰度，按高度、体积降序
+    static func variants(_ list: [JSON]) -> [DomesticVariant] {
+        guard let best = bestDefinition(list) else { return [] }
+        let key = list.contains(where: { !$0["url"].string.isEmpty }) ? "url" : "m3u8"
+        func label(_ d: JSON) -> String {
+            let res = DomesticVariant.label(width: d["width"].int, height: d["height"].int)
+            return [d["defName"].string, res].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        func variant(_ d: JSON) -> DomesticVariant {
+            let u = d[key].string
+            let hls = key == "m3u8" || u.substringBefore("?").lowercased().hasSuffix(".m3u8")
+            return DomesticVariant(url: u, label: label(d), size: hls ? -1 : d["size"].int64, isHLS: hls)
+        }
+        let defs = list.filter { !$0[key].string.isEmpty }
+        let first = defs.first(where: { $0[key].string == best.url }).map(variant)
+            ?? DomesticVariant(url: best.url, label: best.quality, isHLS: best.isHLS)
+        let rest = defs.sorted { a, b in
+            let ha = a["height"].int
+            let hb = b["height"].int
+            return ha != hb ? ha > hb : a["size"].int64 > b["size"].int64
+        }
+        return DomesticVariant.normalized([first] + rest.map(variant))
     }
 
     private static func quality(_ d: JSON) -> String {

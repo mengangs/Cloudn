@@ -29,16 +29,24 @@ struct DouyinParser: VideoParser {
 
     private func build(_ link: DetectedVideoLink, _ p: JSON) async -> VideoParseResult? {
         var images = p["images"].array.map { $0.string }.filter { !$0.isEmpty }
-        if images.isEmpty { images = p["domImages"].array.map { $0.string }.filter { !$0.isEmpty } }
+        // 与 images 一一对应：实况照片的那段视频，没有为空串
+        var lives = p["lives"].array.map { $0.string }
+        if images.isEmpty {
+            images = p["domImages"].array.map { $0.string }.filter { !$0.isEmpty }
+            lives = []
+        }
         let video = p["video"].string
         guard !images.isEmpty || !video.isEmpty else { return nil }
         let title = p["title"].string
         let base = FileNames.base(title, fallback: "douyin_\(link.id)")
         let medias: [VideoMedia]
         if !images.isEmpty {
-            medias = images.enumerated().map { i, url in
-                VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1)\(Self.imageExtension(url))", headers: mediaHeaders)
+            var list: [VideoMedia] = []
+            for (i, url) in images.enumerated() {
+                list.append(VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1)\(Self.imageExtension(url))", headers: mediaHeaders))
+                if i < lives.count, let live = Self.liveMedia(lives[i], stem: "\(base)_\(i + 1)", headers: mediaHeaders) { list.append(live) }
             }
+            medias = list
         } else {
             medias = await videoMedias(base: base, bitRates: p["bitRates"].array, fallback: video, uri: p["uri"].string)
         }
@@ -68,6 +76,9 @@ struct DouyinParser: VideoParser {
                 guard let url = img.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) else { continue }
                 if cover.isEmpty { cover = url }
                 medias.append(VideoMedia(url: url, kind: .image, fileName: "\(base)_\(i + 1).jpg", headers: mediaHeaders, quality: "原图"))
+                let play = img["video"].object("play_addr", "playAddr")
+                let live = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) ?? ""
+                if let media = Self.liveMedia(live, stem: "\(base)_\(i + 1)", headers: mediaHeaders) { medias.append(media) }
             }
         } else {
             let play = item["video"].object("play_addr", "playAddr")
@@ -81,6 +92,13 @@ struct DouyinParser: VideoParser {
         return VideoParseResult(platform: platform, title: title, author: author["nickname"].string,
                                 avatar: author.object("avatar_thumb", "avatar_medium")["url_list"][0].string,
                                 cover: cover, timestamp: item["create_time"].int64, url: link.url, medias: medias)
+    }
+
+    /// 实况照片的视频部分：与图片同名加 _live 后缀，App 据此把两者配成一张实况照片存入相册
+    static func liveMedia(_ url: String, stem: String, headers: [String: String]) -> VideoMedia? {
+        guard !url.isEmpty else { return nil }
+        return VideoMedia(url: url.replacingOccurrences(of: "/playwm/", with: "/play/").replacingOccurrences(of: "playwm", with: "play"),
+                          kind: .video, fileName: "\(stem)_live.mp4", headers: headers, quality: "实况")
     }
 
     struct Quality: Equatable {
@@ -224,9 +242,13 @@ struct DouyinParser: VideoParser {
           if (!video && v.bit_rate) { for (var i = 0; i < v.bit_rate.length; i++) { var c = firstUrl(v.bit_rate[i].play_addr); if (c) { video = c; break; } } }
           video = video.replace('/playwm/', '/play/');
         }
-        var images = [];
+        var images = [], lives = [];
         var src = (d && (d.images || (d.image_post_info && d.image_post_info.images))) || null;
-        if (src) { for (var j = 0; j < src.length; j++) { var it = src[j]; var u = firstUrl(it) || firstUrl(it.display_image) || firstUrl(it.owner_watermark_image); if (u) images.push(u); } }
+        if (src) { for (var j = 0; j < src.length; j++) { var it = src[j]; var u = firstUrl(it) || firstUrl(it.display_image) || firstUrl(it.owner_watermark_image); if (u) {
+          images.push(u);
+          var lv = it.video ? (firstUrl(it.video.play_addr) || firstUrl(it.video.playAddr) || firstUrl(it.video.play_addr_h264)) : '';
+          lives.push(lv.replace('/playwm/', '/play/'));
+        } } }
         var domImages = [];
         var all = document.querySelectorAll('img');
         for (var k = 0; k < all.length; k++) {
@@ -238,7 +260,7 @@ struct DouyinParser: VideoParser {
         if (!title) { var t = document.title || ''; var p = t.lastIndexOf(' - 抖音'); title = p > 0 ? t.substring(0, p) : t; }
         return JSON.stringify({
           title: title, author: (d && d.author && (d.author.nickname || d.author.unique_id)) || '',
-          video: video, images: images, domImages: domImages,
+          video: video, images: images, lives: lives, domImages: domImages,
           cover: (v && (firstUrl(v.cover) || firstUrl(v.origin_cover))) || '',
           bitRates: (v && (v.bit_rate || v.bitRate)) || [],
           uri: (v && v.play_addr && v.play_addr.uri) || ''

@@ -27,7 +27,8 @@ struct DailymotionParser: VideoParser {
             }
         }
         try Self.checkError(metadata)
-        guard let stream = Self.bestStream(metadata) else {
+        let streams = Self.streams(metadata)
+        guard !streams.isEmpty else {
             throw VideoParseError(.unsupported, "这个 Dailymotion 视频没有可下载的播放地址")
         }
 
@@ -36,13 +37,13 @@ struct DailymotionParser: VideoParser {
         // 参考实现：Dailymotion 的 m3u8 会按请求头指纹 403，带几条随机无意义的头可绕过
         var mediaHeaders = headers
         for (k, v) in Self.randomHeaders() { mediaHeaders[k] = v }
-        let media = VideoMedia(url: stream.url, kind: .video, fileName: "\(base).mp4", isHLS: stream.isHLS,
-                               headers: mediaHeaders, quality: stream.quality)
+        let options = streams.map { OverseasVariants.Option(url: $0.url, quality: $0.quality, isHLS: $0.isHLS) }
+        let medias = OverseasVariants.medias(options, stem: base, group: "video", headers: mediaHeaders)
         let owner = metadata["owner"]
         return VideoParseResult(platform: platform, title: title, author: owner.string("screenname", "username"),
                                 avatar: owner.string("avatar_url", "avatar_190_url"), cover: Self.poster(metadata),
                                 timestamp: metadata["created_time"].int64, url: "https://www.dailymotion.com/video/\(xid)",
-                                medias: [media])
+                                medias: medias)
     }
 
     // MARK: 纯逻辑
@@ -70,10 +71,14 @@ struct DailymotionParser: VideoParser {
 
     /// qualities：优先 HLS 主播放列表；没有 HLS 时取分辨率最高的直链 mp4
     static func bestStream(_ metadata: JSON) -> (url: String, isHLS: Bool, quality: String)? {
+        streams(metadata).first
+    }
+
+    /// 可选的各档：有 HLS 主播放列表时只有它（清晰度由 HLS 拆分）；否则列出各档直链 mp4，分辨率最高的在前
+    static func streams(_ metadata: JSON) -> [(url: String, isHLS: Bool, quality: String)] {
         let qualities = metadata["qualities"]
         var hls = ""
-        var bestMP4 = ""
-        var bestHeight = -1
+        var mp4: [(index: Int, height: Int, url: String)] = []
         for key in qualities.keys.sorted() {
             for item in qualities[key].array {
                 let url = item["url"].string.substringBefore("#")
@@ -84,15 +89,12 @@ struct DailymotionParser: VideoParser {
                     continue
                 }
                 let height = Int(Rx(#"/H264-\d+x(\d+)"#).first(in: url) ?? "") ?? (Int(key) ?? 0)
-                if height > bestHeight {
-                    bestHeight = height
-                    bestMP4 = url
-                }
+                mp4.append((mp4.count, height, url))
             }
         }
-        if !hls.isEmpty { return (hls, true, "HLS") }
-        if !bestMP4.isEmpty { return (bestMP4, false, bestHeight > 0 ? "\(bestHeight)p" : "") }
-        return nil
+        if !hls.isEmpty { return [(url: hls, isHLS: true, quality: "HLS")] }
+        mp4.sort { $0.height != $1.height ? $0.height > $1.height : $0.index < $1.index }
+        return mp4.map { (url: $0.url, isHLS: false, quality: $0.height > 0 ? "\($0.height)P" : "") }
     }
 
     /// posters / thumbnails 是「高度 → 地址」，取最大的一张

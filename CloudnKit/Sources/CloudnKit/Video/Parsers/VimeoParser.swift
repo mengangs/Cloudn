@@ -30,19 +30,20 @@ struct VimeoParser: VideoParser {
 
         let config = try await fetchConfig(id: id, hash: hash)
         try Self.checkConfig(config)
-        guard let stream = Self.bestStream(config) else {
+        let streams = Self.streams(config)
+        guard !streams.isEmpty else {
             throw VideoParseError(.unsupported, "这个 Vimeo 视频没有可下载的播放地址（可能是直播或付费内容）")
         }
 
         let video = config["video"]
         let title = video["title"].string
         let base = FileNames.base(title, fallback: "vimeo_\(id)")
-        let media = VideoMedia(url: stream.url, kind: .video, fileName: "\(base).mp4", isHLS: stream.isHLS,
-                               headers: mediaHeaders, quality: stream.quality)
+        let options = streams.map { OverseasVariants.Option(url: $0.url, quality: $0.quality, isHLS: $0.isHLS) }
+        let medias = OverseasVariants.medias(options, stem: base, group: "video", headers: mediaHeaders)
         let pageURL = hash.isEmpty ? "https://vimeo.com/\(id)" : "https://vimeo.com/\(id)/\(hash)"
         return VideoParseResult(platform: platform, title: title, author: video["owner"]["name"].string,
                                 avatar: video["owner"]["img"].string, cover: Self.thumbnail(video), url: pageURL,
-                                medias: [media])
+                                medias: medias)
     }
 
     /// 先请求 JSON 配置接口；失败再取播放器页面，从内嵌脚本里抠配置
@@ -129,21 +130,35 @@ struct VimeoParser: VideoParser {
         }
     }
 
+    /// 可选的各档：有渐进式 mp4 时全部列出（最高清在前），否则只有 bestStream 那一条
+    static func streams(_ config: JSON) -> [Stream] {
+        let progressive = progressiveStreams(config)
+        if !progressive.isEmpty { return progressive }
+        return bestStream(config).map { [$0] } ?? []
+    }
+
+    /// 渐进式 mp4 各档：按 (高度, 码率) 从高到低，同值保持原顺序
+    static func progressiveStreams(_ config: JSON) -> [Stream] {
+        let files = config["request"]["files"].isObject ? config["request"]["files"] : config["video"]["files"]
+        var list: [(index: Int, height: Int, bitrate: Int, file: JSON)] = []
+        for (i, f) in files["progressive"].array.enumerated() where !f["url"].string.isEmpty {
+            list.append((i, f["height"].int, f["bitrate"].int, f))
+        }
+        list.sort {
+            if $0.height != $1.height { return $0.height > $1.height }
+            if $0.bitrate != $1.bitrate { return $0.bitrate > $1.bitrate }
+            return $0.index < $1.index
+        }
+        return list.map { item in
+            let quality = item.height > 0 ? "\(item.height)P" : item.file["quality"].string.uppercased()
+            return Stream(url: item.file["url"].string, isHLS: false, quality: quality)
+        }
+    }
+
     /// 渐进式 mp4 取最高清；没有再取 HLS（默认 CDN 优先，avc_url 优先：只含 H.264，兼容性最好）
     static func bestStream(_ config: JSON) -> Stream? {
         let files = config["request"]["files"].isObject ? config["request"]["files"] : config["video"]["files"]
-        var best: JSON?
-        for f in files["progressive"].array where !f["url"].string.isEmpty {
-            guard let current = best else { best = f; continue }
-            let h = f["height"].int
-            let ch = current["height"].int
-            if h > ch || (h == ch && f["bitrate"].int > current["bitrate"].int) { best = f }
-        }
-        if let best {
-            let height = best["height"].int
-            let quality = height > 0 ? "\(height)p" : best["quality"].string
-            return Stream(url: best["url"].string, isHLS: false, quality: quality)
-        }
+        if let best = progressiveStreams(config).first { return best }
 
         let hls = files["hls"]
         let cdns = hls["cdns"]

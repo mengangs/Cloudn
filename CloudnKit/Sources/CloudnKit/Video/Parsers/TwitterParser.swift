@@ -17,6 +17,8 @@ struct TwitterParser: VideoParser {
         let kind: MediaKind
         let url: String
         let quality: String
+        /// 同一视频的其余清晰度（码率从高到低，不含 url 本身）
+        var alternatives: [OverseasVariants.Option] = []
     }
 
     struct Tweet {
@@ -64,7 +66,7 @@ struct TwitterParser: VideoParser {
         return r.json?["guest_token"].string.nilIfBlank
     }
 
-    private func build(_ link: DetectedVideoLink, id: String, tweet: Tweet) -> VideoParseResult {
+    func build(_ link: DetectedVideoLink, id: String, tweet: Tweet) -> VideoParseResult {
         let headers = ["User-Agent": VideoHTTP.uaChrome, "Referer": "https://x.com/"]
         let title = tweet.title.isEmpty ? String(tweet.text.prefix(40)) : tweet.title
         let base = FileNames.base(title, fallback: "x_\(id)")
@@ -72,8 +74,13 @@ struct TwitterParser: VideoParser {
         var medias: [VideoMedia] = []
         for (i, m) in tweet.medias.enumerated() {
             let ext = m.kind == .video ? "mp4" : Self.imageExtension(m.url)
-            let name = single ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
-            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: name, headers: headers, quality: m.quality))
+            let stem = single ? base : "\(base)_\(i + 1)"
+            if m.kind == .video && !m.alternatives.isEmpty {
+                let options = [OverseasVariants.Option(url: m.url, quality: m.quality)] + m.alternatives
+                medias += OverseasVariants.medias(options, stem: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
+            medias.append(VideoMedia(url: m.url, kind: m.kind, fileName: "\(stem).\(ext)", headers: headers, quality: m.quality))
         }
         let cover = tweet.medias.first(where: { $0.kind == .image })?.url ?? ""
         let screen = tweet.author
@@ -238,11 +245,15 @@ struct TwitterParser: VideoParser {
                 out.append(Media(kind: .image, url: imageURL(raw, size: "orig"), quality: "原图"))
             } else if type == "video" || type == "animated_gif" {
                 let variants = item["video_info"]["variants"].array
-                let best = bestMP4(variants)
-                let url = best.isEmpty ? variants.last?["url"].string ?? "" : best
+                let options = mp4Options(variants)
+                let url = options.first?.url ?? variants.last?["url"].string ?? ""
                 guard !url.isEmpty else { continue }
-                let quality = type == "animated_gif" ? "GIF" : resolution(of: url)
-                out.append(Media(kind: .video, url: url, quality: quality))
+                if type == "animated_gif" {
+                    out.append(Media(kind: .video, url: url, quality: "GIF"))
+                } else {
+                    out.append(Media(kind: .video, url: url, quality: options.first?.quality ?? "",
+                                     alternatives: Array(options.dropFirst())))
+                }
             }
         }
         return out
@@ -262,8 +273,13 @@ struct TwitterParser: VideoParser {
                     out.append(Media(kind: .image, url: url, quality: "原图"))
                 }
             case "ApiVideo", "ApiGif":
-                let url = bestMP4(info["variants"].array)
-                if !url.isEmpty { out.append(Media(kind: .video, url: url, quality: resolution(of: url))) }
+                let options = mp4Options(info["variants"].array)
+                guard let best = options.first else { continue }
+                if info["__typename"].string == "ApiGif" {
+                    out.append(Media(kind: .video, url: best.url, quality: best.quality))
+                } else {
+                    out.append(Media(kind: .video, url: best.url, quality: best.quality, alternatives: Array(options.dropFirst())))
+                }
             default: continue
             }
         }
@@ -272,17 +288,24 @@ struct TwitterParser: VideoParser {
 
     /// 码率最高的 mp4 变体（legacy 用 bitrate，Article 用 bit_rate）
     static func bestMP4(_ variants: [JSON]) -> String {
-        var bestURL = ""
-        var bestRate = -1
-        for v in variants where v["content_type"].string == "video/mp4" {
-            let rate = v.has("bitrate") ? v["bitrate"].int : v["bit_rate"].int
+        mp4Options(variants).first?.url ?? ""
+    }
+
+    /// 全部 mp4 变体，码率从高到低（同码率保持原顺序）；标签取直链路径里的分辨率，没有时用码率。
+    /// HLS（m3u8）变体不在其中，同一直链只留一条
+    static func mp4Options(_ variants: [JSON]) -> [OverseasVariants.Option] {
+        var seen = Set<String>()
+        var list: [(index: Int, rate: Int, url: String)] = []
+        for (i, v) in variants.enumerated() where v["content_type"].string == "video/mp4" {
             let url = v["url"].string
-            if !url.isEmpty && rate > bestRate {
-                bestRate = rate
-                bestURL = url
-            }
+            guard !url.isEmpty, seen.insert(url).inserted else { continue }
+            list.append((i, v.has("bitrate") ? v["bitrate"].int : v["bit_rate"].int, url))
         }
-        return bestURL
+        list.sort { $0.rate != $1.rate ? $0.rate > $1.rate : $0.index < $1.index }
+        return list.map { item in
+            let res = OverseasVariants.label(fromPath: item.url)
+            return OverseasVariants.Option(url: item.url, quality: res.isEmpty ? OverseasVariants.label(bitrate: item.rate) : res)
+        }
     }
 
     static func imageURL(_ url: String, size: String) -> String {
@@ -296,11 +319,6 @@ struct TwitterParser: VideoParser {
         if ["jpg", "jpeg", "png", "webp", "gif"].contains(ext) { return ext }
         if let fmt = Rx(#"[?&]format=(\w+)"#).first(in: url) { return fmt.lowercased() }
         return "jpg"
-    }
-
-    /// 视频直链路径里的 `1280x720` 当清晰度
-    static func resolution(of url: String) -> String {
-        Rx(#"/(\d{2,5}x\d{2,5})/"#).first(in: url) ?? ""
     }
 
     /// `Wed Oct 10 20:19:24 +0000 2018` → 秒

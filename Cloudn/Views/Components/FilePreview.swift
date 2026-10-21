@@ -116,7 +116,7 @@ struct FilePreviewView: View {
                 if MediaTools.canSaveToPhotos(url) {
                     Button {
                         Task {
-                            do { try await MediaTools.saveToPhotos(url); app.show("已保存到相册") } catch { app.show(error.localizedDescription, error: true) }
+                            do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
                         }
                     } label: { Label("保存到相册", glyph: .image) }
                 }

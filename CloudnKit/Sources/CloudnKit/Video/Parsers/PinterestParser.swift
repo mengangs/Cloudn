@@ -17,6 +17,8 @@ struct PinterestParser: VideoParser {
         let url: String
         var isHLS = false
         var quality = ""
+        /// 同一视频的其余清晰度（其他 mp4 档，从高到低，不含 url 本身）
+        var alternatives: [OverseasVariants.Option] = []
     }
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
@@ -87,8 +89,13 @@ struct PinterestParser: VideoParser {
         var medias: [VideoMedia] = []
         for (i, item) in items.enumerated() {
             let ext = item.kind == .video ? "mp4" : DomesticHTML.imageExtension(item.url)
-            let name = single ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
-            medias.append(VideoMedia(url: item.url, kind: item.kind, fileName: name, isHLS: item.isHLS,
+            let stem = single ? base : "\(base)_\(i + 1)"
+            if item.kind == .video {
+                let options = [OverseasVariants.Option(url: item.url, quality: item.quality, isHLS: item.isHLS)] + item.alternatives
+                medias += OverseasVariants.medias(options, stem: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
+            medias.append(VideoMedia(url: item.url, kind: item.kind, fileName: "\(stem).\(ext)", isHLS: item.isHLS,
                                      headers: headers, quality: item.quality))
         }
         var author = pin["closeup_attribution"]["full_name"].string
@@ -138,12 +145,11 @@ struct PinterestParser: VideoParser {
         return image.isEmpty ? [] : [Item(kind: .image, url: image, quality: "原图")]
     }
 
-    /// video_list：优先面积最大的 mp4（带音轨），没有 mp4 才用 HLS
+    /// video_list：优先面积最大的 mp4（带音轨），其余 mp4 档（V_720P / V_EXP… 等）按面积从大到小作为可选清晰度；
+    /// 没有 mp4 才用 HLS
     static func bestVideo(_ list: JSON) -> Item? {
         guard list.isObject else { return nil }
-        var mp4 = ""
-        var mp4Area = -1
-        var mp4Label = ""
+        var mp4: [(index: Int, area: Int, option: OverseasVariants.Option)] = []
         var hls = ""
         for key in list.keys.sorted() {
             let format = list[key]
@@ -156,14 +162,13 @@ struct PinterestParser: VideoParser {
             }
             let width = format["width"].int
             let height = format["height"].int
-            let area = width * height
-            if area > mp4Area {
-                mp4Area = area
-                mp4 = url
-                mp4Label = height > 0 ? "\(min(width, height))p" : ""
-            }
+            mp4.append((mp4.count, width * height, OverseasVariants.Option(url: url, quality: OverseasVariants.label(width: width, height: height))))
         }
-        if !mp4.isEmpty { return Item(kind: .video, url: mp4, quality: mp4Label) }
+        mp4.sort { $0.area != $1.area ? $0.area > $1.area : $0.index < $1.index }
+        if let best = mp4.first?.option {
+            let rest = mp4.dropFirst().map { $0.option }.filter { $0.url != best.url }
+            return Item(kind: .video, url: best.url, quality: best.quality, alternatives: rest)
+        }
         if !hls.isEmpty { return Item(kind: .video, url: hls, isHLS: true, quality: "HLS") }
         return nil
     }

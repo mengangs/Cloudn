@@ -39,6 +39,13 @@ struct RedditParser: VideoParser {
         var quality = ""
         /// 只拿到无音轨的画面
         var silent = false
+        /// 同一视频的其余清晰度（DASH 各分辨率，从高到低，不含 url 本身）
+        var alternatives: [OverseasVariants.Option] = []
+
+        /// 默认档 + 其余档
+        var options: [OverseasVariants.Option] {
+            [OverseasVariants.Option(url: url, quality: quality, audioURL: audioURL, isHLS: isHLS)] + alternatives
+        }
     }
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
@@ -145,7 +152,7 @@ struct RedditParser: VideoParser {
 
     /// v.redd.it：合流 HLS → DASH 整段 mp4 + 音频 → fallback_url（无声）
     private func resolve(_ item: Item) async -> ResolvedVideo? {
-        let heightLabel = item.height > 0 ? "\(item.height)p" : ""
+        let heightLabel = item.height > 0 ? "\(item.height)P" : ""
         if item.hasAudio == false && !item.url.isEmpty {
             return ResolvedVideo(url: item.url, quality: heightLabel)
         }
@@ -159,9 +166,12 @@ struct RedditParser: VideoParser {
         if !item.dash.isEmpty, let mpd = await fetchText(item.dash) {
             let tracks = Self.dashTracks(mpd, baseURL: item.dash)
             if !tracks.video.isEmpty {
-                let label = tracks.height > 0 ? "\(tracks.height)p" : heightLabel
+                let label = tracks.height > 0 ? "\(tracks.height)P" : heightLabel
                 let silent = tracks.audio.isEmpty && item.hasAudio == true
-                return ResolvedVideo(url: tracks.video, audioURL: tracks.audio, quality: label, silent: silent)
+                let alternatives = Self.dashVideos(mpd, baseURL: item.dash).filter { $0.url != tracks.video && $0.height > 0 }.map {
+                    OverseasVariants.Option(url: $0.url, quality: "\($0.height)P", audioURL: tracks.audio)
+                }
+                return ResolvedVideo(url: tracks.video, audioURL: tracks.audio, quality: label, silent: silent, alternatives: alternatives)
             }
         }
         if !item.url.isEmpty {
@@ -200,8 +210,7 @@ struct RedditParser: VideoParser {
             case .redditVideo:
                 guard let v = await resolve(item) else { continue }
                 if v.silent { silentCount += 1 }
-                medias.append(VideoMedia(url: v.url, kind: .video, fileName: "\(stem).mp4", isHLS: v.isHLS,
-                                         headers: mediaHeaders, quality: v.quality, audioURL: v.audioURL))
+                medias += OverseasVariants.medias(v.options, stem: stem, group: "video\(i + 1)", headers: mediaHeaders)
             }
         }
         if medias.isEmpty { throw VideoParseError(.unknown, "视频还在处理中或无法获取播放地址，请稍后重试") }
@@ -222,10 +231,9 @@ struct RedditParser: VideoParser {
         guard let v = await resolve(item) else {
             throw VideoParseError(.notFound, "无法获取该 v.redd.it 视频，请复制帖子链接后重试")
         }
-        let media = VideoMedia(url: v.url, kind: .video, fileName: "reddit_\(videoID).mp4", isHLS: v.isHLS,
-                               headers: mediaHeaders, quality: v.quality, audioURL: v.audioURL)
+        let medias = OverseasVariants.medias(v.options, stem: "reddit_\(videoID)", group: "video", headers: mediaHeaders)
         let notice = v.silent ? "未能获取 Reddit 视频的音轨，下载的视频可能没有声音" : ""
-        return VideoParseResult(platform: platform, title: "Reddit 视频 \(videoID)", url: link.url, medias: [media], notice: notice)
+        return VideoParseResult(platform: platform, title: "Reddit 视频 \(videoID)", url: link.url, medias: medias, notice: notice)
     }
 
     // MARK: 纯逻辑
@@ -436,6 +444,26 @@ struct RedditParser: VideoParser {
             }
         }
         return (video, max(videoHeight, 0), audio)
+    }
+
+    /// DASH 清单里的各路视频（整段 mp4），每个高度取码率最高的一路，按高度从高到低
+    static func dashVideos(_ mpd: String, baseURL: String) -> [(url: String, height: Int)] {
+        var best: [Int: (url: String, rate: Int)] = [:]
+        let repRx = Rx(#"<Representation\b([^>]*)>(.*?)</Representation>"#, dotAll: true)
+        let baseRx = Rx(#"<BaseURL>\s*([^<]+?)\s*</BaseURL>"#)
+        for chunk in mpd.components(separatedBy: "<AdaptationSet").dropFirst() {
+            let header = chunk.substringBefore(">")
+            if header.contains("contentType=\"audio\"") || header.contains("mimeType=\"audio") { continue }
+            for rep in repRx.allMatches(in: chunk) where !rep[1].contains("mimeType=\"audio") {
+                guard let base = baseRx.first(in: rep[2]) else { continue }
+                let url = VideoHTTP.absolutize(base: baseURL, DomesticHTML.unescape(base))
+                let rate = Int(Rx(#"\bbandwidth="(\d+)""#).first(in: rep[1]) ?? "") ?? 0
+                let height = Int(Rx(#"\bheight="(\d+)""#).first(in: rep[1]) ?? "") ?? 0
+                if let current = best[height], current.rate >= rate { continue }
+                best[height] = (url, rate)
+            }
+        }
+        return best.keys.sorted(by: >).compactMap { h in best[h].map { (url: $0.url, height: h) } }
     }
 
     static func cover(_ post: JSON) -> String {

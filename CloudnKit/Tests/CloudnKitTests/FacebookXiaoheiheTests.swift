@@ -85,7 +85,7 @@ final class FacebookXiaoheiheTests: XCTestCase {
         let s = try XCTUnwrap(FacebookParser.bestStream(v))
         XCTAssertEqual(s.url, "https://video.xx.fbcdn.net/v1080.mp4?x=1&y=2")
         XCTAssertEqual(s.audioURL, "https://video.xx.fbcdn.net/a128.mp4")
-        XCTAssertEqual(s.quality, "1080p")
+        XCTAssertEqual(s.quality, "1080P")
 
         // 没有 id 匹配时取第一个视频
         let fallback = FacebookParser.select(kind: "video", id: "999", collector: collector)

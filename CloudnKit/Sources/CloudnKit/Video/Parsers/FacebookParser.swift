@@ -340,7 +340,7 @@ struct FacebookParser: VideoParser {
         if let dv = dashVideo {
             let better = progressive == nil || (dashAudio != nil && dv.height > progressiveHeight)
             if better {
-                let q = dv.height > 0 ? "\(dv.height)p" : ""
+                let q = dv.height > 0 ? "\(dv.height)P" : ""
                 return Playback(url: dv.url, audioURL: dashAudio?.url ?? "", isHLS: false, quality: q)
             }
         }
@@ -351,6 +351,35 @@ struct FacebookParser: VideoParser {
             return Playback(url: h, audioURL: "", isHLS: true, quality: "HLS")
         }
         return nil
+    }
+
+    /// 一条视频可选的各档：第一档即 bestStream 选中的那条，其余按画质从高到低——
+    /// DASH 各分辨率（每个高度取码率最高的一路，须有分轨音频才列出，配最高码率音轨）与渐进式 HD / SD；
+    /// 有这些时不再列 HLS
+    static func streams(_ v: Video) -> [Playback] {
+        guard let best = bestStream(v) else { return [] }
+        var reps: [DashRep] = []
+        for m in v.manifests { reps += dashRepresentations(m) }
+        var ranked: [(height: Int, order: Int, playback: Playback)] = []
+        if let audio = reps.filter({ $0.isAudio }).max(by: { $0.bandwidth < $1.bandwidth }) {
+            var byHeight: [Int: DashRep] = [:]
+            for r in reps where !r.isAudio && r.height > 0 {
+                if let current = byHeight[r.height], current.bandwidth >= r.bandwidth { continue }
+                byHeight[r.height] = r
+            }
+            for (h, r) in byHeight {
+                ranked.append((h, 1, Playback(url: r.url, audioURL: audio.url, isHLS: false, quality: "\(h)P")))
+            }
+        }
+        if let hd = v.hd.first { ranked.append((720, 0, Playback(url: hd, audioURL: "", isHLS: false, quality: "HD"))) }
+        if let sd = v.sd.first { ranked.append((360, 0, Playback(url: sd, audioURL: "", isHLS: false, quality: "SD"))) }
+        ranked.sort { $0.height != $1.height ? $0.height > $1.height : $0.order < $1.order }
+        var out = [best]
+        var seen: Set<String> = [best.url]
+        for item in ranked where seen.insert(item.playback.url).inserted {
+            out.append(item.playback)
+        }
+        return Array(out.prefix(OverseasVariants.maxOptions))
     }
 
     /// DASH 清单（MPD XML）→ 各路表示；FB 的每个 Representation 的 BaseURL 都是完整的 mp4 文件
@@ -427,9 +456,11 @@ struct FacebookParser: VideoParser {
             let suffix = single ? "" : "_\(i + 1)"
             switch item {
             case .video(let v):
-                guard let s = Self.bestStream(v) else { continue }
-                medias.append(VideoMedia(url: s.url, kind: .video, fileName: "\(base)\(suffix).mp4", isHLS: s.isHLS,
-                                         headers: headers, quality: s.quality, audioURL: s.audioURL))
+                let options = Self.streams(v).map {
+                    OverseasVariants.Option(url: $0.url, quality: $0.quality, audioURL: $0.audioURL, isHLS: $0.isHLS)
+                }
+                guard !options.isEmpty else { continue }
+                medias += OverseasVariants.medias(options, stem: "\(base)\(suffix)", group: "video\(i + 1)", headers: headers)
             case .photo(let p):
                 let ext = DomesticHTML.imageExtension(p.url)
                 if cover.isEmpty { cover = p.url }

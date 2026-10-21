@@ -451,3 +451,85 @@ struct JSLiteralParser {
         }
     }
 }
+
+/// 同一个视频的一档清晰度（国内各解析器的中间形态）：先按「默认档（最高画质）在前」列出来，
+/// 再用 `medias` 统一换成同组的 VideoMedia（去重、限量、文件名互不相同）
+struct DomesticVariant: Equatable, Sendable {
+    var url: String
+    /// 选择器上显示的短标签，如「1080P」「720P · H.265」「超清」
+    var label: String
+    /// 字节数；未知为 -1
+    var size: Int64 = -1
+    var isHLS: Bool = false
+    var audioURL: String = ""
+    /// 这一档单独需要的请求头（为 nil 时用调用方给的）
+    var headers: [String: String]?
+
+    init(url: String, label: String, size: Int64 = -1, isHLS: Bool = false, audioURL: String = "", headers: [String: String]? = nil) {
+        self.url = url
+        self.label = label
+        self.size = size > 0 ? size : -1
+        self.isHLS = isHLS
+        self.audioURL = audioURL
+        self.headers = headers
+    }
+
+    /// 每个视频最多列出的档数
+    static let maxCount = 6
+
+    /// 「短边 + P」（如 1920×1080 → 1080P），H.265 加后缀；宽高未知时用 fallback
+    static func label(width: Int, height: Int, hevc: Bool = false, fallback: String = "") -> String {
+        let side = width > 0 && height > 0 ? min(width, height) : max(width, height, 0)
+        var text = side > 0 ? "\(side)P" : fallback
+        if hevc { text = text.isEmpty ? "H.265" : text + " · H.265" }
+        return text
+    }
+
+    /// 编码名是否为 H.265 / HEVC（含字节系的 bytevc1）
+    static func isHEVC(_ codec: String) -> Bool {
+        let c = codec.lowercased()
+        return c.contains("265") || c.contains("hevc") || c.contains("hvc1") || c.contains("hev1") || c.contains("bytevc1")
+    }
+
+    /// 去掉空地址、按地址去重（保留先出现的），最多 maxCount 档
+    static func normalized(_ list: [DomesticVariant], limit: Int = DomesticVariant.maxCount) -> [DomesticVariant] {
+        var seen = Set<String>()
+        var out: [DomesticVariant] = []
+        for v in list where !v.url.isEmpty && seen.insert(v.url).inserted {
+            out.append(v)
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
+    /// 标签 → 文件名后缀（「720P · H.265」→「720P_H.265」）
+    static func fileSuffix(_ label: String) -> String {
+        let replaced = label.replacingOccurrences(of: "·", with: " ")
+            .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).joined(separator: "_")
+        return FileNames.sanitize(replaced)
+    }
+
+    /// 各档 → VideoMedia：第一档文件名为「base.ext」，其余为「base_标签.ext」；
+    /// 只剩一档时不设清晰度组（与以前的单条结果一致）
+    static func medias(_ list: [DomesticVariant], base: String, ext: String = "mp4", group: String = "video",
+                       kind: MediaKind = .video, headers: [String: String]) -> [VideoMedia] {
+        let items = normalized(list)
+        let groupName = items.count > 1 ? group : ""
+        var usedSuffixes = Set<String>()
+        var out: [VideoMedia] = []
+        for (i, v) in items.enumerated() {
+            let name: String
+            if i == 0 {
+                name = "\(base).\(ext)"
+            } else {
+                var suffix = fileSuffix(v.label)
+                if suffix.isEmpty || usedSuffixes.contains(suffix) { suffix = suffix.isEmpty ? "v\(i + 1)" : "\(suffix)_\(i + 1)" }
+                usedSuffixes.insert(suffix)
+                name = "\(base)_\(suffix).\(ext)"
+            }
+            out.append(VideoMedia(url: v.url, kind: kind, fileName: name, size: v.size > 0 ? v.size : -1, isHLS: v.isHLS,
+                                  headers: v.headers ?? headers, quality: v.label, audioURL: v.audioURL, variantGroup: groupName))
+        }
+        return out
+    }
+}

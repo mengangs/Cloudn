@@ -350,9 +350,9 @@ struct DownloadsView: View {
             if MediaTools.canSaveToPhotos(url) {
                 Button {
                     Task {
-                        do { try await MediaTools.saveToPhotos(url); app.show("已保存到相册") } catch { app.show(error.localizedDescription, error: true) }
+                        do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
                     }
-                } label: { Label("保存到相册", glyph: .image) }
+                } label: { Label(LivePhoto.pair(for: url) != nil ? "保存为实况照片" : "保存到相册", glyph: .image) }
             }
         } else {
             if item.status.isActive {

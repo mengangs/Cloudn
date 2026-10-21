@@ -62,14 +62,15 @@ struct ZhihuParser: VideoParser {
         let title = json["question"]["title"].string
         var refs = Self.contentImages(json["content"].string).map { (url: $0, kind: MediaKind.image) }
         // 视频回答：视频挂在 attachment 上
-        let attached = Self.bestPlaylistURL(json["attachment"]["video"]["video_info"])
-        if !attached.isEmpty { refs.insert((url: attached, kind: MediaKind.video), at: 0) }
+        let attachedVariants = Self.playlistVariants(json["attachment"]["video"]["video_info"])
+        if let attached = attachedVariants.first?.url { refs.insert((url: attached, kind: MediaKind.video), at: 0) }
         let qid = json["question"]["id"].string
         let url = qid.isEmpty ? "https://www.zhihu.com/answer/\(id)" : "https://www.zhihu.com/question/\(qid)/answer/\(id)"
         let author = json["author"]
         return try build(refs, title: title, fallback: "zhihu_answer_\(id)", author: author["name"].string,
                          avatar: author["avatar_url"].string, text: Self.stripHTML(json["excerpt"].string),
-                         timestamp: json["created_time"].int64, url: url)
+                         timestamp: json["created_time"].int64, url: url,
+                         variants: attachedVariants.isEmpty ? [:] : [attachedVariants[0].url: attachedVariants])
     }
 
     private func parseArticle(_ id: String, cookie: String, dC0: String) async throws -> VideoParseResult {
@@ -85,13 +86,17 @@ struct ZhihuParser: VideoParser {
     private func parsePin(_ id: String, cookie: String, dC0: String) async throws -> VideoParseResult {
         let json = try await api("https://www.zhihu.com/api/v4/pins/\(id)", query: [], cookie: cookie, dC0: dC0, what: "知乎想法")
         var refs = Self.pinMedias(json)
+        var variants = Self.pinVideoVariants(json)
         // 转发的想法：自己没有媒体时取原想法的
-        if refs.isEmpty && json["origin_pin"].isObject { refs = Self.pinMedias(json["origin_pin"]) }
+        if refs.isEmpty && json["origin_pin"].isObject {
+            refs = Self.pinMedias(json["origin_pin"])
+            variants = Self.pinVideoVariants(json["origin_pin"])
+        }
         let text = Self.pinText(json)
         let author = json["author"]
         return try build(refs, title: String(text.prefix(40)), fallback: "zhihu_pin_\(id)", author: author["name"].string,
                          avatar: author["avatar_url"].string, text: text, timestamp: json["created"].int64,
-                         url: "https://www.zhihu.com/pin/\(id)")
+                         url: "https://www.zhihu.com/pin/\(id)", variants: variants)
     }
 
     /// 日报正文里找「查看知乎原文」跳回知乎本站解析（日报接口本身不需要签名）
@@ -108,8 +113,10 @@ struct ZhihuParser: VideoParser {
                          url: "https://daily.zhihu.com/story/\(id)")
     }
 
+    /// variants：视频默认地址 → 该视频的各档清晰度（第一档即默认地址）
     private func build(_ refs: [(url: String, kind: MediaKind)], title: String, fallback: String, author: String = "",
-                       avatar: String = "", cover: String = "", text: String = "", timestamp: Int64 = 0, url: String) throws -> VideoParseResult {
+                       avatar: String = "", cover: String = "", text: String = "", timestamp: Int64 = 0, url: String,
+                       variants: [String: [DomesticVariant]] = [:]) throws -> VideoParseResult {
         guard !refs.isEmpty else { throw VideoParseError(.unsupported, Self.noMedia) }
         let base = FileNames.base(title, fallback: fallback)
         let headers = ["User-Agent": Self.ua, "Referer": "https://www.zhihu.com/"]
@@ -117,6 +124,11 @@ struct ZhihuParser: VideoParser {
         for (i, ref) in refs.enumerated() {
             let ext = ref.kind == .video ? "mp4" : Self.imageExt(ref.url)
             let name = refs.count == 1 ? "\(base).\(ext)" : "\(base)_\(i + 1).\(ext)"
+            if ref.kind == .video, let list = variants[ref.url], list.count > 1 {
+                let stem = refs.count == 1 ? base : "\(base)_\(i + 1)"
+                medias += DomesticVariant.medias(list, base: stem, ext: ext, group: "video\(i + 1)", headers: headers)
+                continue
+            }
             let isHLS = ref.kind == .video && ref.url.contains(".m3u8")
             let quality = ref.kind == .video ? "最高清晰度" : "原图"
             medias.append(VideoMedia(url: ref.url, kind: ref.kind, fileName: name, isHLS: isHLS, headers: headers, quality: quality))
@@ -429,6 +441,16 @@ struct ZhihuParser: VideoParser {
         return out
     }
 
+    /// 想法里各视频的清晰度：默认地址 → 各档（与 pinMedias 的视频地址一致）
+    static func pinVideoVariants(_ pin: JSON) -> [String: [DomesticVariant]] {
+        var out: [String: [DomesticVariant]] = [:]
+        for c in pin["content"].array where c["type"].string == "video" {
+            let list = playlistVariants(c["video_info"])
+            if let first = list.first { out[first.url] = list }
+        }
+        return out
+    }
+
     static func pinText(_ pin: JSON) -> String {
         for c in pin["content"].array where c["type"].string == "text" {
             let text = stripHTML(c["content"].string)
@@ -439,29 +461,37 @@ struct ZhihuParser: VideoParser {
 
     static let playlistRank: [String: Int] = ["fhd": 4, "hd": 3, "sd": 2, "ld": 1]
 
+    static let playlistNames: [String: String] = ["fhd": "超清", "hd": "高清", "sd": "标清", "ld": "流畅"]
+
     /// video_info.playlist：「清晰度 → {url,width,height}」（偶尔是数组）；取分辨率最大的一档
     static func bestPlaylistURL(_ videoInfo: JSON) -> String {
+        playlistVariants(videoInfo).first.map { $0.url } ?? ""
+    }
+
+    /// 播放列表的各档（地址已补 https）：分辨率最大的一档在前（与 bestPlaylistURL 一致），其余按分辨率降序
+    static func playlistVariants(_ videoInfo: JSON) -> [DomesticVariant] {
         var playlist = videoInfo["playlist"]
         if playlist.keys.isEmpty && playlist.array.isEmpty { playlist = videoInfo["playlist_v2"] }
-        var entries: [(rank: Int, item: JSON)] = []
+        var entries: [(rank: Int, name: String, item: JSON)] = []
         if playlist.isArray {
-            entries = playlist.array.map { (rank: 0, item: $0) }
+            entries = playlist.array.map { (rank: 0, name: "", item: $0) }
         } else {
-            entries = playlist.keys.map { (rank: playlistRank[$0.lowercased()] ?? 0, item: playlist[$0]) }
+            entries = playlist.keys.sorted().map { (rank: playlistRank[$0.lowercased()] ?? 0, name: $0.lowercased(), item: playlist[$0]) }
         }
-        var bestURL = ""
-        var bestScore = -1
-        for entry in entries {
+        var scored: [(score: Int, order: Int, variant: DomesticVariant)] = []
+        for (order, entry) in entries.enumerated() {
             let url = entry.item["url"].string
             guard !url.isEmpty else { continue }
-            let pixels = entry.item["width"].int * entry.item["height"].int
-            let score = pixels * 10 + entry.rank
-            if score > bestScore {
-                bestScore = score
-                bestURL = url
-            }
+            let w = entry.item["width"].int
+            let h = entry.item["height"].int
+            let label = DomesticVariant.label(width: w, height: h, fallback: playlistNames[entry.name] ?? entry.name.uppercased())
+            let full = https(url)
+            let v = DomesticVariant(url: full, label: label, size: entry.item["size"].int64, isHLS: full.contains(".m3u8"))
+            scored.append((score: w * h * 10 + entry.rank, order: order, variant: v))
         }
-        return bestURL
+        // 同分取先出现的（与以前「严格大于才替换」一致）
+        scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
+        return DomesticVariant.normalized(scored.map { $0.variant })
     }
 
     static func imageExt(_ url: String) -> String {

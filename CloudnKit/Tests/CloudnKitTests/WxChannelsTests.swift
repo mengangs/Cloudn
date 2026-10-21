@@ -91,8 +91,15 @@ final class WxChannelsTests: XCTestCase {
         """#)!
         let yb = JSON(text: #"{"desc":"元宝描述","author":"元宝作者","cover_url":"https://c"}"#)!
         let r = try WxChannelsParser.buildResult(feed: feed, yuanbao: yb, shareID: "AbC")
-        XCTAssertEqual(r.medias.count, 1)
+        // H.264 仍是默认档，H.265 作为同组的另一档
+        XCTAssertEqual(r.medias.count, 2)
         XCTAssertEqual(r.medias[0].url, "https://finder.video.qq.com/h264.mp4")
+        XCTAssertEqual(r.medias[1].url, "https://finder.video.qq.com/h265.mp4")
+        XCTAssertEqual(r.medias[1].quality, "H.265")
+        XCTAssertEqual(r.medias[0].variantGroup, r.medias[1].variantGroup)
+        XCTAssertFalse(r.medias[0].variantGroup.isEmpty)
+        XCTAssertNotEqual(r.medias[0].fileName, r.medias[1].fileName)
+        XCTAssertEqual(r.defaultDownloads.count, 1)
         XCTAssertEqual(r.medias[0].kind, .video)
         XCTAssertEqual(r.medias[0].quality, "H.264")
         XCTAssertTrue(r.medias[0].fileName.hasSuffix(".mp4"))
