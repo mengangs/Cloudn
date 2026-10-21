@@ -1012,6 +1012,8 @@ enum MP4Builder {
         var compositionOffsets: [Int64]
         var syncSamples: [UInt32]?
         var table: MP4SampleTable
+        /// mdhd 里的 ISO 639-2 语言代码（三个小写字母，其他值写 und）
+        var language: String = "und"
     }
 
     static func moov(video: VideoTrackBuilder?, audio: AudioTrackBuilder?) -> [UInt8] {
@@ -1024,7 +1026,11 @@ enum MP4Builder {
         var plans: [TrackPlan] = []
         if let video, let plan = videoPlan(video, id: UInt32(plans.count + 1), origin: origin) { plans.append(plan) }
         if let audio, let plan = audioPlan(audio, id: UInt32(plans.count + 1), origin: origin) { plans.append(plan) }
+        return moov(plans: plans)
+    }
 
+    /// 按已经算好的各轨道计划写 moov（mvhd + 每条 trak）
+    static func moov(plans: [TrackPlan]) -> [UInt8] {
         var w = ByteWriter()
         let moov = w.begin("moov")
         let movieDuration = plans.map(\.trackDuration).max() ?? 0
@@ -1165,7 +1171,7 @@ enum MP4Builder {
         w.u32(0)
         w.u32(UInt32(clamping: p.timescale))
         w.u32(UInt32(clamping: p.mediaDuration))
-        w.u16(0x55C4)  // und
+        w.u16(packedLanguage(p.language))
         w.u16(0)
         w.end(mdhd)
 
@@ -1377,45 +1383,69 @@ enum MP4Builder {
     }
 
     static func audioEntry(_ config: ADTSHeader, esId: UInt16) -> [UInt8] {
-        var w = ByteWriter()
-        let s = w.begin("mp4a")
-        w.zeros(6)
-        w.u16(1)  // data_reference_index
-        w.zeros(8)
         var channels = config.channelConfig
         if channels == 0 { channels = 2 }
         if channels == 7 { channels = 8 }
-        w.u16(UInt16(channels))
+        return audioSampleEntry("mp4a", channels: channels, sampleRate: config.sampleRate,
+                                config: esds(config.audioSpecificConfig, esId: esId))
+    }
+
+    /// 通用 AudioSampleEntry（mp4a / ac-3 / ec-3 / Opus），`config` 是紧跟其后的配置盒子（esds / dac3 / dec3 / dOps）
+    static func audioSampleEntry(_ type: String, channels: Int, sampleRate: Int, config: [UInt8]) -> [UInt8] {
+        var w = ByteWriter()
+        let s = w.begin(type)
+        w.zeros(6)
+        w.u16(1)  // data_reference_index
+        w.zeros(8)
+        w.u16(UInt16(clamping: channels))
         w.u16(16)  // samplesize
         w.u16(0)
         w.u16(0)
-        let rate = config.sampleRate
-        w.u32(rate <= 0xFFFF ? UInt32(rate) << 16 : 0)
-        w.append(esds(config.audioSpecificConfig, esId: esId))
+        w.u32(sampleRate > 0 && sampleRate <= 0xFFFF ? UInt32(sampleRate) << 16 : 0)
+        w.append(config)
         w.end(s)
         return w.bytes
     }
 
-    static func esds(_ asc: [UInt8], esId: UInt16) -> [UInt8] {
+    /// 把一段现成的负载包成盒子
+    static func box(_ type: String, _ payload: [UInt8]) -> [UInt8] {
+        var w = ByteWriter()
+        let s = w.begin(type)
+        w.append(payload)
+        w.end(s)
+        return w.bytes
+    }
+
+    /// ISO 639-2 三字母代码打包成 mdhd 的 15 位语言字段，不合法时为 und
+    static func packedLanguage(_ code: String) -> UInt16 {
+        let c = Array(code.lowercased().utf8)
+        guard c.count == 3, c.allSatisfy({ $0 >= 0x61 && $0 <= 0x7A }) else { return 0x55C4 }
+        return (UInt16(c[0] - 0x60) << 10) | (UInt16(c[1] - 0x60) << 5) | UInt16(c[2] - 0x60)
+    }
+
+    /// `objectType`：0x40 = AAC（ISO/IEC 14496-3），0x6B = MP3（ISO/IEC 11172-3）；`asc` 为空时不写 DecoderSpecificInfo
+    static func esds(_ asc: [UInt8], esId: UInt16, objectType: UInt8 = 0x40) -> [UInt8] {
         var w = ByteWriter()
         let s = w.beginFull("esds")
-        let decoderSpecific = 2 + asc.count
+        let decoderSpecific = asc.isEmpty ? 0 : 2 + asc.count
         let decoderConfig = 13 + decoderSpecific
         let es = 3 + (2 + decoderConfig) + 3
         w.u8(0x03)  // ES_Descriptor
-        w.u8(UInt8(es))
+        w.u8(UInt8(clamping: es))
         w.u16(esId)
         w.u8(0)
         w.u8(0x04)  // DecoderConfigDescriptor
-        w.u8(UInt8(decoderConfig))
-        w.u8(0x40)  // Audio ISO/IEC 14496-3
+        w.u8(UInt8(clamping: decoderConfig))
+        w.u8(objectType)
         w.u8(0x15)  // streamType = audio(5) << 2 | upStream 0 | reserved 1
         w.u24(0)    // bufferSizeDB
         w.u32(0)    // maxBitrate
         w.u32(0)    // avgBitrate
-        w.u8(0x05)  // DecoderSpecificInfo
-        w.u8(UInt8(asc.count))
-        w.append(asc)
+        if !asc.isEmpty {
+            w.u8(0x05)  // DecoderSpecificInfo
+            w.u8(UInt8(clamping: asc.count))
+            w.append(asc)
+        }
         w.u8(0x06)  // SLConfigDescriptor
         w.u8(1)
         w.u8(0x02)

@@ -156,6 +156,18 @@ struct RangeTransfer {
         if total > 0, progress.received < total { throw TransferError("下载不完整，请重试") }
     }
 
+    /// 探测响应 → (总长度, 是否支持分片)。206 时总长度只能取 Content-Range 的 `/总长`：
+    /// 它的 Content-Length 是这一段（1 字节）的长度，拿来当总长会把整个文件当成 1 字节（光鸭云盘就会这样回）。
+    /// 206 却没有可用的总长度（缺头、`/*`）时按长度未知、整体下载处理
+    static func planTotal(status: Int, headers: [String: String]) -> (total: Int64, ranged: Bool) {
+        if status == 206 {
+            if let cr = headers["content-range"], let t = Int64(cr.substringAfterLast("/").trimmed), t > 0 { return (t, true) }
+            return (-1, false)
+        }
+        if let len = headers["content-length"].flatMap({ Int64($0.trimmed) }), len > 0 { return (len, false) }
+        return (-1, false)
+    }
+
     /// 用 Range: bytes=0-0 探测总长度与是否支持分片
     private func plan() async throws {
         var request = makeRequest()
@@ -172,13 +184,9 @@ struct RangeTransfer {
             // 拿到响应头即主动取消，属预期
         }
         guard (200..<300).contains(status) else { throw TransferError(Self.statusMessage(status)) }
-        var total: Int64 = -1
-        var ranged = false
-        if status == 206, let cr = respHeaders["content-range"], let t = Int64(cr.substringAfterLast("/").trimmed) {
-            total = t
-            ranged = true
-        } else if let len = respHeaders["content-length"].flatMap({ Int64($0.trimmed) }) {
-            total = len
+        let (total, ranged) = Self.planTotal(status: status, headers: respHeaders)
+        if status == 206 && total < 0 {
+            Log.info("服务器支持分段但没给出总长度（Content-Range：\(respHeaders["content-range"] ?? "无")），改为整体下载")
         }
         _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
         var chunks: [DownloadChunk]

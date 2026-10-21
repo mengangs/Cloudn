@@ -293,6 +293,10 @@ public actor DownloadEngine {
             try await RangeTransfer(url: request.url, headers: request.headers, destination: target, progress: box,
                                     connections: connections, retryCount: config.retryCount, streamer: streamer,
                                     mirrors: request.mirrors ?? []).run()
+            // 分享列表给了大小、收到的却远小于它：多半是服务器回应异常（如只回了 1 字节），别当成下载完成
+            if let message = Self.sizeMismatch(expected: request.expectedSize, actual: Self.size(of: target) ?? 0) {
+                throw TransferError(message)
+            }
             return target
         case .hls:
             let result = try await HLSTransfer(url: request.url, headers: request.headers, workDir: dir.appendingPathComponent("hls"),
@@ -718,6 +722,12 @@ extension DownloadEngine {
     /// 文件移入下载目录（按 request 的文件名 / 文件夹，重名自动编号），走正常的完成回调（通知、存相册等）。
     /// 移动失败时不留下任务记录，错误抛给调用方。
     @discardableResult
+    /// 实际大小远小于分享列表里的大小（不到一半）时的错误说明；大小未知或很小的文件不检查
+    static func sizeMismatch(expected: Int64, actual: Int64) -> String? {
+        guard expected > 64 * 1024, actual < expected / 2 else { return nil }
+        return "下载不完整：只收到 \(ByteFormat.string(actual))，应为 \(ByteFormat.string(expected))，请重试"
+    }
+
     public func importFinishedFile(_ file: URL, request: DownloadRequest) async throws -> DownloadItem {
         var item = DownloadItem(request: request)
         // 不是 queued：调度器不会去下载它

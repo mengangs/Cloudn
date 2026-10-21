@@ -14,13 +14,26 @@ struct FilePreviewView: View {
     @State private var player: AVPlayer?
     /// 下滑关闭：手指往下拖的距离
     @State private var dragY: CGFloat = 0
+    /// MKV 转出的 MP4（转好后改播它）
+    @State private var converted: URL?
+    /// 转换进度 0...1；nil 表示没在转
+    @State private var converting: Double?
+    @State private var convertError: String?
+    @State private var convertNotes: [String] = []
+    @State private var convertSubtitles: [MKVRemuxer.Subtitle] = []
+    /// 读文件头判断能不能转：nil 还没判断，"" 可以转，其余为不能转的原因
+    @State private var remuxIssue: String?
 
     enum Mode { case player, image, text, document, unsupported }
 
     /// AVFoundation 能直接播的格式；mkv / avi / flv 等交给其他应用
     static let playable: Set<String> = ["mp4", "mov", "m4v", "3gp", "mp3", "m4a", "aac", "wav", "aiff", "caf", "flac", "m3u8", "ts"]
 
+    /// 能无损转成 MP4 再播的容器
+    static let remuxable: Set<String> = ["mkv", "webm", "mka"]
+
     private var mode: Mode {
+        if converted != nil { return .player }
         let ext = url.pathExtension.lowercased()
         switch FileNames.kind(of: url.lastPathComponent) {
         case .video, .audio: return Self.playable.contains(ext) ? .player : .unsupported
@@ -72,7 +85,7 @@ struct FilePreviewView: View {
             if let player {
                 PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
             } else {
-                Color.black.onAppear { player = PlayerController.makePlayer(url) }
+                Color.black.onAppear { player = PlayerController.makePlayer(converted ?? url) }
             }
         case .image:
             ZoomableImageFile(url: url, onTap: { chromeVisible.toggle() }, drag: dismissDrag).ignoresSafeArea()
@@ -113,6 +126,9 @@ struct FilePreviewView: View {
                 .buttonStyle(PreviewBarButtonStyle(dark: immersive))
                 .accessibilityLabel("分享")
             Menu {
+                if converted != nil {
+                    Button { saveConverted() } label: { Label("保存转换后的 MP4 到下载", glyph: .download) }
+                }
                 if MediaTools.canSaveToPhotos(url) {
                     Button {
                         Task {
@@ -141,9 +157,21 @@ struct FilePreviewView: View {
 
     // MARK: 不能直接预览
 
+    private var fileSize: Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private var canRemux: Bool {
+        Self.remuxable.contains(url.pathExtension.lowercased()) && fileSize >= 1024 && remuxIssue == ""
+    }
+
     private var unsupportedCard: some View {
         let kind = FileNames.kind(of: url.lastPathComponent)
+        let tooSmall = (kind == .video || kind == .audio) && fileSize < 1024
         let hint: String = switch kind {
+        case _ where tooSmall: "文件只有 \(ByteFormat.string(fileSize))，不是完整的视频，可能下载没有成功，请重新下载"
+        case _ where !(remuxIssue ?? "").isEmpty: remuxIssue ?? ""
+        case _ where canRemux: "系统播放器不支持 \(url.pathExtension.uppercased())，可以无损转成 MP4 后在这里播放（不重新编码，很快），也可以用 VLC、Infuse 等应用打开"
         case .video, .audio: "这个格式系统播放器不支持，可以用 VLC、Infuse 等应用打开"
         case .archive: "压缩包可在「文件」App 中轻点解压"
         case .apk: "安装包请用「分享」发送到对应的安装工具"
@@ -161,11 +189,28 @@ struct FilePreviewView: View {
                 if !meta.isEmpty { Text(meta).font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3) }
             }
             Text(hint).font(.footnote).foregroundStyle(Color.ink2).multilineTextAlignment(.center)
+            if let convertError {
+                Text(convertError).font(.footnote).foregroundStyle(Color.clayInk).multilineTextAlignment(.center)
+            }
             VStack(spacing: 10) {
+                if canRemux && convertError == nil {
+                    if let converting {
+                        VStack(spacing: 8) {
+                            ProgressView(value: converting)
+                            Text("正在转换 \(Int(converting * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3)
+                        }
+                        .padding(.vertical, 6)
+                    } else {
+                        Button { startRemux() } label: {
+                            Label("转换为 MP4 播放", glyph: .play).frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(PillButtonStyle(kind: .primary))
+                    }
+                }
                 ShareLink(item: url) {
                     Label("用其他应用打开", glyph: .share).frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PillButtonStyle(kind: .primary))
+                .buttonStyle(PillButtonStyle(kind: canRemux && convertError == nil ? .secondary : .primary))
                 Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: {
                     Label("在「文件」中查看", glyph: .folder).frame(maxWidth: .infinity)
                 }
@@ -177,6 +222,74 @@ struct FilePreviewView: View {
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            guard remuxIssue == nil, Self.remuxable.contains(url.pathExtension.lowercased()), fileSize >= 1024 else { return }
+            let source = url
+            remuxIssue = await Task.detached { MKVRemuxer.check(source) ?? "" }.value
+        }
+    }
+
+    // MARK: MKV 转 MP4
+
+    /// 转出的 MP4 放在缓存目录（同一文件转过且没改动就直接复用）；转好后改播它
+    private func startRemux() {
+        guard converting == nil else { return }
+        convertError = nil
+        converting = 0
+        let source = url
+        Task {
+            do {
+                let (output, result) = try await Self.remux(source) { value in
+                    Task { @MainActor in if converting != nil { converting = value } }
+                }
+                converting = nil
+                convertNotes = result.skipped
+                convertSubtitles = result.subtitles
+                player = nil
+                converted = output
+                var message = "已转换为 MP4"
+                if !result.skipped.isEmpty { message += "；" + result.skipped.joined(separator: "；") }
+                app.show(message)
+            } catch {
+                converting = nil
+                convertError = error.localizedDescription
+            }
+        }
+    }
+
+    nonisolated private static func remux(_ source: URL, progress: @escaping @Sendable (Double) -> Void) async throws
+        -> (URL, MKVRemuxer.Result) {
+        try await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            let dir = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Converted", isDirectory: true)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let output = dir.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".mp4")
+            let result = try MKVRemuxer.remux(source, to: output, progress: progress)
+            return (output, result)
+        }.value
+    }
+
+    /// 把转好的 MP4（和文字字幕）存进下载列表，「文件」App 里可见、可存相册
+    private func saveConverted() {
+        guard let converted else { return }
+        let base = url.deletingPathExtension().lastPathComponent
+        let subtitles = convertSubtitles
+        Task {
+            do {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+                try FileManager.default.copyItem(at: converted, to: copy)
+                try await app.downloads.importLocalFile(copy, name: base + ".mp4", source: "格式转换")
+                for (i, sub) in subtitles.enumerated() {
+                    let tag = [sub.language, sub.name].filter { !$0.isEmpty }.first ?? "\(i + 1)"
+                    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".srt")
+                    try Data(sub.srt.utf8).write(to: file)
+                    try await app.downloads.importLocalFile(file, name: "\(base).\(tag).srt", source: "格式转换")
+                }
+                app.show(subtitles.isEmpty ? "已保存 MP4 到下载" : "已保存 MP4 和 \(subtitles.count) 个字幕到下载")
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
+        }
     }
 }
 

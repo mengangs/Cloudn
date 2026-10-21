@@ -28,3 +28,14 @@ final class LivePhotoParsingTests: XCTestCase {
         XCTAssertEqual(DouyinParser.liveVideoURL(in: plain), "")
     }
 }
+
+/// 抖音原画：只在比列表最高档大（或那档大小未知）时提到最前
+final class DouyinOriginalTests: XCTestCase {
+    func testShouldPromote() {
+        XCTAssertTrue(DouyinParser.shouldPromote(original: 120_000_000, top: 30_000_000))
+        XCTAssertTrue(DouyinParser.shouldPromote(original: 30_000_000, top: -1))
+        // 超分档比原文件大（jiji262 记录的反例）：不提
+        XCTAssertFalse(DouyinParser.shouldPromote(original: 31_700_000, top: 47_400_000))
+        XCTAssertFalse(DouyinParser.shouldPromote(original: 0, top: -1))
+    }
+}

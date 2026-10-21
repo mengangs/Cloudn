@@ -48,7 +48,8 @@ struct DouyinParser: VideoParser {
             }
             medias = list
         } else {
-            medias = await videoMedias(base: base, bitRates: p["bitRates"].array, fallback: video, uri: p["uri"].string)
+            medias = await videoMedias(base: base, bitRates: p["bitRates"].array, fallback: video, uri: p["uri"].string,
+                                       needCookie: p["needCookie"].bool)
         }
         let cover = p["cover"].string
         return VideoParseResult(platform: platform, title: title, author: p["author"].string,
@@ -83,8 +84,10 @@ struct DouyinParser: VideoParser {
             let play = item["video"].object("play_addr", "playAddr")
             // playwm → play：去水印的关键一步
             let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) ?? ""
+            let uri = [play["uri"].string, item["video"]["vid"].string, item["video"]["download_addr"]["uri"].string].first { !$0.isEmpty } ?? ""
             medias += await videoMedias(base: base, bitRates: item["video"].arrayValue("bit_rate", "bitRate"),
-                                        fallback: url.replacingOccurrences(of: "playwm", with: "play"), uri: play["uri"].string)
+                                        fallback: url.replacingOccurrences(of: "playwm", with: "play"), uri: uri,
+                                        needCookie: item["video"]["is_need_set_cookie"].bool)
             cover = item["video"]["cover"]["url_list"][0].string
         }
         let author = item["author"]
@@ -133,7 +136,7 @@ struct DouyinParser: VideoParser {
         let size: Int64
         let hevc: Bool
 
-        var label: String { (shortSide > 0 ? "\(shortSide)P" : "原画") + (hevc ? " · HEVC" : "") }
+        var label: String { (shortSide > 0 ? "\(shortSide)P" : "默认") + (hevc ? " · HEVC" : "") }
     }
 
     /// 作品数据里的 bit_rate 列表 → 各档清晰度（最高在前）。同一分辨率只留一条：优先 H.264（兼容最好），同编码取码率高的
@@ -141,7 +144,9 @@ struct DouyinParser: VideoParser {
         var best: [Int: Quality] = [:]
         for item in bitRates {
             let play = item.object("play_addr", "playAddr")
-            guard let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }) else { continue }
+            // 图文作品的 video 其实是背景音乐（mp3 / douyinstatic），不算清晰度
+            guard let url = play.arrayValue("url_list", "urlList").map({ $0.string }).first(where: { !$0.isEmpty }),
+                  !url.contains("douyinstatic"), !url.substringBefore("?").hasSuffix(".mp3") else { continue }
             let side = min(play["width"].int, play["height"].int)
             let hevc = item["is_bytevc1"].int == 1 || item["is_h265"].int == 1
             let q = Quality(url: url.replacingOccurrences(of: "playwm", with: "play"), shortSide: side,
@@ -157,21 +162,52 @@ struct DouyinParser: VideoParser {
     }
 
     /// 视频的各档清晰度：有 bit_rate 列表就全列出来（最高画质默认选中）；
-    /// 没有时按分辨率逐档探测播放接口，取文件最大的那一档（参考 ParseHub）
-    private func videoMedias(base: String, bitRates: [JSON], fallback: String, uri: String) async -> [VideoMedia] {
-        let list = Self.qualities(bitRates)
-        if !list.isEmpty {
-            return list.enumerated().map { i, q in
-                VideoMedia(url: q.url, kind: .video, fileName: i == 0 ? "\(base).mp4" : "\(base)_\(q.shortSide)P.mp4",
-                           size: q.size > 0 ? q.size : -1, headers: mediaHeaders, quality: q.label, variantGroup: "video")
-            }
+    /// 同时探测「原画」（上传者的原始文件，见 probeOriginal），比列表里最高档大时排在最前、默认选中。
+    /// 列表为空时按分辨率逐档探测播放接口，取文件最大的那一档（参考 ParseHub）
+    private func videoMedias(base: String, bitRates: [JSON], fallback: String, uri: String, needCookie: Bool = false) async -> [VideoMedia] {
+        async let probedOriginal = Self.probeOriginal(uri: uri, needCookie: needCookie)
+        var list = Self.qualities(bitRates)
+        if list.isEmpty, !uri.isEmpty, let probed = await Self.probeBest(uri: uri) {
+            list = [Quality(url: probed.url, shortSide: 0, bitrate: 0, size: probed.size, hevc: false)]
         }
-        if !uri.isEmpty, let probed = await Self.probeBest(uri: uri) {
-            return [VideoMedia(url: probed.url, kind: .video, fileName: "\(base).mp4", size: probed.size, headers: mediaHeaders,
-                               quality: "最高画质")]
+        if list.isEmpty, !fallback.isEmpty {
+            list = [Quality(url: fallback, shortSide: 0, bitrate: 0, size: -1, hevc: false)]
         }
-        guard !fallback.isEmpty else { return [] }
-        return [VideoMedia(url: fallback, kind: .video, fileName: "\(base).mp4", headers: mediaHeaders)]
+        var labels = list.map(\.label)
+        if list.count == 1 && list[0].shortSide == 0 { labels = [list[0].size > 0 ? "最高画质" : ""] }
+        if let original = await probedOriginal, Self.shouldPromote(original: original.size, top: list.first?.size ?? -1) {
+            list.insert(Quality(url: original.url, shortSide: 0, bitrate: 0, size: original.size, hevc: original.hevc), at: 0)
+            labels.insert("原画" + (original.hevc ? " · HEVC" : ""), at: 0)
+        }
+        let group = list.count > 1 ? "video" : ""
+        return list.enumerated().map { i, q in
+            let suffix = q.shortSide > 0 ? "\(q.shortSide)P" : "v\(i + 1)"
+            return VideoMedia(url: q.url, kind: .video, fileName: i == 0 ? "\(base).mp4" : "\(base)_\(suffix).mp4",
+                              size: q.size > 0 ? q.size : -1, headers: mediaHeaders, quality: labels[i], variantGroup: group)
+        }
+    }
+
+    /// 原画只在比列表里最高一档大（或那档大小未知）时提到最前：有的作品「超分」档反而比原文件大（参考 jiji262/douyin-downloader）
+    static func shouldPromote(original: Int64, top: Int64) -> Bool {
+        original > 1024 && (top <= 0 || original > top)
+    }
+
+    /// 原画：播放接口 ratio=default 会跳到上传者的原始文件（可能是 4K / 60 帧 HEVC），bit_rate 列表里没有它
+    /// （参考 zyipeng/video-downloader、jiji262/douyin-downloader，MIT）。用 HEAD 跟随跳转，只认视频类型，
+    /// 取跳转后的 CDN 地址与大小；不需要登录
+    static func probeOriginal(uri: String, needCookie: Bool) async -> (url: String, size: Int64, hevc: Bool)? {
+        guard !uri.isEmpty else { return nil }
+        var url = "https://aweme.snssdk.com/aweme/v1/play/?video_id=\(uri.formEncoded)&ratio=default&line=0&is_play_url=1"
+            + "&watermark=0&source=PackSourceEnum_PUBLISH"
+        if needCookie { url += "&ss_is_p_v_ss=1" }
+        guard let r = try? await HTTPClient.shared.send(HTTPRequest(url: url, method: "HEAD", headers: [
+            ("User-Agent", VideoHTTP.uaIPhone), ("Referer", "https://www.douyin.com/")
+        ], timeout: 10)), r.isSuccess, (r.header("Content-Type") ?? "").lowercased().hasPrefix("video/") else { return nil }
+        let size = Int64(r.header("Content-Length") ?? "") ?? 0
+        guard size > 1024 else { return nil }
+        let final = r.url.isEmpty ? url : r.url
+        let lower = final.lowercased()
+        return (final, size, lower.contains("bytevc1") || lower.contains("hevc") || lower.contains("h265"))
     }
 
     /// 逐档 HEAD 探测无水印播放接口，取 Content-Length 最大的
@@ -332,7 +368,8 @@ struct DouyinParser: VideoParser {
           video: video, images: images, lives: lives, domImages: domImages,
           cover: (v && (firstUrl(v.cover) || firstUrl(v.origin_cover))) || '',
           bitRates: (v && (v.bit_rate || v.bitRate)) || [],
-          uri: (v && v.play_addr && v.play_addr.uri) || ''
+          uri: (v && ((v.play_addr && v.play_addr.uri) || v.vid || (v.download_addr && v.download_addr.uri))) || '',
+          needCookie: !!(v && v.is_need_set_cookie)
         });
       } catch (e) { return JSON.stringify({ error: 'js: ' + e }); }
     })()
