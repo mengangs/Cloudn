@@ -1,6 +1,7 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
 import CloudnKit
 import SwiftUI
+import UIKit
 import WebKit
 
 /// 网页登录：独立的非持久化 WKWebView 会话，登录完成后读取该平台域下的 Cookie，校验后存入钥匙串
@@ -40,6 +41,14 @@ struct WebLoginView: View {
                                     Button("改用电脑版页面") { store.switchToDesktop(kind.loginURL) }
                                         .buttonStyle(PillButtonStyle(kind: .secondary, height: 42))
                                 }
+                                Button("复制排查信息") {
+                                    Task {
+                                        let info = await store.diagnostics()
+                                        Clipboard.copy(info)
+                                        app.show("已复制排查信息，可以粘贴发给开发者")
+                                    }
+                                }
+                                .font(.footnote.weight(.medium))
                             }
                             .padding(24)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -185,6 +194,15 @@ final class WebLoginStore {
         }
     }
 
+    /// 排查信息（页面结构摘要、出错的脚本 / 资源、UA），同时写进诊断日志
+    func diagnostics() async -> String {
+        guard let webView else { return "没有网页" }
+        let value = (try? await webView.evaluateJavaScript(LoginWebView.diagnosticsScript) as? String) ?? "读取失败"
+        let text = "Cloudn 网页登录排查\n系统 iOS \(UIDevice.current.systemVersion) · 电脑版页面 \(desktop ? "是" : "否")\n\(value)"
+        Log.info("网页登录：排查信息 \(value)")
+        return text
+    }
+
     func reload(_ url: URL) {
         loadError = nil
         blank = false
@@ -281,9 +299,22 @@ struct LoginWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
     static let resourceErrorScript = """
-    (function(){try{window.__cloudnErrors=[];window.addEventListener('error',function(e){var t=e.target;
-      var s=t&&(t.src||t.href);if(s){window.__cloudnErrors.push(String(s).split('?')[0]);}
-      else if(e.message){window.__cloudnErrors.push('js:'+String(e.message).slice(0,80));}},true);}catch(x){}})()
+    (function(){try{window.__cloudnErrors=[];var push=function(m){if(window.__cloudnErrors.length<30)window.__cloudnErrors.push(m);};
+      window.addEventListener('error',function(e){var t=e.target;
+      var s=t&&(t.src||t.href);if(s){push('res:'+String(s).split('?')[0]);}
+      else if(e.message){push('js:'+String(e.message).slice(0,160)+' @'+String(e.filename||'').split('?')[0].slice(-60)+':'+e.lineno);}},true);
+      window.addEventListener('unhandledrejection',function(e){var r=e.reason;push('promise:'+String((r&&(r.message||r))||'').slice(0,160));});
+      var ce=console.error;console.error=function(){try{push('console:'+Array.prototype.slice.call(arguments).map(String).join(' ').slice(0,160));}catch(x){}
+        return ce.apply(console,arguments);};}catch(x){}})()
+    """
+
+    /// 页面空白时收集的排查信息：地址、标题、加载状态、页面结构摘要、出错的资源 / 脚本、UA
+    static let diagnosticsScript = """
+    (function(){var b=document.body;var h=b?b.innerHTML:'';
+      return JSON.stringify({url:location.href,title:document.title,ready:document.readyState,
+        bodyChars:h.length,text:b?(b.innerText||'').trim().slice(0,200):'',
+        html:h.replace(/\\s+/g,' ').slice(0,600),scripts:document.scripts.length,
+        sw:('serviceWorker' in navigator),errors:window.__cloudnErrors||[],ua:navigator.userAgent});})()
     """
 
     /// 强制按桌面宽度渲染

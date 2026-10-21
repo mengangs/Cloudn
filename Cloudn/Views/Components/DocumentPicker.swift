@@ -1,4 +1,5 @@
 // Cloudn · SPDX-License-Identifier: AGPL-3.0-or-later
+import CloudnKit
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -31,6 +32,7 @@ private struct DocumentPickerPresenter: UIViewControllerRepresentable {
         // 等这一轮界面更新结束再弹，避免与 SwiftUI 的转场冲突
         DispatchQueue.main.async {
             guard let top = Self.topController(from: host) else { return coordinator.finish(nil) }
+            Log.info("文件选择器：弹出（\(asCopy ? "复制" : "就地打开")，类型 \(types.map(\.identifier).joined(separator: ","))）")
             top.present(picker, animated: true)
             picker.presentationController?.delegate = coordinator
         }
@@ -48,10 +50,19 @@ private struct DocumentPickerPresenter: UIViewControllerRepresentable {
 
         init(_ parent: DocumentPickerPresenter) { self.parent = parent }
 
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { finish(urls) }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finish(nil) }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            Log.info("文件选择器：选中 \(urls.count) 项 \(urls.map(\.lastPathComponent).joined(separator: "、"))")
+            finish(urls)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            Log.info("文件选择器：取消")
+            finish(nil)
+        }
         /// 下滑收起
-        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { finish(nil) }
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            Log.info("文件选择器：下滑收起")
+            finish(nil)
+        }
 
         func finish(_ urls: [URL]?) {
             guard picker != nil else { return }
