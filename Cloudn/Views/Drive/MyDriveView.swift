@@ -123,7 +123,8 @@ struct DriveFolderView: View {
         }
         .documentPicker(isPresented: $importingFiles, types: [.item], multiple: true) { urls in
             guard !urls.isEmpty else { return }
-            let files: [(url: URL, temporary: Bool, scoped: Bool)] = urls.map { (url: $0, temporary: false, scoped: true) }
+            // 选择器交回的是临时副本：上传完删除
+            let files: [(url: URL, temporary: Bool, scoped: Bool)] = urls.map { (url: $0, temporary: true, scoped: false) }
             app.uploads.enqueue(files, platform: platform, folderId: folderId)
         }
         .photosPicker(isPresented: $pickingMedia, selection: $mediaItems, matching: .any(of: [.images, .videos]),

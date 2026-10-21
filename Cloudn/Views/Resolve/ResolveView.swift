@@ -97,7 +97,10 @@ struct ResolveView: View {
             }
             .navigationDestination(item: $torrentTarget) { TorrentView(target: $0) }
             .documentPicker(isPresented: $importingTorrent, types: [.torrent, .data]) { urls in
-                if let url = urls.first { app.openTorrentFile(url) }
+                if let url = urls.first {
+                    app.openTorrentFile(url)
+                    try? FileManager.default.removeItem(at: url)
+                }
             }
             .fullScreenCover(item: $sniffTarget) { SnifferView(url: $0.url) }
             .sheet(item: $batchJob) { BatchView(job: $0) }

@@ -154,7 +154,7 @@ struct SettingsView: View {
         .paperList()
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
-        .documentPicker(isPresented: $pickingFolder, types: [.folder]) { urls in
+        .documentPicker(isPresented: $pickingFolder, types: [.folder], asCopy: false) { urls in
             if let url = urls.first { app.settings.setExportFolder(url) }
         }
     }

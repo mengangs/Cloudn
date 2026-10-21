@@ -11,6 +11,7 @@ private struct DocumentPickerPresenter: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let types: [UTType]
     let multiple: Bool
+    let asCopy: Bool
     let onPick: ([URL]) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -21,8 +22,9 @@ private struct DocumentPickerPresenter: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
         guard isPresented, coordinator.picker == nil else { return }
-        // asCopy: false —— 拿到原文件（安全作用域），大文件不必先复制一份
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
+        // asCopy: true —— 系统先复制一份到本应用的临时目录再交回（就地打开在部分系统版本上点「打开」会没反应）；
+        // 选文件夹只能就地打开（asCopy: false，拿到安全作用域地址）
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: asCopy)
         picker.allowsMultipleSelection = multiple
         picker.delegate = coordinator
         coordinator.picker = picker
@@ -62,9 +64,11 @@ private struct DocumentPickerPresenter: UIViewControllerRepresentable {
 
 extension View {
     /// 用系统文件选择器选文件 / 文件夹
-    func documentPicker(isPresented: Binding<Bool>, types: [UTType], multiple: Bool = false, onPick: @escaping ([URL]) -> Void) -> some View {
+    /// asCopy 为 true 时交回的是临时副本（用完由调用方删除）；为 false 时是原文件的安全作用域地址
+    func documentPicker(isPresented: Binding<Bool>, types: [UTType], multiple: Bool = false, asCopy: Bool = true,
+                        onPick: @escaping ([URL]) -> Void) -> some View {
         background(
-            DocumentPickerPresenter(isPresented: isPresented, types: types, multiple: multiple, onPick: onPick)
+            DocumentPickerPresenter(isPresented: isPresented, types: types, multiple: multiple, asCopy: asCopy, onPick: onPick)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         )

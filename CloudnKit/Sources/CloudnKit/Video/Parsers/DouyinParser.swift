@@ -15,7 +15,7 @@ struct DouyinParser: VideoParser {
         let type = Rx(#"/(?:share/)?(note|slides)/"#).first(in: link.url) == nil ? "video" : "note"
         if let extractor,
            let text = await extractor.extract(url: "https://www.douyin.com/\(type)/\(link.id)", userAgent: VideoHTTP.uaChrome, cookie: cookie,
-                                              documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type),
+                                              documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type, id: link.id),
                                               extractScript: Self.extractJS, timeout: 40),
            let payload = JSON(text: text), payload["error"].string.isEmpty {
             if let result = await build(link, payload) { return result }
@@ -236,19 +236,37 @@ struct DouyinParser: VideoParser {
     })();
     """#
 
-    static func readyJS(_ type: String) -> String {
+    /// 视频：等到钩住作品接口的响应。图文：作品接口的响应（实况图的视频只在那里）到了就好；
+    /// 页面没自己请求时，图片出现 1.5 秒后由页面代发一次（页面的安全脚本会给它补上签名参数），
+    /// 再等不到就在图片出现 8 秒后只用页面上的图片
+    static func readyJS(_ type: String, id: String) -> String {
         if type == "video" {
             return "(function(){var r=window.__cloudnAwemeDetail;return (typeof r==='string'&&r.length>0);})()"
         }
+        let safeID = id.filter { $0.isNumber }
         return #"""
         (function () {
+          if (window.__cloudnAwemeDetail) return true;
+          var now = Date.now();
+          var has = false;
           var imgs = document.querySelectorAll('img');
           for (var i = 0; i < imgs.length; i++) {
             var s = imgs[i].src || '';
             if (s.indexOf('douyinpic.com') >= 0 && s.indexOf('WEBPC_RELATED') < 0 &&
-                (s.indexOf('tplv-dy-aweme-images') >= 0 || s.indexOf('PackSourceEnum_AWEME_DETAIL') >= 0)) return true;
+                (s.indexOf('tplv-dy-aweme-images') >= 0 || s.indexOf('PackSourceEnum_AWEME_DETAIL') >= 0)) { has = true; break; }
           }
-          return !!window.__cloudnAwemeDetail;
+          if (!has) return false;
+          if (!window.__cloudnImgAt) window.__cloudnImgAt = now;
+          if (!window.__cloudnAsked && now - window.__cloudnImgAt > 1500) {
+            window.__cloudnAsked = true;
+            try {
+              var x = new XMLHttpRequest();
+              x.open('GET', '/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=\#(safeID)');
+              x.withCredentials = true;
+              x.send();
+            } catch (e) {}
+          }
+          return now - window.__cloudnImgAt > 8000;
         })()
         """#
     }
@@ -260,6 +278,20 @@ struct DouyinParser: VideoParser {
         var raw = window.__cloudnAwemeDetail || '';
         var d = null;
         if (raw) { try { var root = JSON.parse(raw); d = root.aweme_detail || (root.data && root.data.aweme_detail) || null; } catch (e) {} }
+        // 没钩到接口时，试页面内嵌的 RENDER_DATA（URL 编码的 JSON），找带 images 的作品对象
+        function findAweme(n, depth) {
+          if (!n || typeof n !== 'object' || depth > 8) return null;
+          if (!Array.isArray(n) && Array.isArray(n.images) && n.images.length && (n.awemeId || n.aweme_id || n.desc !== undefined)) return n;
+          var list = Array.isArray(n) ? n : Object.keys(n).map(function (k) { return n[k]; });
+          for (var i = 0; i < list.length; i++) { var r = findAweme(list[i], depth + 1); if (r) return r; }
+          return null;
+        }
+        if (!d) {
+          try {
+            var rd = document.getElementById('RENDER_DATA');
+            if (rd && rd.textContent) d = findAweme(JSON.parse(decodeURIComponent(rd.textContent)), 0);
+          } catch (e) {}
+        }
         function firstUrl(n) { if (!n) return ''; var l = n.url_list || n.urlList; return (l && l.length) ? String(l[0] || '') : ''; }
         // 实况图的视频：字段名各版本不一（video.play_addr / playAddr / bit_rate…），在这张图的数据里找第一个视频地址
         function isVideoUrl(u) { return /^https?:/.test(u) && /douyinvod|aweme\/v1\/play|video_id=|mime_type=video|\.mp4/.test(u) && !/\.(jpe?g|png|webp|heic|image)/.test(u.split('?')[0]); }
