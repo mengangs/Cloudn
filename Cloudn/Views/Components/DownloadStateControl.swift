@@ -51,14 +51,13 @@ struct DownloadStateControl: View {
 struct SelectMark: View {
     let on: Bool
     var size: CGFloat = 22
-    @Environment(\.onAccent) private var onAccent
-
     var body: some View {
         ZStack {
             Circle().strokeBorder(on ? Color.clear : Color.hairline, lineWidth: 1.5)
             if on {
                 Circle().fill(.tint)
-                Image(icon: .check).resizable().scaledToFit().frame(width: size * 0.5, height: size * 0.5).foregroundStyle(onAccent)
+                Image(icon: .check).resizable().scaledToFit().frame(width: size * 0.5, height: size * 0.5)
+                    .modifier(OnAccentForeground(fallback: nil))
             }
         }
         .frame(width: size, height: size)

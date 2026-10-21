@@ -148,7 +148,7 @@ jobs:
         if: always() && github.ref == 'refs/heads/wip-shots'
         run: |
           mkdir -p preview
-          for f in "$SHOTS"/*.png; do sips -s format jpeg -s formatOptions 70 -Z 1000 "$f" --out "preview/$(basename "${f%.png}").jpg" >/dev/null; done
+          for f in "$SHOTS"/*.png; do sips -s format jpeg -s formatOptions 88 -Z 1800 "$f" --out "preview/$(basename "${f%.png}").jpg" >/dev/null; done
           cp "$SHOTS"/log-*.txt preview/ 2>/dev/null || true
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"

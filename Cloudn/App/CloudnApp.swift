@@ -27,7 +27,7 @@ struct CloudnApp: App {
             .onOpenURL { model.handle(url: $0) }
             .preferredColorScheme(model.settings.appearance.colorScheme)
             .tint(model.settings.accentColor)
-            .environment(\.onAccent, model.settings.onAccentColor)
+            .environment(\.accentTint, model.settings.accentUIColor)
         }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseChanged(phase)

@@ -689,9 +689,15 @@ struct DownloadRow: View {
                 }
                 HStack(spacing: 6) {
                     Text(statusText).foregroundStyle(statusColor)
-                    if !item.request.source.isEmpty { Text("· \(item.request.source)") }
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if !item.request.source.isEmpty {
+                        Text("· \(item.request.source)").lineLimit(1).truncationMode(.tail)
+                    }
                     Spacer(minLength: 0)
                     Text(sizeText).monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 .font(.caption)
                 .foregroundStyle(Color.ink3)

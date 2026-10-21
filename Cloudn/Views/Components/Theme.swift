@@ -287,25 +287,39 @@ struct PillButtonStyle: ButtonStyle {
     }
 }
 
-/// 强调色底上的前景色（按对比度选白色或深墨色，由根视图注入）
-private struct OnAccentKey: EnvironmentKey {
-    static let defaultValue = Color.white
+/// 当前强调色（浅色 / 深色各一份的动态 UIColor，由根视图注入）
+private struct AccentTintKey: EnvironmentKey {
+    static let defaultValue = UIColor(named: "AccentColor") ?? .systemOrange
 }
 
 extension EnvironmentValues {
-    var onAccent: Color {
-        get { self[OnAccentKey.self] }
-        set { self[OnAccentKey.self] = newValue }
+    var accentTint: UIColor {
+        get { self[AccentTintKey.self] }
+        set { self[AccentTintKey.self] = newValue }
     }
 }
 
-/// fallback 为 nil 时用强调色底上的前景色，否则用 fallback
+/// fallback 为 nil 时用强调色底上的前景色（按对比度选白色或深墨色），否则用 fallback
 struct OnAccentForeground: ViewModifier {
     let fallback: Color?
-    @Environment(\.onAccent) private var onAccent
+    @Environment(\.accentTint) private var accentTint
+    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
-        content.foregroundStyle(fallback ?? onAccent)
+        content.foregroundStyle(fallback ?? Self.readable(on: accentTint, dark: colorScheme == .dark))
+    }
+
+    /// 按当前浅色 / 深色显式取出强调色再按对比度选字色。
+    /// 不能交给动态颜色自己解析：Color(uiColor:) 的动态回调拿到的常是浅色特征，
+    /// 深色模式提亮的陶土色上就成了看不清的白字
+    static func readable(on accent: UIColor, dark: Bool) -> Color {
+        let resolved = accent.resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        resolved.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let l = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        let onWhite = 1.05 / (l + 0.05), onDark = (l + 0.05) / 0.0575
+        return onWhite >= onDark ? .white : Color(red: 0x16 / 255, green: 0x15 / 255, blue: 0x13 / 255)
     }
 }
 

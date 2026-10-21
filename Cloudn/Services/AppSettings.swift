@@ -299,19 +299,6 @@ extension AppSettings {
     }
 
     var accentColor: Color { Color(uiColor: accentUIColor) }
-
-    /// 强调色底上的文字 / 图标颜色：按对比度在白色与深墨色之间选（深色模式的陶土上白字只有约 2.6:1）
-    var onAccentColor: Color {
-        let accent = accentUIColor
-        return Color(uiColor: UIColor { trait in
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            accent.resolvedColor(with: trait).getRed(&r, green: &g, blue: &b, alpha: &a)
-            func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-            let l = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-            let onWhite = 1.05 / (l + 0.05), onDark = (l + 0.05) / 0.0575
-            return onWhite >= onDark ? .white : UIColor(red: 0x16 / 255, green: 0x15 / 255, blue: 0x13 / 255, alpha: 1)
-        })
-    }
 }
 
 extension UIColor {

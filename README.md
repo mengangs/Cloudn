@@ -11,9 +11,24 @@
 
 网盘分享、短视频、网页视频、GitHub、磁力链接，一个 App 解析、预览、高速下载。
 
-iOS 17+ · SwiftUI 原生 · 开源免费 · 无广告 · 本地解析
+[![最新版本](https://img.shields.io/github/v/release/mengangs/Cloudn?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=b5532f)](https://github.com/mengangs/Cloudn/releases/latest)
+[![iOS 17+](https://img.shields.io/badge/iOS-17%2B-1f1e1c?logo=apple)](#安装)
+[![SwiftUI](https://img.shields.io/badge/SwiftUI-%E5%8E%9F%E7%94%9F-f05138?logo=swift&logoColor=white)](#参与开发)
+[![CI](https://github.com/mengangs/Cloudn/actions/workflows/ci.yml/badge.svg)](https://github.com/mengangs/Cloudn/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-4b5d4f)](LICENSE)
 
-[下载安装](#安装) · [支持的平台](#支持的平台) · [功能一览](#功能一览) · [常见问题](#常见问题)
+开源免费 · 无广告 · 无服务器 · 所有解析在手机本地完成
+
+[**下载 v1.0.0**](https://github.com/mengangs/Cloudn/releases/latest) · [支持的平台](#支持的平台) · [功能一览](#功能一览) · [常见问题](#常见问题)
+
+<br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/showcase-dark.jpg">
+  <img src="docs/assets/screenshots/showcase-light.jpg" width="100%" alt="Cloudn 截图：解析、作品详情、下载、我的">
+</picture>
+
+<sub>解析 · 作品详情 · 下载 · 我的　—　跟随系统浅色 / 深色，主题色可自定义</sub>
 
 </div>
 
@@ -26,6 +41,22 @@ iOS 17+ · SwiftUI 原生 · 开源免费 · 无广告 · 本地解析
 - **清晰度由你挑**：抖音、哔哩哔哩、YouTube、X 等平台列出全部画质，默认选最高的原画。
 - **网页里的视频也能下**：专门解析不了的网站，在内置浏览器里打开，自动嗅探正在播放的视频；只有 blob 流的网页可以边播边录。
 - **你的数据只在你的手机上**：除了平台自己的接口，Cloudn 不调用任何第三方服务（唯一例外是夸克 / UC 中文口令，见下文，需你同意才会使用）；登录凭证只存在系统钥匙串里。
+
+<details>
+<summary><b>更多截图：iPad、图片查看、设置</b></summary>
+<br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/ipad-dark.jpg">
+  <img src="docs/assets/screenshots/ipad-light.jpg" width="100%" alt="iPad 上的下载页">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/extras-dark.jpg">
+  <img src="docs/assets/screenshots/extras-light.jpg" width="60%" alt="图片查看与设置">
+</picture>
+
+</details>
 
 ## 支持的平台
 
@@ -96,9 +127,11 @@ iOS 17+ · SwiftUI 原生 · 开源免费 · 无广告 · 本地解析
 
 Cloudn 没有上架 App Store，可以通过以下方式安装：
 
-1. 在 [Releases](https://github.com/mengangs/Cloudn/releases) 下载最新版 IPA；想尝鲜可以在 [Actions](https://github.com/mengangs/Cloudn/actions) 最近一次成功运行的 Artifacts 里取 `Cloudn-unsigned-ipa`。
-2. 用 AltStore、Sideloadly、TrollStore 等工具签名安装。
-3. 以后 App 内「设置 › 检查更新」会提示新版本。
+1. 在 [Releases](https://github.com/mengangs/Cloudn/releases/latest) 下载最新版 `Cloudn-vX.Y.Z.ipa`（附带 `SHA256SUMS.txt` 可校验）；想尝鲜可以在 [Actions](https://github.com/mengangs/Cloudn/actions) 最近一次成功运行的 Artifacts 里取 `Cloudn-unsigned-ipa`。
+2. IPA 未签名，用 AltStore、SideStore、Sideloadly、TrollStore 等工具签名安装，需要 iOS 17 及以上。
+3. 以后 App 内「设置 › 检查更新」会提示新版本，可直接下载。
+
+> 部分企业证书 / 重签安装下，系统不允许 App 直接访问外部文件夹：「完成后保存到」选文件夹没反应时，在下载页点「选择」，勾选文件后用「存储到「文件」」导出即可。
 
 也可以自己编译：用 Xcode 16 打开 `Cloudn.xcodeproj`，选择你的开发者团队后运行。
 
@@ -134,6 +167,18 @@ Cloudn 没有上架 App Store，可以通过以下方式安装：
 <summary><b>下载的文件在哪？</b></summary>
 
 「文件」App →「我的 iPhone」→ Cloudn。也可以在「设置 › 下载」里设置完成后自动移动到其他文件夹，例如 iCloud 云盘。
+</details>
+
+<details>
+<summary><b>Instagram 登录页是空白的？</b></summary>
+
+Instagram 会直接拒绝部分 VPN / 机房线路（返回 429 空白页），App 会提示「当前网络被站点拒绝」。换一个节点或改用家庭网络后再登录即可，这不是 App 能绕开的。
+</details>
+
+<details>
+<summary><b>抖音保存到相册能按作者命名吗？</b></summary>
+
+可以。在「设置 › 解析」打开「抖音按「昵称_抖音号_发布时间」命名」，下载和存入相册的文件名就会是这种格式。
 </details>
 
 <details>
