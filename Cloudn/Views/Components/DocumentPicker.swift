@@ -85,3 +85,56 @@ extension View {
         )
     }
 }
+
+/// 把文件导出（复制）到「文件」App 里用户选的位置。导出由系统完成，不需要 App 自己拿到目标文件夹的访问权限——
+/// 有的签名安装方式下系统不给「就地打开」的权限（选文件夹点「打开」没反应），这条路仍然可用
+private struct ExportPickerPresenter: UIViewControllerRepresentable {
+    @Binding var urls: [URL]
+    let onDone: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+
+    func updateUIViewController(_ host: UIViewController, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        guard !urls.isEmpty, coordinator.picker == nil else { return }
+        let picker = UIDocumentPickerViewController(forExporting: urls, asCopy: true)
+        picker.delegate = coordinator
+        coordinator.picker = picker
+        let count = urls.count
+        DispatchQueue.main.async {
+            guard let top = DocumentPickerPresenter.topController(from: host) else { return coordinator.finish(false) }
+            Log.info("文件选择器：导出 \(count) 个文件")
+            top.present(picker, animated: true)
+            picker.presentationController?.delegate = coordinator
+        }
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
+        var parent: ExportPickerPresenter
+        var picker: UIDocumentPickerViewController?
+        init(_ parent: ExportPickerPresenter) { self.parent = parent }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            Log.info("文件选择器：已导出 \(urls.count) 个文件")
+            finish(true)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finish(false) }
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { finish(false) }
+
+        func finish(_ done: Bool) {
+            guard picker != nil else { return }
+            picker = nil
+            parent.urls = []
+            parent.onDone(done)
+        }
+    }
+}
+
+extension View {
+    /// urls 非空时弹出系统导出界面，把这些文件复制到「文件」App 里选的位置；结束后 urls 清空
+    func exportPicker(urls: Binding<[URL]>, onDone: @escaping (Bool) -> Void) -> some View {
+        background(ExportPickerPresenter(urls: urls, onDone: onDone).frame(width: 0, height: 0).accessibilityHidden(true))
+    }
+}

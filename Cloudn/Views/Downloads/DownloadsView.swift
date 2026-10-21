@@ -8,6 +8,8 @@ struct DownloadsView: View {
     @State private var filter: Filter = .all
     @State private var previewURL: URL?
     @State private var selecting = false
+    /// 要导出到「文件」App 的文件（非空时弹出系统导出界面）
+    @State private var exportURLs: [URL] = []
     @State private var selection = Set<UUID>()
     @State private var deleting: DownloadItem?
     @State private var confirmClear = false
@@ -218,6 +220,11 @@ struct DownloadsView: View {
                     }
                 }
             }
+            .exportPicker(urls: $exportURLs) { done in
+                guard done else { return }
+                app.show("已存储到「文件」")
+                withAnimation(.snappy(duration: 0.25)) { selecting = false; selection = [] }
+            }
             .safeAreaInset(edge: .bottom) {
                 if selecting { selectionBar.padding(.horizontal, 16).padding(.bottom, 8) }
             }
@@ -245,6 +252,12 @@ struct DownloadsView: View {
                 if size > 0 { Text(ByteFormat.string(size)).font(.monoSmall).foregroundStyle(Color.ink3) }
             }
             Spacer(minLength: 0)
+            let files = chosen.filter { $0.status == .completed }.compactMap { app.downloads.fileURL($0) }
+            if !files.isEmpty {
+                Button { exportURLs = files } label: { IconView(.folder, size: 16) }
+                    .buttonStyle(CircleIconButtonStyle(size: 40))
+                    .accessibilityLabel("存储到「文件」")
+            }
             if canResume {
                 Button { app.downloads.resume(chosen.filter { $0.status == .paused || $0.status == .failed }) } label: {
                     IconView(.play, size: 16)

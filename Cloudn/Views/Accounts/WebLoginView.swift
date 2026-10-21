@@ -37,7 +37,7 @@ struct WebLoginView: View {
                                 Text(store.blankHint).font(.footnote).foregroundStyle(Color.ink2).multilineTextAlignment(.center)
                                 Button("重试") { store.reload(kind.loginURL) }
                                     .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
-                                if !store.desktop {
+                                if !store.desktop && store.lastStatus != 429 && store.lastStatus != 403 {
                                     Button("改用电脑版页面") { store.switchToDesktop(kind.loginURL) }
                                         .buttonStyle(PillButtonStyle(kind: .secondary, height: 42))
                                 }
@@ -153,6 +153,9 @@ final class WebLoginStore {
     var blankHint = ""
     /// 已改用电脑版页面（桌面 UA）
     var desktop = false
+    /// 最近一次主页面的 HTTP 状态码与站点（空白时据此说明原因）
+    @ObservationIgnored var lastStatus = 0
+    @ObservationIgnored var lastHost = ""
     /// 海外平台：连不上时提示开 VPN / 代理；国内网站只提示检查网络
     @ObservationIgnored var overseas = false
     @ObservationIgnored private var blankCheck: Task<Void, Never>?
@@ -187,6 +190,15 @@ final class WebLoginStore {
             let errors = parts.count > 2 ? parts[2] : ""
             guard text < 5 && controls == 0 else { return }
             Log.error("网页登录：页面空白 \(webView.url?.host ?? "")（加载失败的资源：\(errors.isEmpty ? "无记录" : errors)）")
+            let site = self.lastHost.replacingOccurrences(of: "www.", with: "")
+            if self.lastStatus == 429 || self.lastStatus == 403 {
+                // Instagram 等对它认为可疑的 IP（机房、VPN 出口）直接回 429 / 403 和空页面：换网络环境才行，换页面版本没用
+                self.blankHint = "\(site) 拒绝了这次访问（HTTP \(self.lastStatus)），返回的是空页面。"
+                    + "这通常是当前网络的出口 IP（VPN / 机房节点）被它限制了，与 App 无关，在 Safari 里打开也会是空白。\n\n"
+                    + "请换一个节点（最好是住宅 IP），或关掉 VPN 改用其他网络后重试；稍等一段时间再试也可能恢复。"
+                self.blank = true
+                return
+            }
             self.blankHint = self.overseas
                 ? "页面打开了，但脚本或图片资源没有加载出来（常见原因：VPN 只让主站走代理，没包含它的资源域名，如 cdninstagram.com、fbcdn.net）。\n\n可以把 VPN 切到全局模式后重试，或改用电脑版页面。"
                 : "页面打开了，但内容没有加载出来，可以重试或改用电脑版页面。"
@@ -206,6 +218,7 @@ final class WebLoginStore {
     func reload(_ url: URL) {
         loadError = nil
         blank = false
+        lastStatus = 0
         committed = false
         attempt += 1
         Log.info("网页登录：重试打开 \(url.absoluteString)")
@@ -381,6 +394,12 @@ struct LoginWebView: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             if navigationResponse.isForMainFrame, let http = navigationResponse.response as? HTTPURLResponse {
                 Log.info("网页登录：HTTP \(http.statusCode) \(http.url?.absoluteString ?? "")")
+                let status = http.statusCode
+                let host = http.url?.host ?? ""
+                Task { @MainActor in
+                    store?.lastStatus = status
+                    store?.lastHost = host
+                }
             }
             decisionHandler(.allow)
         }
