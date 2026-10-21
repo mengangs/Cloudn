@@ -171,7 +171,7 @@ struct FilePreviewView: View {
         let hint: String = switch kind {
         case _ where tooSmall: "文件只有 \(ByteFormat.string(fileSize))，不是完整的视频，可能下载没有成功，请重新下载"
         case _ where !(remuxIssue ?? "").isEmpty: remuxIssue ?? ""
-        case _ where canRemux: "系统播放器不支持 \(url.pathExtension.uppercased())，可以无损转成 MP4 后在这里播放（不重新编码，很快），也可以用 VLC、Infuse 等应用打开"
+        case _ where canRemux: "正在把 \(url.pathExtension.uppercased()) 换成 MP4 封装后播放：音视频原样搬过去，不重新编码、画质不变，通常几秒钟"
         case .video, .audio: "这个格式系统播放器不支持，可以用 VLC、Infuse 等应用打开"
         case .archive: "压缩包可在「文件」App 中轻点解压"
         case .apk: "安装包请用「分享」发送到对应的安装工具"
@@ -197,7 +197,7 @@ struct FilePreviewView: View {
                     if let converting {
                         VStack(spacing: 8) {
                             ProgressView(value: converting)
-                            Text("正在转换 \(Int(converting * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3)
+                            Text("正在准备播放 \(Int(converting * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3)
                         }
                         .padding(.vertical, 6)
                     } else {
@@ -226,6 +226,8 @@ struct FilePreviewView: View {
             guard remuxIssue == nil, Self.remuxable.contains(url.pathExtension.lowercased()), fileSize >= 1024 else { return }
             let source = url
             remuxIssue = await Task.detached { MKVRemuxer.check(source) ?? "" }.value
+            // 能转就直接转：只是把音视频原样换个容器（不重新编码、几秒钟），转好自动播放
+            if remuxIssue == "" { startRemux() }
         }
     }
 

@@ -156,22 +156,30 @@ struct RangeTransfer {
         if total > 0, progress.received < total { throw TransferError("下载不完整，请重试") }
     }
 
-    /// 探测响应 → (总长度, 是否支持分片)。206 时总长度只能取 Content-Range 的 `/总长`：
-    /// 它的 Content-Length 是这一段（1 字节）的长度，拿来当总长会把整个文件当成 1 字节（光鸭云盘就会这样回）。
-    /// 206 却没有可用的总长度（缺头、`/*`）时按长度未知、整体下载处理
-    static func planTotal(status: Int, headers: [String: String]) -> (total: Int64, ranged: Bool) {
-        if status == 206 {
-            if let cr = headers["content-range"], let t = Int64(cr.substringAfterLast("/").trimmed), t > 0 { return (t, true) }
-            return (-1, false)
-        }
-        if let len = headers["content-length"].flatMap({ Int64($0.trimmed) }), len > 0 { return (len, false) }
-        return (-1, false)
+    /// 分段探测（Range: bytes=0-0）的响应 → (总长度, 是否支持分片)；nil 表示这次回应不可信，要不带 Range 再问一次。
+    /// 只认 206 + `Content-Range: bytes 0-0/总长`（参考 YunX 的 ChunkDownloader）：
+    /// 206 的 Content-Length 是这一段（1 字节）的长度；有的服务器（光鸭云盘）对分段请求回 200 / 不规范的头，
+    /// 拿 Content-Length 当总长会把整个文件当成 1 字节。网页（text/html）多半是防盗链 / 过期页，不可信
+    static func planTotal(status: Int, headers: [String: String]) -> (total: Int64, ranged: Bool)? {
+        if (headers["content-type"] ?? "").lowercased().contains("text/html") { return nil }
+        guard status == 206, let cr = headers["content-range"] else { return nil }
+        let spec = cr.lowercased().replacingOccurrences(of: "bytes", with: "").trimmed
+        let parts = spec.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2, String(parts[0]).trimmed == "0-0", let total = Int64(String(parts[1]).trimmed), total > 1 else { return nil }
+        return (total, true)
     }
 
-    /// 用 Range: bytes=0-0 探测总长度与是否支持分片
-    private func plan() async throws {
+    /// 不带 Range 的探测：只认 200 + Content-Length（不是网页）；拿不到时长度未知、整体下载
+    static func plainTotal(status: Int, headers: [String: String]) -> Int64 {
+        if (headers["content-type"] ?? "").lowercased().contains("text/html") { return -1 }
+        guard status == 200, let len = headers["content-length"].flatMap({ Int64($0.trimmed) }), len > 0 else { return -1 }
+        return len
+    }
+
+    /// 只取响应头（拿到即断开）
+    private func head(range: Bool) async throws -> (status: Int, headers: [String: String]) {
         var request = makeRequest()
-        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        if range { request.setValue("bytes=0-0", forHTTPHeaderField: "Range") }
         var status = 0
         var respHeaders: [String: String] = [:]
         do {
@@ -183,10 +191,24 @@ struct RangeTransfer {
         } catch is StreamingSession.Rejected {
             // 拿到响应头即主动取消，属预期
         }
-        guard (200..<300).contains(status) else { throw TransferError(Self.statusMessage(status)) }
-        let (total, ranged) = Self.planTotal(status: status, headers: respHeaders)
-        if status == 206 && total < 0 {
-            Log.info("服务器支持分段但没给出总长度（Content-Range：\(respHeaders["content-range"] ?? "无")），改为整体下载")
+        return (status, respHeaders)
+    }
+
+    /// 探测总长度与是否支持分片
+    private func plan() async throws {
+        let probe = try await head(range: true)
+        Log.info("下载探测（Range 0-0）：HTTP \(probe.status) Content-Range=\(probe.headers["content-range"] ?? "无") "
+                 + "Content-Length=\(probe.headers["content-length"] ?? "无") Content-Type=\(probe.headers["content-type"] ?? "无")")
+        guard (200..<300).contains(probe.status) else { throw TransferError(Self.statusMessage(probe.status)) }
+        var total: Int64 = -1
+        var ranged = false
+        if let planned = Self.planTotal(status: probe.status, headers: probe.headers) {
+            (total, ranged) = planned
+        } else {
+            // 分段回应不可信：不带 Range 再问一次总长度（拿不到就整体下载、长度未知）
+            let plain = try await head(range: false)
+            total = Self.plainTotal(status: plain.status, headers: plain.headers)
+            Log.info("下载探测（不带 Range）：HTTP \(plain.status) Content-Length=\(plain.headers["content-length"] ?? "无") → 总长 \(total)")
         }
         _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
         var chunks: [DownloadChunk]
@@ -199,7 +221,8 @@ struct RangeTransfer {
                 return DownloadChunk(start: start, end: end, received: 0)
             }
         } else {
-            chunks = [DownloadChunk(start: 0, end: total > 0 ? total - 1 : -1, received: 0)]
+            // 不支持分段（或分段回应不规范）：单流、不带 Range 从头读到尾，总长只用来显示进度和校验
+            chunks = [DownloadChunk(start: 0, end: -1, received: 0)]
         }
         if total > 0 {
             let handle = try FileHandle(forWritingTo: destination)
