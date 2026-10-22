@@ -60,8 +60,8 @@ struct FilePreviewView: View {
         ZStack(alignment: .top) {
             // 下拉时背景逐渐透明，露出下面的页面
             (immersive ? Color.black.opacity(DismissDrag.backdrop(dragY)) : Color.paper).ignoresSafeArea()
-            if mode == .image {
-                // 图片铺满全屏，操作栏浮在上面，轻点切换
+            if immersive {
+                // 图片 / 视频铺满全屏，操作栏浮在画面上：轻点切换，播放中几秒后自动隐藏（不再把画面往下挤）
                 content.dismissDragEffect(dragY)
                 if chromeVisible && dragY == 0 { topBar.transition(.opacity) }
             } else {
@@ -72,7 +72,8 @@ struct FilePreviewView: View {
                 }
             }
         }
-        .statusBarHidden(mode == .image && !chromeVisible)
+        .statusBarHidden(immersive && !chromeVisible)
+        .task(id: chromeVisible) { await autoHideChrome() }
         .animation(.easeInOut(duration: 0.2), value: chromeVisible)
         .preferredColorScheme(immersive ? .dark : nil)
         .presentationBackground(.clear)
@@ -86,6 +87,16 @@ struct FilePreviewView: View {
             remuxTask?.cancel()
             remuxTask = nil
         }
+    }
+
+    private var isVideo: Bool { mode == .player && FileNames.kind(of: url.lastPathComponent) != .audio }
+
+    /// 视频播放中，操作栏显示 3 秒后自动隐藏（跟系统播放控件的节奏一致）
+    private func autoHideChrome() async {
+        guard chromeVisible, isVideo else { return }
+        try? await Task.sleep(for: .seconds(3))
+        guard !Task.isCancelled, (player?.rate ?? 0) > 0 else { return }
+        chromeVisible = false
     }
 
     private var dismissDrag: DismissDrag {
@@ -103,7 +114,10 @@ struct FilePreviewView: View {
         switch mode {
         case .player:
             if let player {
-                PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
+                // 系统播放控件让出顶栏的高度；画面本身铺满全屏
+                PlayerController(player: player, drag: dismissDrag, topInset: chromeVisible ? 56 : 0,
+                                 onTap: { chromeVisible.toggle() })
+                    .ignoresSafeArea()
             } else {
                 Color.black.onAppear { player = PlayerController.makePlayer(converted ?? url) }
             }
@@ -171,7 +185,7 @@ struct FilePreviewView: View {
         .padding(.top, 6)
         .padding(.bottom, 10)
         .background {
-            if mode == .image {
+            if immersive {
                 LinearGradient(colors: [.black.opacity(0.65), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
                     .ignoresSafeArea(edges: .top)
             } else {
@@ -335,6 +349,10 @@ struct PreviewBarButtonStyle: ButtonStyle {
 struct PlayerController: UIViewControllerRepresentable {
     let player: AVPlayer
     var drag: DismissDrag?
+    /// 顶部浮着的操作栏高度：系统控件往下让，画面不动
+    var topInset: CGFloat = 0
+    /// 轻点画面（与系统控件的显隐同步切换操作栏）
+    var onTap: (() -> Void)?
 
     /// 本地文件或带请求头的直链
     static func makePlayer(_ url: URL, headers: [String: String] = [:]) -> AVPlayer {
@@ -354,12 +372,22 @@ struct PlayerController: UIViewControllerRepresentable {
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.view.backgroundColor = .clear
         if drag != nil { context.coordinator.attach(to: controller.view) }
+        context.coordinator.tapAction = onTap
+        context.coordinator.attachTap(to: controller.view)
+        controller.additionalSafeAreaInsets.top = topInset
         player.play()
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         context.coordinator.drag = drag
+        context.coordinator.tapAction = onTap
+        if controller.additionalSafeAreaInsets.top != topInset {
+            UIView.animate(withDuration: 0.2) {
+                controller.additionalSafeAreaInsets.top = topInset
+                controller.view.layoutIfNeeded()
+            }
+        }
         if controller.player !== player { controller.player = player; player.play() }
     }
 
@@ -641,6 +669,9 @@ extension View {
 class DismissPanCoordinator: NSObject, UIGestureRecognizerDelegate {
     var drag: DismissDrag?
 
+    /// 播放器画面的轻点回调（图片页的 Coordinator 另有自己的 onTap）
+    var tapAction: (() -> Void)?
+
     init(drag: DismissDrag?) { self.drag = drag }
 
     func attach(to view: UIView) {
@@ -649,10 +680,25 @@ class DismissPanCoordinator: NSObject, UIGestureRecognizerDelegate {
         view.addGestureRecognizer(pan)
     }
 
+    /// 轻点：和系统播放器自己的轻点手势同时识别，不抢它的控件显隐
+    func attachTap(to view: UIView) {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        view.addGestureRecognizer(tap)
+    }
+
+    @objc func tapped() { tapAction?() }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        g is UITapGestureRecognizer
+    }
+
     /// 子类可加条件（如图片放大时不响应）
     func canBegin() -> Bool { true }
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g is UITapGestureRecognizer { return true }
         guard let pan = g as? UIPanGestureRecognizer, drag != nil, canBegin() else { return false }
         let v = pan.velocity(in: pan.view)
         return v.y > 0 && v.y > abs(v.x) * 1.5

@@ -58,6 +58,9 @@ struct DriveFolderView: View {
     private var uploader: DriveUploader? { app.resolvers.uploader(for: platform) }
     private var offline: DriveOfflineDownloader? { app.resolvers.offline(for: platform) }
     @State private var showingOffline = false
+    @State private var mediaPreview: MediaPreviewItem?
+    @State private var textPreview: TextPreviewItem?
+    @State private var filePreview: RemoteFileItem?
     private var uploads: [UploadStore.Item] { app.uploads.items(in: platform, folder: folderId) }
 
     private var visibleItems: [ShareFile] {
@@ -165,6 +168,9 @@ struct DriveFolderView: View {
         .navigationDestination(isPresented: $showingOffline) {
             OfflineTasksView(platform: platform, folderId: folderId, folderTitle: title)
         }
+        .fullScreenCover(item: $mediaPreview) { MediaPreviewView(item: $0) }
+        .fullScreenCover(item: $filePreview) { RemoteFilePreview(item: $0) }
+        .sheet(item: $textPreview) { TextPreviewView(item: $0) }
         .sheet(item: $sharing) { file in
             DriveShareSheet(manager: manager, file: file)
         }
@@ -188,7 +194,8 @@ struct DriveFolderView: View {
                     DriveFolderView(platform: platform, manager: manager, folderId: item.fid, title: item.name)
                 } label: { label(item) }
             } else {
-                Button { download(item) } label: { label(item) }
+                // 能预览的点开就看（视频 / 音频 / 图片 / 文本 / 文档），其余直接下载；右侧下载键单独下载
+                Button { open(item) } label: { label(item) }
                     .buttonStyle(.plain)
             }
         }
@@ -201,6 +208,9 @@ struct DriveFolderView: View {
         }
         .contextMenu {
             if !item.isDirectory {
+                if OnlinePreview.supports(item.name) {
+                    Button { preview(item) } label: { Label("预览", glyph: .eye) }
+                }
                 Button { download(item) } label: { Label("下载", glyph: .download) }
             }
             if caps.contains(.share) && !manager.shareAudienceOptions.isEmpty {
@@ -244,7 +254,11 @@ struct DriveFolderView: View {
             if fetching.contains(item.fid) {
                 Spinner(size: 17)
             } else if !item.isDirectory {
-                IconView(.download, size: 17).foregroundStyle(Color.ink2)
+                Button { download(item) } label: {
+                    IconView(.download, size: 17).foregroundStyle(Color.ink2).frame(width: 36, height: 36).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("下载")
             }
         }
         .contentShape(Rectangle())
@@ -265,6 +279,38 @@ struct DriveFolderView: View {
             // 下拉刷新途中离开页面等被取消的情况不算失败
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func open(_ file: ShareFile) {
+        if OnlinePreview.supports(file.name) { preview(file) } else { download(file) }
+    }
+
+    /// 取直链后按类型预览：媒体在线播放 / 看图，文本在线看，文档下到临时目录用系统预览
+    private func preview(_ file: ShareFile) {
+        guard !fetching.contains(file.fid) else { return }
+        let kind = FileNames.kind(of: file.name)
+        if kind == .document, file.size > RemoteFileItem.limit {
+            app.show("文件较大，请下载后查看", error: true)
+            return
+        }
+        fetching.insert(file.fid)
+        Task {
+            defer { fetching.remove(file.fid) }
+            do {
+                let link = try await manager.driveDownloadLink(file)
+                switch kind {
+                case .video, .audio, .image:
+                    mediaPreview = MediaPreviewItem(url: link.url, headers: link.headers, title: file.name,
+                                                    kind: kind == .image ? .image : (kind == .audio ? .audio : .video))
+                case .text:
+                    textPreview = TextPreviewItem(url: link.url, headers: link.headers, title: file.name)
+                default:
+                    filePreview = RemoteFileItem(url: link.url, headers: link.headers, name: file.name, size: file.size)
+                }
+            } catch {
+                app.show(error.localizedDescription, error: true)
+            }
         }
     }
 

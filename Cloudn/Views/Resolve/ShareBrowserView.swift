@@ -17,6 +17,7 @@ struct ShareBrowserView: View {
     @State private var textPreview: TextPreviewItem?
     /// 正在预览的文件取到的直链：可能是临时转存，预览关闭后清理
     @State private var previewLink: DownloadLink?
+    @State private var filePreview: RemoteFileItem?
     @State private var query = ""
     /// 标题块滚出屏幕后，导航栏才显示标题
     @State private var headerHidden = false
@@ -66,7 +67,7 @@ struct ShareBrowserView: View {
             .refreshable { await model.reloadCurrent(force: true) }
             .task { await model.open() }
             // 离开分享页（返回、切到别的标签页）：预览 / 复制直链留下的临时转存一并清理；全屏预览盖住时不算离开
-            .onDisappear { if preview == nil && textPreview == nil { model.releaseAllTemporary() } }
+            .onDisappear { if preview == nil && textPreview == nil && filePreview == nil { model.releaseAllTemporary() } }
             .sensoryFeedback(.selection, trigger: model.selection)
             .animation(.snappy(duration: 0.25), value: model.selecting)
             .animation(.snappy(duration: 0.25), value: model.batch?.total)
@@ -75,6 +76,7 @@ struct ShareBrowserView: View {
             MediaPreviewView(item: item)
         }
         .sheet(item: $textPreview, onDismiss: releasePreviewLink) { TextPreviewView(item: $0) }
+        .fullScreenCover(item: $filePreview, onDismiss: releasePreviewLink) { RemoteFilePreview(item: $0) }
         .sheet(item: $saveItems) { items in
             SaveToDriveView(model: model, files: items.files)
         }
@@ -560,6 +562,18 @@ struct ShareBrowserView: View {
                 }
             } label: {
                 Label { Text(kind == .image ? "预览" : "在线播放") } icon: { Image(icon: kind == .image ? .eye : .play) }
+            }
+        }
+        if kind == .document {
+            Button {
+                run {
+                    let link = try await model.temporaryLink(for: file)
+                    model.releaseTemporary(previewLink)
+                    previewLink = link
+                    filePreview = RemoteFileItem(url: link.url, headers: link.headers, name: file.name, size: file.size)
+                }
+            } label: {
+                Label { Text("预览") } icon: { Image(icon: .eye) }
             }
         }
         if kind == .text {

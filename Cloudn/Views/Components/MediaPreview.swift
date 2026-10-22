@@ -55,71 +55,21 @@ struct MediaPreviewView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button { dismiss() } label: { IconView(.close, size: 15) }
-                    .buttonStyle(PreviewBarButtonStyle(dark: true))
-                    .accessibilityLabel("关闭")
-                Text(title)
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .contentTransition(.numericText())
-                    .frame(maxWidth: .infinity)
-                if item.kind == .video {
-                    RotateButton()
-                } else {
-                    // 与左侧按钮等宽，标题保持居中
-                    Color.clear.frame(width: 38, height: 38)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
-            .padding(.bottom, 10)
-            .opacity(dragY > 0 || !chromeVisible ? 0 : 1)
-            .animation(.easeInOut(duration: 0.2), value: chromeVisible)
-            ZStack {
-                switch item.kind {
-                case .video, .audio:
-                    if let failure {
-                        // 直链过期、403 等：说清楚，给重试，而不是一块黑屏
-                        VStack(spacing: 12) {
-                            IconView(.warning, size: 26)
-                            Text("无法播放").font(.cardTitle)
-                            Text(failure).font(.footnote).opacity(0.7).multilineTextAlignment(.center)
-                            Button("重试") { startPlayer() }
-                                .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
-                                .padding(.top, 4)
-                        }
-                        .foregroundStyle(.white)
-                        .padding(32)
-                    } else if let player {
-                        PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
-                    }
-                case .image:
-                    if pages.count > 1 {
-                        // 图集：左右滑动翻页，每页可单独缩放；放大后先在图内平移，到边缘再翻页
-                        TabView(selection: $page) {
-                            ForEach(pages) { image in
-                                ZoomableImageFile(source: .remote(image.url, headers: image.headers),
-                                                  onTap: { chromeVisible.toggle() }, drag: dismissDrag)
-                                    .tag(image.id)
-                            }
-                        }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        .ignoresSafeArea(edges: .bottom)
-                    } else {
-                        ZoomableImageFile(source: .remote(item.url, headers: item.headers),
-                                          onTap: { chromeVisible.toggle() }, drag: dismissDrag)
-                            .ignoresSafeArea(edges: .bottom)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .dismissDragEffect(dragY)
+        // 操作栏浮在画面上（不挤压画面）：轻点切换，视频播放中 3 秒后自动隐藏
+        ZStack(alignment: .top) {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .dismissDragEffect(dragY)
+            topBar
         }
         .background(Color.black.opacity(DismissDrag.backdrop(dragY)).ignoresSafeArea())
+        .statusBarHidden(!chromeVisible)
+        .task(id: chromeVisible) {
+            guard chromeVisible, item.kind == .video else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, (player?.rate ?? 0) > 0 else { return }
+            chromeVisible = false
+        }
         .preferredColorScheme(.dark)
         .presentationBackground(.clear)
         // onAppear 可能不止一次（画中画回来等）：已有播放器就不重建，免得从头播放
@@ -129,6 +79,81 @@ struct MediaPreviewView: View {
         }
         .sensoryFeedback(.selection, trigger: page)
         .onDisappear { player?.pause() }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button { dismiss() } label: { IconView(.close, size: 15) }
+                .buttonStyle(PreviewBarButtonStyle(dark: true))
+                .accessibilityLabel("关闭")
+            Text(title)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .contentTransition(.numericText())
+                .frame(maxWidth: .infinity)
+            if item.kind == .video {
+                RotateButton()
+            } else {
+                // 与左侧按钮等宽，标题保持居中
+                Color.clear.frame(width: 38, height: 38)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        .background {
+            LinearGradient(colors: [.black.opacity(0.6), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+        }
+        .opacity(dragY > 0 || !chromeVisible ? 0 : 1)
+        .allowsHitTesting(chromeVisible && dragY == 0)
+        .animation(.easeInOut(duration: 0.2), value: chromeVisible)
+    }
+
+    private var content: some View {
+        ZStack {
+            switch item.kind {
+            case .video, .audio:
+                if let failure {
+                    // 直链过期、403 等：说清楚，给重试，而不是一块黑屏
+                    VStack(spacing: 12) {
+                        IconView(.warning, size: 26)
+                        Text("无法播放").font(.cardTitle)
+                        Text(failure).font(.footnote).opacity(0.7).multilineTextAlignment(.center)
+                        Button("重试") { startPlayer() }
+                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                            .padding(.top, 4)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(32)
+                } else if let player {
+                    // 系统播放控件让出顶栏的高度；画面铺满全屏
+                    PlayerController(player: player, drag: dismissDrag, topInset: chromeVisible ? 56 : 0,
+                                     onTap: { chromeVisible.toggle() })
+                        .ignoresSafeArea()
+                }
+            case .image:
+                if pages.count > 1 {
+                    // 图集：左右滑动翻页，每页可单独缩放；放大后先在图内平移，到边缘再翻页
+                    TabView(selection: $page) {
+                        ForEach(pages) { image in
+                            ZoomableImageFile(source: .remote(image.url, headers: image.headers),
+                                              onTap: { chromeVisible.toggle() }, drag: dismissDrag)
+                                .tag(image.id)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .ignoresSafeArea()
+                } else {
+                    ZoomableImageFile(source: .remote(item.url, headers: item.headers),
+                                      onTap: { chromeVisible.toggle() }, drag: dismissDrag)
+                        .ignoresSafeArea()
+                }
+            }
+        }
     }
 
     private func startPlayer() {
