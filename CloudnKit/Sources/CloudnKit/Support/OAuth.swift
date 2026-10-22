@@ -26,6 +26,15 @@ public struct OAuthProvider: Sendable, Equatable {
         scopes: ["Files.ReadWrite.All", "offline_access", "User.Read"],
         extraAuthorizeParams: [("prompt", "select_account")])
 
+    /// iOS 类型的客户端：回调用「反写的客户端 ID」作 scheme；要 offline + consent 才会给 refresh_token
+    public static let google = OAuthProvider(
+        name: "Google", clientId: "150941028615-uchr3htd2p0cg83gcpbhdja5fa3bb942.apps.googleusercontent.com",
+        authorizeEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+        tokenEndpoint: "https://oauth2.googleapis.com/token",
+        redirectURI: "com.googleusercontent.apps.150941028615-uchr3htd2p0cg83gcpbhdja5fa3bb942:/oauth2redirect",
+        scopes: ["https://www.googleapis.com/auth/drive"],
+        extraAuthorizeParams: [("access_type", "offline"), ("prompt", "consent select_account")])
+
     /// 一次授权请求：带 PKCE 校验串与防伪 state
     public struct Request: Sendable {
         public let url: URL

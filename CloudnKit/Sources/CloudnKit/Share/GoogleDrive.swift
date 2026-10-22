@@ -12,10 +12,12 @@ public final class GoogleDriveResolver: ShareResolver, @unchecked Sendable {
     /// 列目录时探测文件大小的上限（页面本身不给大小）：再多就太慢，Google 也会开始限流；其余的取链时再探
     static let sizeProbeLimit = 60
 
-    private let client: HTTPClient
+    let client: HTTPClient
+    let credentials: CredentialStore
     private let titles = TitleCache()
 
-    public init(client: HTTPClient = .shared) {
+    public init(credentials: CredentialStore = NoCredentials(), client: HTTPClient = .shared) {
+        self.credentials = credentials
         self.client = client
     }
 

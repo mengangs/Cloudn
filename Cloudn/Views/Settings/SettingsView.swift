@@ -151,6 +151,13 @@ struct SettingsView: View {
                     Section {
                         NavigationLink("关于 Cloudn") { AboutView() }
                         NavigationLink("开源许可") { LicenseView() }
+                        Link(destination: URL(string: "https://github.com/mengangs/Cloudn/blob/main/PRIVACY.md")!) {
+                            HStack {
+                                Text("隐私政策").foregroundStyle(Color.ink)
+                                Spacer()
+                                IconView(.share, size: 14).foregroundStyle(Color.ink3)
+                            }
+                        }
                     }
             }
             .listRowBackground(Color.surface)

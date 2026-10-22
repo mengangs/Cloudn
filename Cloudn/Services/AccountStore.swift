@@ -274,6 +274,8 @@ extension AccountStore {
             valid = await aliyun.checkLogin()
         } else if kind == .onedrive, let onedrive = resolvers.resolver(for: .onedrive) as? OneDriveResolver {
             valid = await onedrive.checkLogin()
+        } else if kind == .gdrive, let google = resolvers.resolver(for: .gdrive) as? GoogleDriveResolver {
+            valid = await google.checkLogin()
         } else {
             valid = await AccountValidator.validate(kind, cookie: cookie) != nil
         }
@@ -316,6 +318,7 @@ extension AccountKind {
         case .lanzou: return URL(string: "https://up.woozooo.com/account.php?action=login")!
         case .aliyun: return URL(string: AliyunResolver.loginURL)!
         case .onedrive: return URL(string: "https://login.microsoftonline.com/")!
+        case .gdrive: return URL(string: "https://accounts.google.com/")!
         case .douyin: return URL(string: "https://www.douyin.com/")!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
@@ -344,7 +347,7 @@ extension AccountKind {
         case .guangya, .ilanzou, .lanzou: return VideoHTTP.uaChrome
         // 手机版页面只引导下载 App，没有网页登录
         case .aliyun: return VideoHTTP.uaChrome
-        case .onedrive: return VideoHTTP.uaChrome
+        case .onedrive, .gdrive: return VideoHTTP.uaChrome
         case .bilibili: return VideoHTTP.uaChrome
         // 手机 UA 下网页只引导打开 App，没有登录入口
         case .douyin: return VideoHTTP.uaChrome
@@ -369,7 +372,7 @@ extension AccountKind {
         case .c139: return .cookies(C139Resolver.cookieDomains)
         case .lanzou: return .cookies(["woozooo.com"])
         case .aliyun: return .script(AliyunResolver.readScript)
-        case .onedrive: return .cookies([])
+        case .onedrive, .gdrive: return .cookies([])
         case .guangya, .ilanzou: return .cookies([])
         case .bilibili: return .cookies(["bilibili.com"])
         case .douyin: return .cookies(["douyin.com"])
@@ -392,7 +395,7 @@ extension AccountKind {
         case .c139: return C139Resolver.isValidCookie(credential)
         case .lanzou: return LanzouAccount.isValidCookie(credential)
         case .aliyun: return AliyunCredential.parse(credential) != nil
-        case .onedrive: return OAuthCredential.parse(credential) != nil
+        case .onedrive, .gdrive: return OAuthCredential.parse(credential) != nil
         case .guangya, .ilanzou: return false
         case .bilibili: return credential.contains("SESSDATA=")
         case .douyin: return DouyinAccount.looksLoggedIn(cookie: credential)
@@ -422,6 +425,7 @@ extension AccountKind {
         case .lanzou: return "登录后可管理自己的蓝奏云文件"
         case .aliyun: return "登录后可下载分享、转存，并管理自己的阿里云盘"
         case .onedrive: return "登录后可管理自己的 OneDrive，并打开只分享给你的链接"
+        case .gdrive: return "登录后可管理自己的 Google 云端硬盘，并把公开分享里的文件复制到自己的盘"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .douyin: return "登录后可获取作者主页的全部作品（未登录通常只有第一页）"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
@@ -451,6 +455,7 @@ extension AccountKind {
         case .lanzou: return "需包含 ylogin 与 phpdisk_info"
         case .aliyun: return "粘贴网页 localStorage 中 token 的值（JSON），或 refresh_token"
         case .onedrive: return "请用「登录」按钮通过微软官方页面登录"
+        case .gdrive: return "请用「登录」按钮通过 Google 官方页面登录"
         case .bilibili: return "需包含 SESSDATA"
         case .douyin: return "需包含 sessionid"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
@@ -482,6 +487,7 @@ extension AccountKind {
         case .lanzou: return "l.circle.fill"
         case .aliyun: return "a.circle.fill"
         case .onedrive: return "cloud.fill"
+        case .gdrive: return "triangle.fill"
         case .bilibili: return "play.tv.fill"
         case .douyin: return "music.note"
         case .xiaohongshu: return "book.closed.fill"
@@ -502,7 +508,13 @@ extension AccountKind {
     var supportsWebLogin: Bool { ![.guangya, .ilanzou].contains(self) && oauth == nil }
 
     /// 走系统登录页（OAuth）的平台：微软 / Google 不允许在内嵌网页里登录
-    var oauth: OAuthProvider? { self == .onedrive ? .microsoft : nil }
+    var oauth: OAuthProvider? {
+        switch self {
+        case .onedrive: return .microsoft
+        case .gdrive: return .google
+        default: return nil
+        }
+    }
 
     /// 应用内账号密码 / 短信登录
     var passwordLogin: PasswordLogin? { PasswordLogins.provider(for: self) }

@@ -182,7 +182,7 @@ final class GlobalDriveTests: XCTestCase {
             XCTAssertNotNil(resolvers.resolver(for: p), p.rawValue)
         }
         XCTAssertEqual(SharePlatform.aliyun.accountKind, .aliyun)
-        XCTAssertNil(SharePlatform.gdrive.accountKind)
+        XCTAssertEqual(SharePlatform.gdrive.accountKind, .gdrive)
         XCTAssertTrue(AccountKind.aliyun.isDrive)
     }
 }

@@ -81,7 +81,7 @@ public final class ShareResolvers: Sendable {
         map[.xunlei] = XunleiResolver(credentials: credentials, client: client)
         map[.pan115] = Pan115Resolver(credentials: credentials, client: client)
         map[.aliyun] = AliyunResolver(credentials: credentials, client: client)
-        map[.gdrive] = GoogleDriveResolver(client: client)
+        map[.gdrive] = GoogleDriveResolver(credentials: credentials, client: client)
         map[.onedrive] = OneDriveResolver(credentials: credentials, client: client)
         resolvers = map
     }
