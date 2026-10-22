@@ -42,7 +42,8 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .ilanzou: return .ilanzou
         case .lanzou: return .lanzou
         case .aliyun: return .aliyun
-        case .gdrive, .onedrive: return nil
+        case .onedrive: return .onedrive
+        case .gdrive: return nil
         }
     }
 }
@@ -125,7 +126,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, aliyun, douyin, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, aliyun, onedrive, douyin, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
     /// 海外视频平台（可选登录：解析受限内容、避开游客限额）
     case twitter, instagram, tiktok, reddit, facebook, threads
 
@@ -144,6 +145,7 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .ilanzou: return "蓝奏云优享版"
         case .lanzou: return "蓝奏云"
         case .aliyun: return "阿里云盘"
+        case .onedrive: return "OneDrive"
         case .douyin: return "抖音"
         case .bilibili: return "哔哩哔哩"
         case .xiaohongshu: return "小红书"

@@ -49,6 +49,66 @@ public struct ShareExpiry: Hashable, Sendable, Identifiable {
     }
 }
 
+/// 分享链接谁能打开
+public enum ShareAudience: String, Sendable, CaseIterable, Identifiable {
+    /// 知道链接的任何人
+    case anyone
+    /// 只有同一组织（工作或学校账号）的人
+    case organization
+
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .anyone: return "知道链接的任何人"
+        case .organization: return "仅组织内的人"
+        }
+    }
+}
+
+/// 打开分享链接的人能做什么
+public enum ShareRole: String, Sendable, CaseIterable, Identifiable {
+    case view, edit
+
+    public var id: String { rawValue }
+    public var label: String { self == .view ? "仅查看" : "可编辑" }
+}
+
+/// 创建分享的完整选项（支持的平台在分享设置页里逐项选择）
+public struct ShareOptions: Sendable, Equatable {
+    public var audience: ShareAudience
+    public var role: ShareRole
+    public var expiry: ShareExpiry
+    /// 空串为不设密码
+    public var password: String
+
+    public init(audience: ShareAudience = .anyone, role: ShareRole = .view, expiry: ShareExpiry = .forever, password: String = "") {
+        self.audience = audience
+        self.role = role
+        self.expiry = expiry
+        self.password = password
+    }
+}
+
+/// 一个已存在的分享链接
+public struct DriveShareInfo: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let url: String
+    public let audience: String
+    public let role: String
+    /// 过期时间（已格式化），永久为空
+    public let expires: String
+    public let hasPassword: Bool
+
+    public init(id: String, url: String, audience: String, role: String, expires: String, hasPassword: Bool) {
+        self.id = id
+        self.url = url
+        self.audience = audience
+        self.role = role
+        self.expires = expires
+        self.hasPassword = hasPassword
+    }
+}
+
 /// 平台支持的管理操作
 public struct DriveCapabilities: OptionSet, Sendable {
     public let rawValue: Int
@@ -81,6 +141,19 @@ public protocol DriveManager: Sendable {
     func createShare(_ files: [ShareFile], expiry: ShareExpiry) async throws -> DriveShareLink
     /// 容量；拿不到返回 nil
     func quota() async -> DriveQuota?
+
+    /// 分享设置页的「谁能访问」选项；为空表示平台不支持细分设置，只用有效期菜单
+    var shareAudienceOptions: [ShareAudience] { get }
+    var shareRoleOptions: [ShareRole] { get }
+    /// 能否给分享设密码
+    var supportsSharePassword: Bool { get }
+    /// 分享设置页底部的说明（例如个人版设密码要订阅）
+    var shareOptionsNote: String { get }
+    func createShare(_ files: [ShareFile], options: ShareOptions) async throws -> DriveShareLink
+    /// 能否列出 / 取消已有的分享
+    var supportsShareManagement: Bool { get }
+    func existingShares(_ file: ShareFile) async throws -> [DriveShareInfo]
+    func revokeShare(_ file: ShareFile, id: String) async throws
 }
 
 public extension DriveManager {
@@ -94,4 +167,15 @@ public extension DriveManager {
     /// 永久有效的分享
     func createShare(_ files: [ShareFile]) async throws -> DriveShareLink { try await createShare(files, expiry: .forever) }
     func quota() async -> DriveQuota? { nil }
+
+    var shareAudienceOptions: [ShareAudience] { [] }
+    var shareRoleOptions: [ShareRole] { [] }
+    var supportsSharePassword: Bool { false }
+    var shareOptionsNote: String { "" }
+    func createShare(_ files: [ShareFile], options: ShareOptions) async throws -> DriveShareLink {
+        try await createShare(files, expiry: options.expiry)
+    }
+    var supportsShareManagement: Bool { false }
+    func existingShares(_ file: ShareFile) async throws -> [DriveShareInfo] { [] }
+    func revokeShare(_ file: ShareFile, id: String) async throws { throw CloudnError("该网盘暂不支持取消分享") }
 }

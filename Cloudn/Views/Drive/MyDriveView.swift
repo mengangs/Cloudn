@@ -44,6 +44,8 @@ struct DriveFolderView: View {
     @State private var naming: NamingTarget?
     @State private var nameText = ""
     @State private var moving: ShareFile?
+    /// 打开分享设置页的文件（平台支持细分分享设置时）
+    @State private var sharing: ShareFile?
     @State private var deleting: ShareFile?
     @State private var busy = false
     @State private var query = ""
@@ -152,6 +154,9 @@ struct DriveFolderView: View {
             Button("取消", role: .cancel) {}
             Button("确定") { if let target = naming { commitName(target) } }
         }
+        .sheet(item: $sharing) { file in
+            DriveShareSheet(manager: manager, file: file)
+        }
         .sheet(item: $moving) { file in
             DriveFolderPicker(platform: platform, manager: manager, excluding: file.fid) { target in
                 perform("已移动") { try await manager.move([file], to: target) }
@@ -187,7 +192,9 @@ struct DriveFolderView: View {
             if !item.isDirectory {
                 Button { download(item) } label: { Label("下载", glyph: .download) }
             }
-            if caps.contains(.share) {
+            if caps.contains(.share) && !manager.shareAudienceOptions.isEmpty {
+                Button { sharing = item } label: { Label("分享设置…", glyph: .link) }
+            } else if caps.contains(.share) {
                 let options = manager.shareExpiryOptions
                 if options.count > 1 {
                     Menu {

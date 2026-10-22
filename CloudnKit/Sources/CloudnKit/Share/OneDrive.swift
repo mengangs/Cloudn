@@ -17,10 +17,13 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
     static let badgerAppId = "5cbed6ac-a083-4e14-b191-b4ba07653de2"
     static let itemFields = "id,name,size,folder,file,lastModifiedDateTime,parentReference,@content.downloadUrl"
 
-    private let client: HTTPClient
+    let client: HTTPClient
+    let credentials: CredentialStore
     private let contexts = ContextCache()
+    let graphState = GraphState()
 
-    public init(client: HTTPClient = .shared) {
+    public init(credentials: CredentialStore = NoCredentials(), client: HTTPClient = .shared) {
+        self.credentials = credentials
         self.client = client
     }
 
@@ -33,6 +36,10 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
         let expiresAt: Date
         /// 分享根条目
         var root: ShareFile?
+        /// $select 字段：Graph 的直链字段名与 SharePoint v2.0 不同
+        var fields = OneDriveResolver.itemFields
+        /// 用自己的账号经 Graph 访问（过期时也要按 Graph 重建）
+        var isGraph = false
     }
 
     static func isSharePoint(_ url: String) -> Bool {
@@ -51,8 +58,18 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
     public func openSession(_ share: ParsedShare, pwd: String?) async throws -> ShareSession {
         let link = share.url
         let password = pwd?.nilIfBlank ?? share.pwd
-        var context = try await makeContext(link, password: password)
-        let root = try await rootItem(link, context: &context, password: password)
+        var context: Context
+        let root: ShareFile
+        do {
+            context = try await makeContext(link, password: password)
+            root = try await rootItem(link, context: &context, password: password)
+        } catch let error as CloudnError where !error.message.contains("密码") {
+            // 匿名打不开（只分享给指定的人 / 组织内）：登录了 OneDrive 就用自己的账号经 Graph 再试
+            guard var graph = try? await graphShareContext() else { throw error }
+            guard let item = try? await rootItem(link, context: &graph, password: nil) else { throw error }
+            context = graph
+            root = item
+        }
         context.root = root
         await contexts.set(link, context)
         return ShareSession(platform: .onedrive, shareId: link, stoken: password ?? "", title: root.name.nilIfBlank ?? "OneDrive 分享",
@@ -67,12 +84,12 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
         }
         let first: String
         if dirId == session.rootId || dirId.isEmpty {
-            first = "\(context.api)/shares/\(Self.shareToken(session.shareId))/driveitem/children?$top=200&$select=\(Self.itemFields)"
+            first = "\(context.api)/shares/\(Self.shareToken(session.shareId))/driveitem/children?$top=200&$select=\(context.fields)"
         } else {
             guard let drive = context.root?.token.nilIfBlank else {
                 throw CloudnError("OneDrive 会话已失效，请重新解析")
             }
-            first = "\(context.api)/drives/\(drive)/items/\(dirId)/children?$top=200&$select=\(Self.itemFields)"
+            first = "\(context.api)/drives/\(drive)/items/\(dirId)/children?$top=200&$select=\(context.fields)"
         }
         var all: [ShareFile] = []
         var next: String? = first
@@ -91,12 +108,12 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
         // 列表里的直链约 1 小时过期：取链时重新查一次条目
         let url: String
         if let root = context.root, root.fid == file.fid, !root.isDirectory {
-            url = "\(context.api)/shares/\(Self.shareToken(session.shareId))/driveitem?$select=\(Self.itemFields)"
+            url = "\(context.api)/shares/\(Self.shareToken(session.shareId))/driveitem?$select=\(context.fields)"
         } else {
-            url = "\(context.api)/drives/\(file.token)/items/\(file.fid)?$select=\(Self.itemFields)"
+            url = "\(context.api)/drives/\(file.token)/items/\(file.fid)?$select=\(context.fields)"
         }
         let json = try await get(url, context: context)
-        let link = json["@content.downloadUrl"].string
+        let link = json.string("@content.downloadUrl", "@microsoft.graph.downloadUrl")
         guard !link.isEmpty else { throw CloudnError("OneDrive 没有返回下载地址，分享者可能禁止了下载") }
         let size = json["size"].int64 > 0 ? json["size"].int64 : file.size
         return DownloadLink(fileName: file.name, url: link, size: size, headers: ["User-Agent": Self.ua])
@@ -105,8 +122,9 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
     // MARK: 会话
 
     private func context(for session: ShareSession) async throws -> Context {
-        if let c = await contexts.get(session.shareId), c.expiresAt > Date() { return c }
-        var c = try await makeContext(session.shareId, password: session.stoken.nilIfBlank)
+        let cached = await contexts.get(session.shareId)
+        if let c = cached, c.expiresAt > Date() { return c }
+        var c = cached?.isGraph == true ? try await graphShareContext() : try await makeContext(session.shareId, password: session.stoken.nilIfBlank)
         c.root = await contexts.get(session.shareId)?.root
         if c.root == nil { c.root = try await rootItem(session.shareId, context: &c, password: session.stoken.nilIfBlank) }
         await contexts.set(session.shareId, c)
@@ -151,7 +169,7 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
 
     /// 分享根条目；个人版遇到密码时改用访客页表单换 FedAuth 再访问
     private func rootItem(_ link: String, context: inout Context, password: String?) async throws -> ShareFile {
-        let url = "\(context.api)/shares/\(Self.shareToken(link))/driveitem?$select=\(Self.itemFields)"
+        let url = "\(context.api)/shares/\(Self.shareToken(link))/driveitem?$select=\(context.fields)"
         do {
             return Self.parseItem(try await get(url, context: context), parent: "")
         } catch let e as PasswordRequired {

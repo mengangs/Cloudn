@@ -126,6 +126,7 @@ public enum AccountValidator {
         case .xunlei: return XunleiCredential.parse(trimmed)?.serialized ?? trimmed
         case .guangya: return GuangYaCredential.parse(trimmed)?.serialized ?? trimmed
         case .aliyun: return AliyunCredential.parse(trimmed)?.serialized ?? trimmed
+        case .onedrive: return OAuthCredential.parse(trimmed)?.serialized ?? trimmed
         default: return trimmed
         }
     }
@@ -195,6 +196,9 @@ public enum AccountValidator {
         case .lanzou:
             guard let params = await LanzouAccount.loginParams(cookie: cookie) else { return nil }
             return "蓝奏云用户 \(params.uid)"
+        case .onedrive:
+            guard let cred = OAuthCredential.parse(cookie) else { return nil }
+            return await OneDriveResolver.accountName(cred)
         case .aliyun:
             guard let cred = AliyunCredential.parse(cookie) else { return nil }
             return await AliyunCredential.nickname(cred, client: .shared)

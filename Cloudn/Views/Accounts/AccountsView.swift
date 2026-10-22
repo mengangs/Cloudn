@@ -104,7 +104,11 @@ struct AccountsView: View {
             }
             // 登录页没登成就关掉：撤销「添加账号」标记，免得之后别处重新登录被当成附加账号、主账号不更新
             .sheet(item: $loginKind, onDismiss: clearPendingAdd) { kind in
-                WebLoginView(kind: kind)
+                if let provider = kind.oauth {
+                    OAuthLoginView(kind: kind, provider: provider)
+                } else {
+                    WebLoginView(kind: kind)
+                }
             }
             .sheet(item: $manualKind, onDismiss: clearPendingAdd) { kind in
                 ManualCookieView(kind: kind)
@@ -322,6 +326,7 @@ struct AccountsView: View {
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
+        if kind.oauth != nil { loginKind = kind; return }
         if kind.prefersPasswordLogin { passwordKind = kind; return }
         if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
     }
@@ -332,7 +337,9 @@ struct LoginSheet: View {
     let kind: AccountKind
 
     var body: some View {
-        if kind.prefersPasswordLogin {
+        if let provider = kind.oauth {
+            OAuthLoginView(kind: kind, provider: provider)
+        } else if kind.prefersPasswordLogin {
             PasswordLoginView(kind: kind)
         } else if kind.supportsWebLogin {
             WebLoginView(kind: kind)
