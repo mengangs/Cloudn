@@ -83,6 +83,11 @@ public final class ShareResolvers: Sendable {
         map[.aliyun] = AliyunResolver(credentials: credentials, client: client)
         map[.gdrive] = GoogleDriveResolver(credentials: credentials, client: client)
         map[.onedrive] = OneDriveResolver(credentials: credentials, client: client)
+        map[.pikpak] = PikPakResolver(credentials: credentials, client: client)
+        map[.cloud189] = Cloud189Resolver(credentials: credentials, client: client)
+        map[.dropbox] = DropboxResolver(credentials: credentials, client: client)
+        map[.webdav] = WebDAVResolver(credentials: credentials, client: client)
+        map[.ctfile] = CtFileResolver(credentials: credentials, client: client)
         resolvers = map
     }
 
@@ -96,4 +101,11 @@ public final class ShareResolvers: Sendable {
 
     /// 支持上传到「我的网盘」的平台才返回
     public func uploader(for platform: SharePlatform) -> DriveUploader? { resolvers[platform] as? DriveUploader }
+
+    /// 支持离线下载（磁链 / 网址存到网盘）的平台才返回
+    public func offline(for platform: SharePlatform) -> DriveOfflineDownloader? {
+        // 夸克与 UC 共用解析器：UC 不支持离线（offlineSchemes 为空）
+        guard let downloader = resolvers[platform] as? DriveOfflineDownloader, !downloader.offlineSchemes.isEmpty else { return nil }
+        return downloader
+    }
 }

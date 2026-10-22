@@ -142,7 +142,7 @@ struct AccountsView: View {
                 }
             }
             .sheet(item: $manualKind, onDismiss: clearPendingAdd) { kind in
-                ManualCookieView(kind: kind)
+                if kind == .webdav { WebDAVLoginView() } else { ManualCookieView(kind: kind) }
             }
             .sheet(item: $passwordKind, onDismiss: clearPendingAdd) { kind in
                 PasswordLoginView(kind: kind)
@@ -402,15 +402,19 @@ struct AccountsView: View {
 
     @ViewBuilder
     private func loginOptions(_ kind: AccountKind) -> some View {
-        if let provider = kind.passwordLogin {
-            Button { app.accounts.pendingAdd = nil; passwordKind = kind } label: {
-                Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", glyph: .user)
+        if kind == .webdav {
+            Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("连接服务器", glyph: .link) }
+        } else {
+            if let provider = kind.passwordLogin {
+                Button { app.accounts.pendingAdd = nil; passwordKind = kind } label: {
+                    Label(provider.supportsSMS ? "账号密码 / 短信登录" : "账号密码登录", glyph: .user)
+                }
             }
+            if kind.supportsWebLogin {
+                Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", glyph: .link) }
+            }
+            Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", glyph: .paste) }
         }
-        if kind.supportsWebLogin {
-            Button { app.accounts.pendingAdd = nil; loginKind = kind } label: { Label("网页登录", glyph: .link) }
-        }
-        Button { app.accounts.pendingAdd = nil; manualKind = kind } label: { Label("手动粘贴凭据", glyph: .paste) }
     }
 
     private func clearPendingAdd() {
@@ -420,6 +424,7 @@ struct AccountsView: View {
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
+        if kind == .webdav { manualKind = kind; return }
         if kind.oauth != nil { loginKind = kind; return }
         if kind.prefersPasswordLogin { passwordKind = kind; return }
         if kind.supportsWebLogin { loginKind = kind } else if kind.passwordLogin != nil { passwordKind = kind } else { manualKind = kind }
@@ -431,7 +436,9 @@ struct LoginSheet: View {
     let kind: AccountKind
 
     var body: some View {
-        if let provider = kind.oauth {
+        if kind == .webdav {
+            WebDAVLoginView()
+        } else if let provider = kind.oauth {
             OAuthLoginView(kind: kind, provider: provider)
         } else if kind.prefersPasswordLogin {
             PasswordLoginView(kind: kind)

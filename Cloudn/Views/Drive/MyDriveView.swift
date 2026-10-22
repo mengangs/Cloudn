@@ -56,6 +56,8 @@ struct DriveFolderView: View {
     @State private var preparingMedia = false
 
     private var uploader: DriveUploader? { app.resolvers.uploader(for: platform) }
+    private var offline: DriveOfflineDownloader? { app.resolvers.offline(for: platform) }
+    @State private var showingOffline = false
     private var uploads: [UploadStore.Item] { app.uploads.items(in: platform, folder: folderId) }
 
     private var visibleItems: [ShareFile] {
@@ -118,7 +120,7 @@ struct DriveFolderView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 if busy || preparingMedia {
                     Spinner()
-                } else if caps.contains(.createFolder) || uploader != nil {
+                } else if caps.contains(.createFolder) || uploader != nil || offline != nil {
                     Menu {
                         if caps.contains(.createFolder) {
                             Button { nameText = ""; naming = .newFolder } label: { Label("新建文件夹", glyph: .folderPlus) }
@@ -126,6 +128,10 @@ struct DriveFolderView: View {
                         if uploader != nil {
                             Button { importingFiles = true } label: { Label("上传文件", glyph: .arrowUp) }
                             Button { pickingMedia = true } label: { Label("上传照片或视频", glyph: .image) }
+                        }
+                        if offline != nil {
+                            Divider()
+                            Button { showingOffline = true } label: { Label("离线下载", glyph: .magnet) }
                         }
                     } label: { Image(icon: .plus) }
                     .accessibilityLabel("新建或上传")
@@ -156,11 +162,14 @@ struct DriveFolderView: View {
             Button("确定") { if let target = naming { commitName(target) } }
                 .disabled(nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .navigationDestination(isPresented: $showingOffline) {
+            OfflineTasksView(platform: platform, folderId: folderId, folderTitle: title)
+        }
         .sheet(item: $sharing) { file in
             DriveShareSheet(manager: manager, file: file)
         }
         .sheet(item: $moving) { file in
-            DriveFolderPicker(platform: platform, manager: manager, excluding: file.fid) { target in
+            DriveFolderPicker(platform: platform, manager: manager, excluding: file.fid) { target, _ in
                 perform("已移动") { try await manager.move([file], to: target) }
             }
         }
@@ -329,18 +338,20 @@ struct DriveFolderView: View {
     }
 }
 
-/// 选择移动目标文件夹
+/// 选择目标文件夹（移动、离线下载的保存位置）；回调给出文件夹 id 与名称
 struct DriveFolderPicker: View {
     let platform: SharePlatform
     let manager: DriveManager
     let excluding: String
-    let onPick: (String) -> Void
+    var actionVerb = "移动到"
+    let onPick: (String, String) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            PickerLevel(manager: manager, folderId: manager.driveRootId, title: platform.displayName, excluding: excluding) { id in
-                onPick(id)
+            PickerLevel(manager: manager, folderId: manager.driveRootId, title: platform.displayName, excluding: excluding,
+                        actionVerb: actionVerb) { id, title in
+                onPick(id, title)
                 dismiss()
             }
             .toolbar {
@@ -354,7 +365,8 @@ struct DriveFolderPicker: View {
         let folderId: String
         let title: String
         let excluding: String
-        let onPick: (String) -> Void
+        let actionVerb: String
+        let onPick: (String, String) -> Void
         @State private var folders: [ShareFile] = []
         @State private var loading = true
         @State private var loaded = false
@@ -368,11 +380,11 @@ struct DriveFolderPicker: View {
                     }
                     .inList()
                 } else if !loading && folders.filter({ $0.fid != excluding }).isEmpty {
-                    EmptyStateCard(icon: .folder, title: "这里没有子文件夹", detail: "可以直接移动到当前文件夹").inList()
+                    EmptyStateCard(icon: .folder, title: "这里没有子文件夹", detail: "可以直接\(actionVerb)当前文件夹").inList()
                 }
                 ForEach(folders.filter { $0.fid != excluding }) { folder in
                     NavigationLink {
-                        PickerLevel(manager: manager, folderId: folder.fid, title: folder.name, excluding: excluding, onPick: onPick)
+                        PickerLevel(manager: manager, folderId: folder.fid, title: folder.name, excluding: excluding, actionVerb: actionVerb, onPick: onPick)
                     } label: {
                         HStack(spacing: 12) {
                             FileIcon(name: folder.name, isDirectory: true)
@@ -387,8 +399,8 @@ struct DriveFolderPicker: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
-                Button { onPick(folderId) } label: {
-                    Label("移动到「\(title)」", glyph: .move).lineLimit(1).frame(maxWidth: .infinity)
+                Button { onPick(folderId, title) } label: {
+                    Label("\(actionVerb)「\(title)」", glyph: .move).lineLimit(1).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PillButtonStyle(kind: .primary))
                 .floatingShadow()

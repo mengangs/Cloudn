@@ -18,7 +18,7 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
     static let pageLimit = 100
 
     private let credentials: CredentialStore
-    private let client: HTTPClient
+    let client: HTTPClient
     private let apiBase: String
     private let state = State()
 
@@ -243,7 +243,7 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
 
     // MARK: 请求
 
-    private func refreshClientVersion() async {
+    func refreshClientVersion() async {
         guard !(await state.markFetched()) else { return }
         guard let json = try? await get("https://appversion.115.com/1/web/1.0/api/chrome", cookie: "") else { return }
         let v = json["data"]["win"]["version_code"].string.trimmed
@@ -252,12 +252,12 @@ public final class Pan115Resolver: ShareResolver, @unchecked Sendable {
         }
     }
 
-    private func clientUA() async -> String {
+    func clientUA() async -> String {
         let version = await state.clientVersion
         return "Mozilla/5.0 115Browser/\(version)"
     }
 
-    private func headers(cookie: String, referer: String, ua: String = Pan115Resolver.webUA) -> [(String, String)] {
+    func headers(cookie: String, referer: String, ua: String = Pan115Resolver.webUA) -> [(String, String)] {
         var h: [(String, String)] = [("User-Agent", ua), ("Accept", "application/json, text/plain, */*"),
                                      ("X-Requested-With", "XMLHttpRequest"), ("Referer", referer)]
         if !cookie.isEmpty { h.append(("Cookie", cookie)) }
@@ -575,7 +575,7 @@ extension Pan115Resolver: DriveManager {
         return Self.parseQuota(json)
     }
 
-    private func driveCookie() async throws -> String {
+    func driveCookie() async throws -> String {
         guard let cookie = await loginCookie() else { throw SharePlatform.pan115.loginRequired }
         return cookie
     }

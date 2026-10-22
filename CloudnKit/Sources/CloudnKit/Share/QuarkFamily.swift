@@ -79,7 +79,7 @@ public struct QuarkFamilyConfig: Sendable {
 public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
     public let config: QuarkFamilyConfig
     private let credentials: CredentialStore
-    private let client: HTTPClient
+    let client: HTTPClient
     private let state = State()
 
     static let tempDirName = "Cloudn临时转存"
@@ -359,7 +359,7 @@ public final class QuarkFamilyResolver: ShareResolver, @unchecked Sendable {
     }
 
     /// 返回 __puus 未过期的 Cookie：超过刷新间隔就剥掉 __puus 请求 /config，让服务端重新下发
-    private func freshCookie() async -> String? {
+    func freshCookie() async -> String? {
         guard let cookie = await loginCookie() else { return nil }
         guard Date().timeIntervalSince(await state.lastRefresh) > Self.refreshInterval else { return cookie }
         let req = HTTPRequest.get(url("/1/clouddrive/config"), headers: [

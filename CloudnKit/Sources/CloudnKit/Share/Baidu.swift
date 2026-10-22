@@ -18,7 +18,7 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
     static let tempDirName = "Cloudn临时转存"
 
     private let credentials: CredentialStore
-    private let client: HTTPClient
+    let client: HTTPClient
     private let state = State()
 
     /// surl → (share_id, uk)，转存时必需，由列表接口返回
@@ -34,7 +34,7 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         self.client = client
     }
 
-    private func loginCookie() async -> String? {
+    func loginCookie() async -> String? {
         guard let c = await credentials.cookie(for: .baidu), Self.isValidCookie(c) else { return nil }
         return c
     }
@@ -168,7 +168,7 @@ public final class BaiduResolver: ShareResolver, @unchecked Sendable {
         return json["result"]
     }
 
-    private func bdstoken(_ cookie: String) async throws -> String {
+    func bdstoken(_ cookie: String) async throws -> String {
         if let cached = await state.bdstoken[cookie] { return cached }
         guard let token = await templateVariable(cookie, fields: #"["bdstoken"]"#)?["bdstoken"].string, !token.isEmpty else {
             throw CloudnError("百度网盘登录已失效，请到「我的」页重新登录")

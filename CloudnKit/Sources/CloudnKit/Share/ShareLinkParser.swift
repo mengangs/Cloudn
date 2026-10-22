@@ -64,6 +64,14 @@ public enum ShareLinkParser {
         if let target = GoogleDriveResolver.target(of: url) { return ParsedShare(shareId: target.id, pwd: nil, platform: .gdrive, url: url) }
         // OneDrive 的分享 id 就是链接本身（接口用 base64 编码后的完整链接）
         if onedrive.matches(url) { return ParsedShare(shareId: url, pwd: textPwd, platform: .onedrive, url: url) }
+        // 新平台的识别规则写在各自的解析器里：返回分享 id 与链接里自带的提取码
+        let others: [(SharePlatform, (String) -> (id: String, pwd: String?)?)] = [
+            (.pikpak, PikPakResolver.shareTarget), (.cloud189, Cloud189Resolver.shareTarget), (.dropbox, DropboxResolver.shareTarget),
+            (.ctfile, CtFileResolver.shareTarget),
+        ]
+        for (platform, target) in others {
+            if let t = target(url) { return ParsedShare(shareId: t.id, pwd: t.pwd ?? textPwd, platform: platform, url: url) }
+        }
         return nil
     }
 }

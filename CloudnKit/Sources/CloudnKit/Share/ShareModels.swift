@@ -4,6 +4,9 @@ import Foundation
 /// 网盘平台。识别规则见 `ShareLinkParser`，解析能力见 `SharePlatform.isResolvable`。
 public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable {
     case quark, uc, xunlei, baidu, c139, pan123, pan115, guangya, ilanzou, lanzou, aliyun, gdrive, onedrive
+    case pikpak, cloud189, dropbox, ctfile
+    /// 只有「我的网盘」（没有分享链接）
+    case webdav
 
     public var id: String { rawValue }
 
@@ -22,6 +25,11 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .aliyun: return "阿里云盘"
         case .gdrive: return "Google 云端硬盘"
         case .onedrive: return "OneDrive"
+        case .pikpak: return "PikPak"
+        case .cloud189: return "天翼云盘"
+        case .dropbox: return "Dropbox"
+        case .ctfile: return "城通网盘"
+        case .webdav: return "WebDAV"
         }
     }
 
@@ -44,6 +52,11 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .aliyun: return .aliyun
         case .onedrive: return .onedrive
         case .gdrive: return .gdrive
+        case .pikpak: return .pikpak
+        case .cloud189: return .cloud189
+        case .dropbox: return .dropbox
+        case .webdav: return .webdav
+        case .ctfile: return nil
         }
     }
 }
@@ -126,7 +139,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, aliyun, onedrive, gdrive, douyin, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, aliyun, cloud189, pikpak, onedrive, gdrive, dropbox, webdav, douyin, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
     /// 海外视频平台（可选登录：解析受限内容、避开游客限额）
     case twitter, instagram, tiktok, reddit, facebook, threads
 
@@ -147,6 +160,10 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .aliyun: return "阿里云盘"
         case .onedrive: return "OneDrive"
         case .gdrive: return "Google 云端硬盘"
+        case .cloud189: return "天翼云盘"
+        case .pikpak: return "PikPak"
+        case .dropbox: return "Dropbox"
+        case .webdav: return "WebDAV"
         case .douyin: return "抖音"
         case .bilibili: return "哔哩哔哩"
         case .xiaohongshu: return "小红书"

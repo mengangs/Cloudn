@@ -331,6 +331,10 @@ extension AccountKind {
         case .aliyun: return URL(string: AliyunResolver.loginURL)!
         case .onedrive: return URL(string: "https://login.microsoftonline.com/")!
         case .gdrive: return URL(string: "https://accounts.google.com/")!
+        case .pikpak: return URL(string: "https://mypikpak.com/drive/login")!
+        case .cloud189: return URL(string: Cloud189Resolver.loginURL)!
+        case .dropbox: return URL(string: "https://www.dropbox.com/login")!
+        case .webdav: return URL(string: "https://example.com/")!
         case .douyin: return URL(string: "https://www.douyin.com/")!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
@@ -359,7 +363,8 @@ extension AccountKind {
         case .guangya, .ilanzou, .lanzou: return VideoHTTP.uaChrome
         // 手机版页面只引导下载 App，没有网页登录
         case .aliyun: return VideoHTTP.uaChrome
-        case .onedrive, .gdrive: return VideoHTTP.uaChrome
+        case .onedrive, .gdrive, .dropbox, .webdav, .pikpak: return VideoHTTP.uaChrome
+        case .cloud189: return VideoHTTP.uaChrome
         case .bilibili: return VideoHTTP.uaChrome
         // 手机 UA 下网页只引导打开 App，没有登录入口
         case .douyin: return VideoHTTP.uaChrome
@@ -384,7 +389,8 @@ extension AccountKind {
         case .c139: return .cookies(C139Resolver.cookieDomains)
         case .lanzou: return .cookies(["woozooo.com"])
         case .aliyun: return .script(AliyunResolver.readScript)
-        case .onedrive, .gdrive: return .cookies([])
+        case .onedrive, .gdrive, .dropbox, .webdav, .pikpak: return .cookies([])
+        case .cloud189: return .cookies(Cloud189Resolver.cookieDomains)
         case .guangya, .ilanzou: return .cookies([])
         case .bilibili: return .cookies(["bilibili.com"])
         case .douyin: return .cookies(["douyin.com"])
@@ -408,6 +414,8 @@ extension AccountKind {
         case .lanzou: return LanzouAccount.isValidCookie(credential)
         case .aliyun: return AliyunCredential.parse(credential) != nil
         case .onedrive, .gdrive: return OAuthCredential.parse(credential) != nil
+        case .cloud189: return Cloud189Resolver.looksLoggedIn(cookie: credential)
+        case .pikpak, .dropbox, .webdav: return false
         case .guangya, .ilanzou: return false
         case .bilibili: return credential.contains("SESSDATA=")
         case .douyin: return DouyinAccount.looksLoggedIn(cookie: credential)
@@ -438,6 +446,10 @@ extension AccountKind {
         case .aliyun: return "登录后可下载分享、转存，并管理自己的阿里云盘"
         case .onedrive: return "登录后可管理自己的 OneDrive，并打开只分享给你的链接"
         case .gdrive: return "登录后可管理自己的 Google 云端硬盘，并把公开分享里的文件复制到自己的盘"
+        case .pikpak: return "登录后可下载分享、转存，管理自己的 PikPak，并离线下载磁链"
+        case .cloud189: return "登录后可下载分享、转存，并管理自己的天翼云盘"
+        case .dropbox: return "登录后可管理自己的 Dropbox"
+        case .webdav: return "连接坚果云、NAS 等 WebDAV 服务，像网盘一样浏览和下载"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .douyin: return "登录后可获取作者主页的全部作品（未登录通常只有第一页）"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
@@ -468,6 +480,10 @@ extension AccountKind {
         case .aliyun: return "粘贴网页 localStorage 中 token 的值（JSON），或 refresh_token"
         case .onedrive: return "请用「登录」按钮通过微软官方页面登录"
         case .gdrive: return "请用「登录」按钮通过 Google 官方页面登录"
+        case .pikpak: return "粘贴 refresh_token（建议改用账号密码登录）"
+        case .cloud189: return "需包含 COOKIE_LOGIN_USER（建议改用账号密码登录）"
+        case .dropbox: return "粘贴访问令牌（access token），或用「登录」按钮授权"
+        case .webdav: return "填写服务器地址、用户名和密码"
         case .bilibili: return "需包含 SESSDATA"
         case .douyin: return "需包含 sessionid"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
@@ -480,7 +496,7 @@ extension AccountKind {
 
     var manualPlaceholder: String {
         switch self {
-        case .xunlei, .pan123, .guangya, .ilanzou, .aliyun: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
+        case .xunlei, .pan123, .guangya, .ilanzou, .aliyun, .pikpak, .dropbox: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
         default: return "在电脑浏览器登录后复制请求头里的 Cookie"
         }
     }
@@ -500,6 +516,10 @@ extension AccountKind {
         case .aliyun: return "a.circle.fill"
         case .onedrive: return "cloud.fill"
         case .gdrive: return "triangle.fill"
+        case .pikpak: return "p.circle.fill"
+        case .cloud189: return "t.circle.fill"
+        case .dropbox: return "shippingbox.fill"
+        case .webdav: return "server.rack"
         case .bilibili: return "play.tv.fill"
         case .douyin: return "music.note"
         case .xiaohongshu: return "book.closed.fill"
@@ -517,13 +537,16 @@ extension AccountKind {
 
     /// 光鸭、蓝奏优享的网页登录态存在 IndexedDB / 加密存储里不便读取，只提供应用内账号密码登录。
     /// Pixiv 登录页带 reCAPTCHA，出现验证时在网页里完成即可；Google / Apple 账号登录会被内嵌网页拦下，需用 pixiv 账号密码
-    var supportsWebLogin: Bool { ![.guangya, .ilanzou].contains(self) && oauth == nil }
+    /// PikPak 网页登录要过人机验证且凭据不在 Cookie 里，WebDAV 没有网页：都只走应用内表单
+    var supportsWebLogin: Bool { ![.guangya, .ilanzou, .pikpak, .webdav, .dropbox].contains(self) && oauth == nil }
 
     /// 走系统登录页（OAuth）的平台：微软 / Google 不允许在内嵌网页里登录
     var oauth: OAuthProvider? {
         switch self {
         case .onedrive: return .microsoft
         case .gdrive: return .google
+        // 没配置 App Key 时为 nil，退回手动粘贴令牌
+        case .dropbox: return OAuthProvider.dropbox
         default: return nil
         }
     }
@@ -543,5 +566,5 @@ extension AccountKind {
     }
 
     /// 有应用内账号密码登录、且网页登录不好用的平台，点「登录」先走账号密码
-    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya].contains(self) && passwordLogin != nil }
+    var prefersPasswordLogin: Bool { [.ilanzou, .lanzou, .guangya, .pikpak, .cloud189].contains(self) && passwordLogin != nil }
 }

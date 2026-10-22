@@ -73,6 +73,13 @@
 | 阿里云盘 | 浏览 | 下载、转存、管理我的网盘（资源库 / 备份盘）、上传（支持秒传） |
 | Google 云端硬盘 | 浏览、下载（文件夹整批下载；Google 文档 / 表格 / 幻灯片自动导出为 Word / Excel / PowerPoint） | Google 账号登录后管理我的网盘、上传、把公开分享里的文件复制到自己的盘，分享可设任何人查看 / 编辑并可取消 |
 | OneDrive | 浏览、下载（个人版与工作或学校版，支持密码分享） | 微软账号登录后管理我的网盘、上传，分享可设谁能访问 / 查看或编辑 / 有效期 / 密码，并可取消已有分享 |
+| PikPak | — | 浏览、下载、转存、管理我的网盘、上传、离线下载（磁力 / 网址 / ed2k） |
+| 天翼云盘 | 浏览 | 下载、转存、管理我的网盘、上传 |
+| Dropbox | 下载（文件夹打包为 zip） | 浏览带密码的分享、管理我的网盘、上传、网址离线保存 |
+| 城通网盘 | 浏览、下载 | — |
+| WebDAV（坚果云、NAS、OpenList 等） | — | 填写地址与账号后像网盘一样浏览、下载、上传、管理 |
+
+**离线下载**：迅雷、115、123、光鸭、百度、夸克、PikPak 登录后，可以把磁力链接或网址交给网盘服务器下载，存进自己的网盘，不占手机流量（磁力页「离线到网盘」，或我的网盘右上角「离线下载」）。各家对免费账号有次数或空间限制。
 
 提取码自动识别；迅雷中文口令可以直接粘贴。OneDrive 个人版（1drv.ms）与工作或学校版（SharePoint）的分享都支持，设了密码的分享填上密码即可。夸克 / UC 的中文口令只能在夸克 App 里还原，Cloudn 可以把口令文字发给第三方「星海」服务换取分享链接——只发口令文字、不含任何账号信息，首次使用前会征得你同意，可在设置中关闭。
 
@@ -229,7 +236,7 @@ Cloudn 以 [GNU AGPL-3.0](LICENSE) 发布。
 
 Cloudn 是独立开发的应用，与 YunX 项目及其作者没有关联；但其中部分网盘与视频平台的协议实现参考了开源项目 [YunX](https://github.com/CYQawa/YunX)（AGPL-3.0），依照该许可，Cloudn 的源代码同样以 AGPL-3.0 开放，相关文件头部已注明来源。
 
-Google 云端硬盘分享的解析参考了 [gdown](https://github.com/wkentaro/gdown)（MIT License，Copyright (c) 2015 Kentaro Wada）；阿里云盘（含个人盘的设备签名）与 OneDrive 工作或学校版分享参考了 [OpenList](https://github.com/OpenListTeam/OpenList)（AGPL-3.0）。
+Google 云端硬盘分享的解析参考了 [gdown](https://github.com/wkentaro/gdown)（MIT License，Copyright (c) 2015 Kentaro Wada）；阿里云盘（含个人盘的设备签名）、OneDrive 工作或学校版分享、PikPak、天翼云盘、Dropbox、WebDAV 以及迅雷 / 115 / 123 / 光鸭的离线下载参考了 [OpenList](https://github.com/OpenListTeam/OpenList)（AGPL-3.0）；城通网盘参考了 [netdisk-fast-download](https://github.com/qaiu/netdisk-fast-download)（MIT License）；百度离线下载参考了 [BaiduPCS-Go](https://github.com/qjfoidnh/BaiduPCS-Go)（Apache-2.0）；夸克离线下载的协议参考了 [qrypt](https://github.com/yinzhenyu-su/qrypt) 与 [QuarkPlusPlus](https://github.com/TabNahida/QuarkPlusPlus)。
 
 其他视频平台的解析分别参考了 [ParseHub](https://github.com/z-mio/ParseHub)（MIT License，Copyright (c) 2024 梓澪）、[parse-video](https://github.com/wujunwei928/parse-video)（MIT License，Copyright (c) 2022 wujunwei928）与 [yt-dlp](https://github.com/yt-dlp/yt-dlp)（Unlicense）；YouTube 签名求解脚本取自 yt-dlp-ejs（Unlicense，内含 meriyah / ISC 与 astring / MIT）。
 

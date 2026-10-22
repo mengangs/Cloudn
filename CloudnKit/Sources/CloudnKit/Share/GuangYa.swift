@@ -186,7 +186,7 @@ public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
     // MARK: 请求
 
     /// `prefix` 为接口路径前缀：业务接口 /userres/v1/，容量接口 /assets/v1/
-    private func call(_ name: String, _ body: OrderedJSON, fallback: String, cred: GuangYaCredential? = nil,
+    func call(_ name: String, _ body: OrderedJSON, fallback: String, cred: GuangYaCredential? = nil,
                       prefix: String = "/userres/v1/") async throws -> JSON {
         var headers: [(String, String)] = [
             ("Accept", "application/json, text/plain, */*"), ("Content-Type", "application/json"), ("User-Agent", Self.ua),

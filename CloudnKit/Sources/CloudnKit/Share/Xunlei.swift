@@ -120,7 +120,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
 
     private let credentials: CredentialStore
     private let client: HTTPClient
-    private let panBase: String
+    let panBase: String
     private let authBase: String
     private let state = State()
     /// 未登录（及凭据里没有设备号）时用的进程内设备号
@@ -364,7 +364,7 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
     }
 
     /// pan 请求；登录态遇到 captcha_invalid 时按本次 action 重新初始化 captcha token 后重试一次
-    private func pan(_ action: String, url: String, method: String? = nil, body: OrderedJSON? = nil, identity: Identity,
+    func pan(_ action: String, url: String, method: String? = nil, body: OrderedJSON? = nil, identity: Identity,
                      anonymous: Bool = false) async throws -> JSON {
         var id = identity
         for attempt in 0..<3 {
@@ -549,7 +549,7 @@ extension XunleiResolver: DriveManager {
     }
 
     /// 未登录统一抛 loginRequired；已登录则沿用 loginIdentity（含过期续期）
-    private func driveIdentity() async throws -> Identity {
+    func driveIdentity() async throws -> Identity {
         guard let raw = await credentials.cookie(for: .xunlei), XunleiCredential.parse(raw) != nil else {
             throw SharePlatform.xunlei.loginRequired
         }

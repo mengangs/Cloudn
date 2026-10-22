@@ -61,6 +61,8 @@ public enum PasswordLogins {
         case .xunlei: return XunleiLogin(client: client)
         case .ilanzou: return ILanzouLogin(client: client)
         case .lanzou: return LanzouLogin(client: client)
+        case .pikpak: return PikPakLogin(client: client)
+        case .cloud189: return Cloud189Login(client: client)
         default: return nil
         }
     }

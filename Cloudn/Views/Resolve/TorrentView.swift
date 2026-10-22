@@ -19,6 +19,7 @@ struct TorrentView: View {
     @Environment(AppModel.self) private var app
     let target: TorrentTarget
     @State private var selected = Set<Int>()
+    @State private var offlining = false
 
     /// 查找在应用层进行：离开本页不中断，回来接着看
     private var status: TorrentFetchStore.Status { app.torrents.status(target.magnet) }
@@ -38,6 +39,7 @@ struct TorrentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if !app.offlineDrives.isEmpty { offlineCard }
                 if let info {
                     fileSection(info)
                 } else if let errorMessage {
@@ -72,6 +74,7 @@ struct TorrentView: View {
         .safeAreaInset(edge: .bottom) {
             if info != nil { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
         }
+        .sheet(isPresented: $offlining) { AddOfflineTaskView(links: target.magnet.uri) }
         .sensoryFeedback(.selection, trigger: selected)
         .onAppear {
             // 一打开就记进「最近」：还没拿到种子信息就退出，也能从解析页找回来
@@ -115,6 +118,29 @@ struct TorrentView: View {
                 .textSelection(.enabled)
         }
         .padding(.horizontal, 4)
+    }
+
+    /// 已登录支持离线下载的网盘时：交给网盘服务器下载，不用等节点、不占手机流量
+    private var offlineCard: some View {
+        Button { offlining = true } label: {
+            HStack(spacing: 12) {
+                IconView(.cloud, size: 20)
+                    .foregroundStyle(Color.clayInk)
+                    .frame(width: 36, height: 36)
+                    .background(Color.claySoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("离线到网盘").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                    Text("由" + app.offlineDrives.prefix(3).map(\.displayName).joined(separator: "、") + "下载，不占手机流量")
+                        .font(.caption).foregroundStyle(Color.ink3).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                IconView(.chevronRight, size: 13).foregroundStyle(Color.ink3)
+            }
+            .padding(12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .card()
     }
 
     private var loadingCard: some View {

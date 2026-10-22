@@ -182,3 +182,64 @@ public extension DriveManager {
     func existingShares(_ file: ShareFile) async throws -> [DriveShareInfo] { [] }
     func revokeShare(_ file: ShareFile, id: String) async throws { throw CloudnError("该网盘暂不支持取消分享") }
 }
+
+// MARK: - 离线下载（云端下载磁链 / 网址，存进自己的网盘）
+
+/// 离线任务的状态
+public enum OfflineTaskState: Sendable, Equatable {
+    case waiting, running, done
+    case failed(String)
+
+    public var isFinished: Bool {
+        switch self {
+        case .done, .failed: return true
+        case .waiting, .running: return false
+        }
+    }
+}
+
+/// 一个离线下载任务
+public struct OfflineTask: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    /// 0...1；平台不给进度时为 nil
+    public let progress: Double?
+    public let size: Int64
+    public let state: OfflineTaskState
+    /// 完成后文件 / 文件夹所在目录（能定位时），用于「打开所在文件夹」
+    public let folderId: String?
+
+    public init(id: String, name: String, progress: Double?, size: Int64, state: OfflineTaskState, folderId: String? = nil) {
+        self.id = id
+        self.name = name
+        self.progress = progress
+        self.size = size
+        self.state = state
+        self.folderId = folderId
+    }
+}
+
+/// 支持离线下载的网盘（需要登录）
+public protocol DriveOfflineDownloader: Sendable {
+    /// 支持的链接前缀（小写），例如 ["magnet:", "http", "ed2k:"]
+    var offlineSchemes: [String] { get }
+    /// 平台限制的说明（会员、配额等），显示在添加页底部；没有为空
+    var offlineNote: String { get }
+    /// 提交离线任务，存到 folderId；返回任务名（拿不到返回 nil）
+    func addOfflineTask(_ url: String, to folderId: String) async throws -> String?
+    /// 最近的离线任务
+    func offlineTasks() async throws -> [OfflineTask]
+    /// 删除任务记录（不删已下载的文件）
+    func removeOfflineTasks(_ ids: [String]) async throws
+}
+
+public extension DriveOfflineDownloader {
+    var offlineSchemes: [String] { ["magnet:", "http"] }
+    var offlineNote: String { "" }
+
+    /// 链接是否是这个平台能离线的类型
+    func acceptsOffline(_ url: String) -> Bool {
+        let lower = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return offlineSchemes.contains { lower.hasPrefix($0) }
+    }
+}

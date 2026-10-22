@@ -18,7 +18,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
 
     private let credentials: CredentialStore
     private let client: HTTPClient
-    private let apiBase: String
+    let apiBase: String
     private let downloadBase: String
     private let state = State()
 
@@ -203,7 +203,7 @@ public final class Pan123Resolver: ShareResolver, @unchecked Sendable {
                 ("User-Agent", Self.webUA), ("Accept", "application/json, text/plain, */*")]
     }
 
-    private func callJSON(_ req: HTTPRequest) async throws -> JSON {
+    func callJSON(_ req: HTTPRequest) async throws -> JSON {
         let r = try await client.send(req)
         guard let json = r.json, json.isObject else { throw CloudnError("响应解析失败（HTTP \(r.status)）") }
         return json
@@ -375,12 +375,12 @@ extension Pan123Resolver: DriveManager {
 
     // MARK: 内部
 
-    private func driveToken() async throws -> String {
+    func driveToken() async throws -> String {
         guard let token = await credentials.cookie(for: .pan123)?.nilIfBlank else { throw SharePlatform.pan123.loginRequired }
         return token
     }
 
-    private func jsonAuthHeaders(path: String, token: String) -> [(String, String)] {
+    func jsonAuthHeaders(path: String, token: String) -> [(String, String)] {
         authHeaders(path: path, token: token) + [("Content-Type", "application/json;charset=UTF-8")]
     }
 

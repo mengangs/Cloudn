@@ -127,6 +127,10 @@ public enum AccountValidator {
         case .guangya: return GuangYaCredential.parse(trimmed)?.serialized ?? trimmed
         case .aliyun: return AliyunCredential.parse(trimmed)?.serialized ?? trimmed
         case .onedrive, .gdrive: return OAuthCredential.parse(trimmed)?.serialized ?? trimmed
+        case .pikpak: return PikPakResolver.normalizeCredential(trimmed)
+        case .cloud189: return Cloud189Resolver.normalizeCredential(trimmed)
+        case .dropbox: return DropboxResolver.normalizeCredential(trimmed)
+        case .webdav: return WebDAVResolver.normalizeCredential(trimmed)
         default: return trimmed
         }
     }
@@ -204,6 +208,10 @@ public enum AccountValidator {
         case .gdrive:
             guard let cred = OAuthCredential.parse(cookie) else { return nil }
             return await GoogleDriveResolver.accountName(cred)
+        case .pikpak: return await PikPakResolver.validate(cookie: cookie)
+        case .cloud189: return await Cloud189Resolver.validate(cookie: cookie)
+        case .dropbox: return await DropboxResolver.validate(cookie: cookie)
+        case .webdav: return await WebDAVResolver.validate(cookie: cookie)
         case .aliyun:
             guard let cred = AliyunCredential.parse(cookie) else { return nil }
             return await AliyunCredential.nickname(cred, client: .shared)
