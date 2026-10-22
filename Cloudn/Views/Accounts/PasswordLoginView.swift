@@ -64,7 +64,7 @@ struct PasswordLoginView: View {
                                 .submitLabel(.go)
                                 .onSubmit { if !account.isEmpty && !password.isEmpty { submit() } }
                         } footer: {
-                            Text("账号密码只用于本次向\(kind.displayName)发起登录，不会保存；保存的是登录后得到的登录凭据。")
+                            Text("密码只用于本次登录，不会保存。")
                         }
                     case .sms:
                         Section {

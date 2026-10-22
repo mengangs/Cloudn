@@ -163,16 +163,16 @@ public final class GoogleDriveResolver: ShareResolver, @unchecked Sendable {
     static func pageError(_ r: HTTPResponse) -> CloudnError {
         let html = r.text
         if r.url.contains("accounts.google.com") || r.status == 401 || r.status == 403 && html.contains("ServiceLogin") {
-            return CloudnError("这个 Google 云端硬盘文件没有公开分享（需要「知道链接的任何人均可查看」）")
+            return CloudnError("这个 Google 云端硬盘文件未公开分享（需设为「知道链接的任何人」可查看）")
         }
         if r.status == 404 { return CloudnError("Google 云端硬盘文件不存在或已被删除") }
         if html.contains("Too many users") || html.contains("quota") || html.contains("配额") {
-            return CloudnError("这个文件近期下载人数过多，Google 暂时限制了下载，请过一段时间再试")
+            return CloudnError("这个文件下载人数过多，Google 暂时限制了下载，请稍后再试")
         }
         if let m = Rx(#"<p class="uc-error-subcaption">(.*?)</p>"#).first(in: html) {
             return CloudnError("Google 云端硬盘：\(Self.stripTags(m))")
         }
-        return CloudnError("Google 云端硬盘没有返回文件（HTTP \(r.status)），请确认链接已公开分享")
+        return CloudnError("Google 云端硬盘没有返回文件（HTTP \(r.status)），请确认链接已公开")
     }
 
     static func fileName(fromDisposition disposition: String) -> String? {
@@ -198,7 +198,7 @@ public final class GoogleDriveResolver: ShareResolver, @unchecked Sendable {
         var url = "https://docs.google.com/\(kind)/d/\(id)/edit"
         if !key.isEmpty { url += "?resourcekey=\(key)" }
         let r = try await client.send(HTTPRequest(url: url, headers: [("User-Agent", Self.ua)]))
-        if r.url.contains("accounts.google.com") { throw CloudnError("这个 Google 文档没有公开分享（需要「知道链接的任何人均可查看」）") }
+        if r.url.contains("accounts.google.com") { throw CloudnError("这个 Google 文档未公开分享（需设为「知道链接的任何人」可查看）") }
         guard r.isSuccess else { throw CloudnError("Google 文档无法打开（HTTP \(r.status)）") }
         var title = Rx(#"<meta property="og:title" content="([^"]*)""#).first(in: r.text).map(Self.decodeEntities) ?? ""
         if title.isEmpty {
@@ -261,7 +261,7 @@ public final class GoogleDriveResolver: ShareResolver, @unchecked Sendable {
         if !key.isEmpty { headers.append(("X-Goog-Drive-Resource-Keys", "\(id)/\(key)")) }
         let r = try await client.send(HTTPRequest(url: url, headers: headers))
         if r.url.contains("accounts.google.com") || r.status == 401 || r.status == 403 {
-            throw CloudnError("这个 Google 云端硬盘文件夹没有公开分享（需要「知道链接的任何人均可查看」）")
+            throw CloudnError("这个 Google 云端硬盘文件夹未公开分享（需设为「知道链接的任何人」可查看）")
         }
         if r.status == 404 { throw CloudnError("Google 云端硬盘文件夹不存在或已被删除") }
         guard r.isSuccess else { throw CloudnError("Google 云端硬盘文件夹打开失败（HTTP \(r.status)）") }

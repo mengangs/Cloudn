@@ -30,13 +30,9 @@ extension OneDriveResolver {
 
     // MARK: 登录态
 
-    /// 当前账号的访问令牌；没登录返回 nil。快过期时续期并回写
-    func graphToken(forceRefresh: Bool = false) async throws -> String? {
-        guard let raw = await credentials.cookie(for: .onedrive)?.nilIfBlank, let cred = OAuthCredential.parse(raw) else { return nil }
-        if !forceRefresh, cred.isFresh { return cred.accessToken }
-        let renewed = try await OAuthProvider.microsoft.refresh(cred, client: client)
-        await credentials.updateCookie(renewed.serialized, replacing: raw, for: .onedrive)
-        return renewed.accessToken
+    /// 当前账号的访问令牌；没登录返回 nil。快过期（或 rejected 刚被拒绝）时续期并回写，并发续期合并成一次
+    func graphToken(rejecting rejected: String? = nil) async throws -> String? {
+        try await OAuthCredential.accessToken(.onedrive, provider: .microsoft, credentials: credentials, client: client, rejecting: rejected)
     }
 
     /// 登录态检测：走续期流程（新令牌会回写）
@@ -61,8 +57,9 @@ extension OneDriveResolver {
     /// 分享在匿名方式下打不开时，用自己的账号访问
     func graphShareContext() async throws -> Context {
         guard let token = try await graphToken() else { throw SharePlatform.onedrive.loginRequired }
+        // 拿到的令牌只保证还有 5 分钟以上有效：上下文 4 分钟后重建（重建只读钥匙串，快过期时才续期），免得长时间浏览后 401
         var context = Context(api: Self.graph, auth: [("Authorization", "Bearer " + token), ("Prefer", "redeemSharingLinkIfNecessary")],
-                              expiresAt: Date().addingTimeInterval(45 * 60), root: nil)
+                              expiresAt: Date().addingTimeInterval(4 * 60), root: nil)
         context.fields = Self.graphFields
         context.isGraph = true
         return context
@@ -86,7 +83,7 @@ extension OneDriveResolver {
             }
             let r = try await client.send(HTTPRequest(url: path.hasPrefix("http") ? path : Self.graph + path, method: method,
                                                       headers: headers, body: data))
-            if r.status == 401, attempt == 0, let fresh = try await graphToken(forceRefresh: true) {
+            if r.status == 401, attempt == 0, let fresh = try await graphToken(rejecting: access) {
                 access = fresh
                 continue
             }
@@ -104,9 +101,13 @@ extension OneDriveResolver {
         case (401, _): return CloudnError("OneDrive 登录已失效，请到「我的」页重新登录", code: 401)
         case (_, "nameAlreadyExists"): return CloudnError("已有同名的文件或文件夹")
         case (_, "itemNotFound"): return CloudnError("文件不存在或已被删除")
-        case (_, "quotaLimitReached"): return CloudnError("OneDrive 空间不足")
-        case (_, "accessDenied"): return CloudnError("OneDrive 拒绝了这个操作：\(message.nilIfBlank ?? "没有权限")")
-        default: return CloudnError("OneDrive：\(message.nilIfBlank ?? "请求失败（HTTP \(r.status)）")")
+        case (_, "quotaLimitReached"), (_, "insufficientStorage"): return CloudnError("OneDrive 空间不足")
+        case (_, "activityLimitReached"), (429, _): return CloudnError("OneDrive 请求太频繁，请稍后再试")
+        case (_, "accessDenied"), (403, _): return CloudnError("OneDrive 拒绝了这个操作（没有权限）", code: 403)
+        case (_, "notAllowed"): return CloudnError("OneDrive 不允许这个操作")
+        default:
+            if r.status >= 500 { return CloudnError("OneDrive 暂时不可用（HTTP \(r.status)），请稍后重试") }
+            return CloudnError("OneDrive：\(message.nilIfBlank ?? "请求失败（HTTP \(r.status)）")")
         }
     }
 
@@ -218,8 +219,14 @@ extension OneDriveResolver: DriveManager {
         let info = try await driveInfo()
         if options.audience == .organization, info.isPersonal { throw CloudnError("个人版 OneDrive 没有「组织」，请选择「知道链接的任何人」") }
         var urls: [String] = []
+        let restricted = info.isPersonal && (!options.password.isEmpty || !options.expiry.isForever)
         for file in files {
-            let json = try await graphRequest("POST", Self.itemPath(file.fid) + "/createLink", body: Self.linkBody(options, now: Date()))
+            let json: JSON
+            do {
+                json = try await graphRequest("POST", Self.itemPath(file.fid) + "/createLink", body: Self.linkBody(options, now: Date()))
+            } catch let e as CloudnError where restricted && e.code == 403 {
+                throw CloudnError("个人版 OneDrive 设置密码或有效期需要 Microsoft 365 订阅")
+            }
             let url = json["link"]["webUrl"].string
             guard !url.isEmpty else { throw CloudnError("OneDrive 创建分享失败") }
             urls.append(url)

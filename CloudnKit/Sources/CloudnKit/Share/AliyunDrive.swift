@@ -109,7 +109,7 @@ extension AliyunResolver {
             try await createSession(account, access: access)
             return try await rawDriveCall(path, body, access: access, account: account, host: host, shareToken: shareToken)
         } catch let e as CloudnError where e.code == Self.accessExpired {
-            guard let fresh = try await accessToken(forceRefresh: true) else { throw SharePlatform.aliyun.loginRequired }
+            guard let fresh = try await accessToken(rejecting: access) else { throw SharePlatform.aliyun.loginRequired }
             return try await rawDriveCall(path, body, access: fresh, account: account, host: host, shareToken: shareToken)
         }
     }

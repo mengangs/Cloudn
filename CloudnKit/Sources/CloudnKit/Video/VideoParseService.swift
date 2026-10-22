@@ -189,6 +189,8 @@ public enum AccountValidator {
             if let name = await GuangYaLogin.nickname(cred, client: .shared) { return name }
             // 访问令牌过期但 refresh_token 仍有效：续期成功即视为有效（解析器取链时会再续期并回写）
             guard let renewed = await GuangYaLogin.refresh(cred, client: .shared) else { return nil }
+            // 应用随后保存的是旧凭据：记下新凭据，解析器读到旧凭据时换上
+            await CredentialRenewal.shared.recordValidated(.guangya, consumedRefreshToken: cred.refreshToken, renewed: renewed.serialized)
             return await GuangYaLogin.nickname(renewed, client: .shared) ?? "光鸭云盘用户"
         case .ilanzou:
             guard let cred = ILanzouCredential.parse(cookie) else { return nil }

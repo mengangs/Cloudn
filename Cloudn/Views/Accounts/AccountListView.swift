@@ -60,7 +60,7 @@ struct AccountListView: View {
                             }
                         }
                     } footer: {
-                        Text("解析、转存与网盘管理使用主账号。在设置中开启「多账号下载」后，批量下载会按文件轮换使用这里的全部账号。")
+                        Text("解析、转存和网盘管理使用主账号；开启「多账号下载」后，批量下载会轮换使用全部账号。")
                     }
                 Section {
                     Button { onAdd(kind) } label: { Label("添加账号", glyph: .user) }

@@ -14,12 +14,9 @@ extension GoogleDriveResolver {
 
     // MARK: 登录态
 
-    func driveToken(forceRefresh: Bool = false) async throws -> String? {
-        guard let raw = await credentials.cookie(for: .gdrive)?.nilIfBlank, let cred = OAuthCredential.parse(raw) else { return nil }
-        if !forceRefresh, cred.isFresh { return cred.accessToken }
-        let renewed = try await OAuthProvider.google.refresh(cred, client: client)
-        await credentials.updateCookie(renewed.serialized, replacing: raw, for: .gdrive)
-        return renewed.accessToken
+    /// rejected：刚被服务端拒绝（401）的令牌，要求续期
+    func driveToken(rejecting rejected: String? = nil) async throws -> String? {
+        try await OAuthCredential.accessToken(.gdrive, provider: .google, credentials: credentials, client: client, rejecting: rejected)
     }
 
     public func checkLogin() async -> Bool {
@@ -52,7 +49,7 @@ extension GoogleDriveResolver {
                 data = JSON.serialize(body)
             }
             let r = try await client.send(HTTPRequest(url: path.hasPrefix("http") ? path : Self.api + path, method: method, headers: headers, body: data))
-            if r.status == 401, attempt == 0, let fresh = try await driveToken(forceRefresh: true) {
+            if r.status == 401, attempt == 0, let fresh = try await driveToken(rejecting: access) {
                 access = fresh
                 continue
             }
@@ -68,13 +65,24 @@ extension GoogleDriveResolver {
         let message = error["message"].string
         switch (r.status, reason) {
         case (401, _): return CloudnError("Google 云端硬盘登录已失效，请到「我的」页重新登录", code: 401)
-        case (_, "storageQuotaExceeded"): return CloudnError("Google 云端硬盘空间不足")
+        case (_, "storageQuotaExceeded"), (_, "quotaExceeded"): return CloudnError("Google 云端硬盘空间不足")
         case (404, _): return CloudnError("文件不存在或没有权限访问")
-        case (_, "exportSizeLimitExceeded"): return CloudnError("这个 Google 文档太大，无法导出（上限 10MB），请到网页版下载")
-        case (_, "rateLimitExceeded"), (_, "userRateLimitExceeded"): return CloudnError("Google 请求太频繁，请稍后再试")
-        default: return CloudnError("Google 云端硬盘：\(message.nilIfBlank ?? "请求失败（HTTP \(r.status)）")")
+        case (_, "exportSizeLimitExceeded"): return CloudnError("Google 文档超过 10MB，无法导出，请到网页版下载")
+        case (_, "downloadQuotaExceeded"): return CloudnError("这个文件下载次数过多，Google 暂时限制了下载，请稍后再试")
+        case (_, "cannotCopyFile"): return CloudnError("文件所有者禁止了复制")
+        case (_, "fileNotDownloadable"): return CloudnError("这种 Google 文件不能直接下载")
+        case (_, "rateLimitExceeded"), (_, "userRateLimitExceeded"), (429, _): return CloudnError("Google 请求太频繁，请稍后再试")
+        case (403, "insufficientFilePermissions"), (403, "insufficientPermissions"), (403, "forbidden"):
+            if message.lowercased().contains("inherited") { return inheritedShareError }
+            return CloudnError("没有权限进行这个操作")
+        default:
+            if message.lowercased().contains("inherited") { return inheritedShareError }
+            if r.status >= 500 { return CloudnError("Google 云端硬盘暂时不可用（HTTP \(r.status)），请稍后重试") }
+            return CloudnError("Google 云端硬盘：\(message.nilIfBlank ?? "请求失败（HTTP \(r.status)）")")
         }
     }
+
+    static let inheritedShareError = CloudnError("这个分享继承自上级文件夹，请到上级文件夹里取消")
 
     static func folderRef(_ id: String) -> String { id.isEmpty ? "root" : id }
 
@@ -121,20 +129,32 @@ extension GoogleDriveResolver: DriveManager {
     public var driveCapabilities: DriveCapabilities { .all }
 
     public func listDrive(_ folderId: String) async throws -> [ShareFile] {
+        try await listFiles(folderId, query: Self.listQuery(folderId), orderBy: "folder,name")
+    }
+
+    /// files.list 翻页取完（nextPageToken）；同一个 pageToken 再次出现时停下，不会死循环
+    private func listFiles(_ folderId: String, query: String, orderBy: String) async throws -> [ShareFile] {
         var all: [ShareFile] = []
         var pageToken = ""
+        var seen = Set<String>()
         for _ in 0..<200 {
-            var components = URLComponents(string: Self.api + "/files")!
-            components.queryItems = [URLQueryItem(name: "q", value: Self.listQuery(folderId)),
-                                     URLQueryItem(name: "fields", value: "nextPageToken,files(\(Self.fileFields))"),
-                                     URLQueryItem(name: "pageSize", value: "1000"), URLQueryItem(name: "orderBy", value: "folder,name"),
-                                     URLQueryItem(name: "pageToken", value: pageToken.nilIfBlank)].filter { $0.value != nil }
-            let json = try await apiRequest("GET", components.url!.absoluteString)
+            let json = try await apiRequest("GET", Self.listURL(query: query, orderBy: orderBy, pageToken: pageToken))
             all += json["files"].array.map { Self.parseAPIFile($0, parent: folderId) }
             pageToken = json["nextPageToken"].string
-            if pageToken.isEmpty { break }
+            if pageToken.isEmpty || !seen.insert(pageToken).inserted { break }
         }
         return all
+    }
+
+    /// q 里有引号、空格等，交给 URLComponents 编码（「+」另外编码，否则会被服务端当成空格）
+    static func listURL(query: String, orderBy: String, pageToken: String) -> String {
+        var components = URLComponents(string: api + "/files")!
+        components.queryItems = [URLQueryItem(name: "q", value: query),
+                                 URLQueryItem(name: "fields", value: "nextPageToken,files(\(fileFields))"),
+                                 URLQueryItem(name: "pageSize", value: "1000"), URLQueryItem(name: "orderBy", value: orderBy),
+                                 URLQueryItem(name: "pageToken", value: pageToken.nilIfBlank)].filter { $0.value != nil }
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return components.url?.absoluteString ?? api + "/files"
     }
 
     /// 带 Authorization 头下载（访问令牌约 1 小时有效，超长下载中断后重试会重新取链）
@@ -268,11 +288,8 @@ extension GoogleDriveResolver: DriveManager {
             try await apiRequest("DELETE", "/files/\(parts[0])/permissions/\(parts[1])")
             return
         }
-        do {
-            try await apiRequest("DELETE", "/files/\(file.fid)/permissions/\(id)")
-        } catch let error as CloudnError where error.message.contains("inherited") {
-            throw CloudnError("这个分享来自上级文件夹，单个文件不能取消。请到上级文件夹的「分享设置」里取消")
-        }
+        // 不能单独取消的继承权限由 apiError 换成「请到上级文件夹里取消」
+        try await apiRequest("DELETE", "/files/\(file.fid)/permissions/\(id)")
     }
 }
 
@@ -282,12 +299,7 @@ extension GoogleDriveResolver: ShareSaver {
     public var rootFolderId: String { "" }
 
     public func listFolders(_ parentId: String) async throws -> [ShareFile] {
-        var components = URLComponents(string: Self.api + "/files")!
-        components.queryItems = [URLQueryItem(name: "q", value: Self.listQuery(parentId) + " and mimeType = '\(Self.folderMime)'"),
-                                 URLQueryItem(name: "fields", value: "files(\(Self.fileFields))"), URLQueryItem(name: "pageSize", value: "1000"),
-                                 URLQueryItem(name: "orderBy", value: "name")]
-        let json = try await apiRequest("GET", components.url!.absoluteString)
-        return json["files"].array.map { Self.parseAPIFile($0, parent: parentId) }
+        try await listFiles(parentId, query: Self.listQuery(parentId) + " and mimeType = '\(Self.folderMime)'", orderBy: "name")
     }
 
     /// Drive API 不能复制文件夹：只复制选中的文件（文件夹请进去后选择文件）
@@ -315,16 +327,28 @@ extension GoogleDriveResolver: DriveUploader {
                                                     headers: [("Authorization", "Bearer " + token), ("X-Upload-Content-Length", "\(size)")]))
         guard start.isSuccess, let session = start.header("Location"), !session.isEmpty else { throw Self.apiError(start) }
         var offset: Int64 = 0
-        repeat {
+        var stalls = 0
+        while true {
             let length = min(Self.uploadChunk, size - offset)
             let range = length > 0 ? "bytes \(offset)-\(offset + length - 1)/\(size)" : "bytes */\(size)"
             let r = try await client.upload(HTTPRequest(url: session, method: "PUT", headers: [("Content-Range", range)]),
                                             body: .file(file, offset: offset, length: length)) { [offset] done in
                 progress(.uploading, size > 0 ? Double(offset + done) / Double(size) : 1)
             }
-            guard r.isSuccess || r.status == 308 else { throw Self.apiError(r) }
-            offset += length
-        } while offset < size
+            if r.isSuccess { break }
+            guard r.status == 308 else { throw Self.apiError(r) }
+            // 308 的 Range 是服务端实际收到的部分：没收全时从那里接着传，而不是假定整片都到了
+            let next = Self.resumeOffset(r.header("Range"))
+            stalls = next > offset ? 0 : stalls + 1
+            guard stalls < 3, next < size || size == 0 else { throw CloudnError("Google 云端硬盘上传中断，请重试") }
+            offset = next
+        }
         progress(.finishing, 1)
+    }
+
+    /// 续传上传 308 响应的 Range（bytes=0-N）→ 下一个要传的偏移；没有 Range 表示一个字节也没收到
+    static func resumeOffset(_ range: String?) -> Int64 {
+        guard let range, let last = range.split(separator: "-").last, let end = Int64(last.trimmingCharacters(in: .whitespaces)) else { return 0 }
+        return end + 1
     }
 }

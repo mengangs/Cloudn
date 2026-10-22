@@ -30,7 +30,7 @@ struct BatchView: View {
                 } header: {
                     Text(summary)
                 } footer: {
-                    Text("逐条解析，每条按最高画质加入下载，归在下载页的「\(job.title)」分组里。离开这个页面也会继续。")
+                    Text("逐条按最高画质加入下载，离开此页也会继续。")
                 }
             }
             .paperList()

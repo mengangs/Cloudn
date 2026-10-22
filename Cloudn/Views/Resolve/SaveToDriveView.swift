@@ -47,6 +47,7 @@ struct SaveToDriveView: View {
                                 HStack(spacing: 5) { IconView(.cloud, size: 14); Text("我的网盘") }
                             }
                             .foregroundStyle(path.isEmpty ? Color.ink : Color.ink2)
+                            .disabled(path.isEmpty)
                             ForEach(Array(path.enumerated()), id: \.offset) { index, crumb in
                                 IconView(.chevronRight, size: 11).foregroundStyle(Color.ink3)
                                 Button(crumb.name) { path = Array(path.prefix(index + 1)) }
@@ -59,8 +60,6 @@ struct SaveToDriveView: View {
                         .buttonStyle(.borderless)
                     }
                     .paperRow()
-                } footer: {
-                    Text("将转存 \(files.count) 项到当前文件夹")
                 }
                 if let errorMessage {
                     Section {
@@ -105,7 +104,7 @@ struct SaveToDriveView: View {
                 } label: {
                     HStack(spacing: 8) {
                         if saving { Spinner(size: 18, usesForeground: true) } else { Image(icon: .save) }
-                        Text(saving ? "正在转存…" : (notEnoughSpace ? "空间可能不足，仍要转存" : "保存到「\(path.last?.name ?? "我的网盘")」")).lineLimit(1)
+                        Text(saving ? "正在转存…" : (notEnoughSpace ? "空间可能不足，仍要转存" : "转存 \(files.count) 项到「\(path.last?.name ?? "我的网盘")」")).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
                 }

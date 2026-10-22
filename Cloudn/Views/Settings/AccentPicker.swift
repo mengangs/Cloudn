@@ -17,7 +17,7 @@ struct AccentPicker: View {
                                 .fill(Color(uiColor: UIColor(hexString: preset.hex).map { light in
                                     let dark = UIColor(hexString: preset.dark) ?? light
                                     return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
-                                } ?? UIColor(named: "AccentColor")!))
+                                } ?? UIColor(named: "AccentColor") ?? .systemOrange))
                                 .frame(width: 30, height: 30)
                                 .overlay {
                                     Circle().strokeBorder(Color.ink, lineWidth: selected ? 2 : 0).padding(-4)

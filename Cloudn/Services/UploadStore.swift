@@ -37,6 +37,8 @@ final class UploadStore {
     @ObservationIgnored private var current: Task<Void, Error>?
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored var onMessage: ((String, Bool) -> Void)?
+    /// 这一批已传完的文件名：队列全部结束时合并成一条提示，不逐个弹
+    @ObservationIgnored private var uploadedNames: [String] = []
 
     init(resolvers: ShareResolvers) { self.resolvers = resolvers }
 
@@ -50,6 +52,8 @@ final class UploadStore {
     func enqueue(_ files: [(url: URL, temporary: Bool, scoped: Bool)], platform: SharePlatform, folderId: String) {
         guard let uploader = resolvers.uploader(for: platform) else {
             onMessage?("\(platform.displayName)暂不支持上传", true)
+            // 相册导出的临时文件没人再用，删掉
+            for f in files where f.temporary { try? FileManager.default.removeItem(at: f.url) }
             return
         }
         var added = 0
@@ -57,7 +61,7 @@ final class UploadStore {
             if f.scoped { _ = f.url.startAccessingSecurityScopedResource() }
             let size = FileChunks.size(of: f.url)
             if let limit = uploader.uploadSizeLimit, size > limit {
-                onMessage?("「\(f.url.lastPathComponent)」超过\(platform.displayName)单个文件 \(ByteFormat.string(limit)) 的上限", true)
+                onMessage?("「\(f.url.lastPathComponent)」超过单文件 \(ByteFormat.string(limit)) 上限", true)
                 release(f.url, temporary: f.temporary, scoped: f.scoped)
                 continue
             }
@@ -102,12 +106,18 @@ final class UploadStore {
                 await self.run(next.id)
             }
             self?.worker = nil
+            self?.reportUploaded()
             self?.endBackgroundTask()
         }
     }
 
     private func run(_ id: UUID) async {
-        guard let i = items.firstIndex(where: { $0.id == id }), let uploader = resolvers.uploader(for: items[i].platform) else { return }
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        // 没有上传器也要改掉「等待」状态，否则 pump 会一直取到同一条、原地空转
+        guard let uploader = resolvers.uploader(for: items[i].platform) else {
+            items[i].status = .failed("暂不支持上传")
+            return
+        }
         let item = items[i]
         items[i].status = .running
         beginBackgroundTask()
@@ -121,9 +131,9 @@ final class UploadStore {
             set(id, .done)
             finishedRevision += 1
             Log.info("上传完成：\(item.name) → \(item.platform.displayName)")
-            onMessage?("「\(item.name)」已上传到\(item.platform.displayName)", false)
             items.removeAll { $0.id == id }
             release(item)
+            uploadedNames.append(item.name)
         } catch _ where !items.contains(where: { $0.id == id }) {
             // 用户取消（任务已从列表移除）：上传请求被取消时抛的多是 URLError.cancelled 而不是 CancellationError，
             // 不论抛的是什么都按取消收尾：放掉作用域、删掉临时文件
@@ -140,6 +150,13 @@ final class UploadStore {
         current = nil
     }
 
+    /// 队列跑完：这一批传完的合并成一条提示（失败的在列表里显示，不另弹）
+    private func reportUploaded() {
+        guard let first = uploadedNames.first else { return }
+        onMessage?(uploadedNames.count > 1 ? "已上传 \(uploadedNames.count) 个文件" : "「\(first)」已上传", false)
+        uploadedNames = []
+    }
+
     static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         if let e = error as? URLError, e.code == .cancelled { return true }
@@ -149,6 +166,8 @@ final class UploadStore {
 
     private func update(_ id: UUID, phase: UploadPhase, fraction: Double) {
         guard let i = items.firstIndex(where: { $0.id == id }), items[i].status == .running else { return }
+        // 每读一块、每传一片都会回报：变化不到 1% 不改，免得整个列表跟着高频重绘
+        guard phase != items[i].phase || (fraction >= 1 && items[i].fraction < 1) || abs(fraction - items[i].fraction) >= 0.01 else { return }
         items[i].phase = phase
         items[i].fraction = fraction
     }

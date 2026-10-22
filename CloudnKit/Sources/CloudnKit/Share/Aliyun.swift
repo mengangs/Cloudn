@@ -64,7 +64,14 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
             throw CloudnError("阿里云盘分享需要登录后才能下载，请先到「我的」页登录阿里云盘")
         }
         let body: [String: Any] = ["drive_id": file.token, "file_id": file.fid, "expire_sec": 600, "share_id": session.shareId]
-        let json = try await shareCall("/v2/file/get_share_link_download_url", body, session: session, fallback: "获取下载地址失败", access: access)
+        let json: JSON
+        do {
+            json = try await shareCall("/v2/file/get_share_link_download_url", body, session: session, fallback: "获取下载地址失败", access: access)
+        } catch let e as CloudnError where e.code == Self.accessExpired {
+            // 访问令牌提前失效（如在别处退出登录）：续期一次再试
+            guard let fresh = try await accessToken(rejecting: access) else { throw e }
+            json = try await shareCall("/v2/file/get_share_link_download_url", body, session: session, fallback: "获取下载地址失败", access: fresh)
+        }
         let url = json.string("download_url", "url")
         guard !url.isEmpty else { throw CloudnError("阿里云盘未返回下载地址") }
         return DownloadLink(fileName: file.name, url: url, size: file.size, headers: ["User-Agent": Self.ua, "Referer": Self.webSite + "/"])
@@ -123,7 +130,7 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
         switch code {
         case "ShareLinkTokenInvalid": return CloudnError("阿里云盘分享令牌已过期", code: shareTokenExpired)
         case "AccessTokenInvalid", "AccessTokenExpired": return CloudnError("阿里云盘登录已失效，请到「我的」页重新登录", code: accessExpired)
-        case "InvalidResource.SharePwd", "SharePwdIncorrect": return CloudnError("阿里云盘提取码错误，请重新填写提取码")
+        case "InvalidResource.SharePwd", "SharePwdIncorrect": return CloudnError("阿里云盘提取码错误")
         case "ShareLink.Cancelled": return CloudnError("阿里云盘分享已被取消")
         case "ShareLink.Expired": return CloudnError("阿里云盘分享已过期")
         case "ShareLink.Forbidden": return CloudnError("阿里云盘分享因违规被禁止访问")
@@ -136,17 +143,27 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
 
     // MARK: 登录
 
-    /// 当前账号的 access_token；未登录返回 nil。快过期时用 refresh_token 续期并回写（refresh_token 每次续期都会换新）
-    func accessToken(forceRefresh: Bool = false) async throws -> String? {
-        guard let raw = await credentials.cookie(for: .aliyun)?.nilIfBlank, let cred = AliyunCredential.parse(raw) else { return nil }
-        if !forceRefresh {
-            if !cred.accessToken.isEmpty, cred.expiresAt - 300 > Int64(Date().timeIntervalSince1970) { return cred.accessToken }
-            if let cached = await tokens.access(cred.refreshToken) { return cached }
+    /// 当前账号的 access_token；未登录返回 nil。快过期（或 rejected 刚被拒绝）时用 refresh_token 续期并回写。
+    /// refresh_token 每次续期都会换新、旧的作废：并发续期合并成一次（CredentialRenewal）
+    func accessToken(rejecting rejected: String? = nil) async throws -> String? {
+        guard var raw = await credentials.cookie(for: .aliyun)?.nilIfBlank, var cred = AliyunCredential.parse(raw) else { return nil }
+        // 登录校验时已续期过（保存的 refresh_token 已作废）：换成那次拿到的新凭据
+        if let newer = await CredentialRenewal.shared.validatedRenewal(.aliyun, refreshToken: cred.refreshToken),
+           let parsed = AliyunCredential.parse(newer) {
+            await credentials.updateCookie(newer, replacing: raw, for: .aliyun)
+            raw = newer
+            cred = parsed
         }
-        let renewed = try await AliyunCredential.refresh(cred, client: client)
-        await credentials.updateCookie(renewed.serialized, replacing: raw, for: .aliyun)
-        await tokens.setAccess(renewed.refreshToken, renewed.accessToken)
-        return renewed.accessToken
+        if !cred.accessToken.isEmpty, cred.accessToken != rejected, cred.expiresAt - 300 > Int64(Date().timeIntervalSince1970) {
+            return cred.accessToken
+        }
+        let (stored, current, http, store) = (raw, cred, client, credentials)
+        let renewed = try await CredentialRenewal.shared.renew(.aliyun, raw: stored) {
+            let renewed = try await AliyunCredential.refresh(current, client: http)
+            await store.updateCookie(renewed.serialized, replacing: stored, for: .aliyun)
+            return renewed.serialized
+        }
+        return AliyunCredential.parse(renewed)?.accessToken
     }
 
     /// 登录态检测：走续期流程（续期换来的新 refresh_token 会回写），不能用只校验不保存的 AccountValidator
@@ -172,13 +189,10 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
     actor TokenCache {
         var shares: [String: String] = [:]
         var pwds: [String: String] = [:]
-        var accesses: [String: String] = [:]
         func share(_ id: String) -> String? { shares[id] }
         func setShare(_ id: String, _ t: String) { shares[id] = t }
         func pwd(_ id: String) -> String? { pwds[id] }
         func setPwd(_ id: String, _ p: String) { pwds[id] = p }
-        func access(_ refresh: String) -> String? { accesses[refresh] }
-        func setAccess(_ refresh: String, _ t: String) { accesses[refresh] = t }
     }
 }
 
@@ -216,6 +230,8 @@ public struct AliyunCredential: Equatable, Sendable {
     public static func refresh(_ cred: AliyunCredential, client: HTTPClient) async throws -> AliyunCredential {
         let r = try await client.send(.postJSON(AliyunResolver.authAPI, ["refresh_token": cred.refreshToken, "grant_type": "refresh_token"],
                                                 headers: [("User-Agent", AliyunResolver.ua)]))
+        // 限流 / 服务端故障不是登录失效
+        if r.status == 429 || r.status >= 500 { throw CloudnError("阿里云盘登录续期失败（HTTP \(r.status)），请稍后重试") }
         guard let json = r.json else { throw CloudnError("阿里云盘登录续期失败（HTTP \(r.status)）") }
         let access = json["access_token"].string
         guard r.isSuccess, !access.isEmpty else {
@@ -237,6 +253,8 @@ public struct AliyunCredential: Equatable, Sendable {
             }
         }
         guard let renewed = try? await refresh(cred, client: client) else { return nil }
+        // 旧 refresh_token 已被这次续期用掉，应用随后保存的却是旧凭据：记下新凭据，解析器第一次读到旧凭据时换上
+        await CredentialRenewal.shared.recordValidated(.aliyun, consumedRefreshToken: cred.refreshToken, renewed: renewed.serialized)
         return renewed.nickname.nilIfBlank ?? "阿里云盘用户"
     }
 }

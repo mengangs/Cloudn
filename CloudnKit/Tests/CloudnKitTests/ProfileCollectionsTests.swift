@@ -221,7 +221,7 @@ final class ProfileCollectionsTests: XCTestCase {
             _ = try await DouyinParser(extractor: nil).parse(link, cookie: "")
             XCTFail("应当抛错")
         } catch let error as VideoParseError {
-            XCTAssertEqual(error.detail, "抖音主页需要用 App 内置的网页内核加载作品列表，当前环境不支持")
+            XCTAssertEqual(error.detail, "当前环境无法加载抖音主页（需要 App 内置的网页内核）")
         } catch {
             XCTFail("错误类型不对：\(error)")
         }

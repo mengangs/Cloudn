@@ -59,7 +59,7 @@ struct TextPreviewView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
                 if let text {
                     ToolbarItem(placement: .primaryAction) {
-                        Button { UIPasteboard.general.string = text; copied += 1 } label: { Image(icon: .paste) }
+                        Button { Clipboard.copy(text); copied += 1 } label: { Image(icon: .paste) }
                             .accessibilityLabel("复制全文")
                             .sensoryFeedback(.success, trigger: copied)
                     }

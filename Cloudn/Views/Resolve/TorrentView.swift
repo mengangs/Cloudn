@@ -28,7 +28,7 @@ struct TorrentView: View {
     private var note: String { status.note }
 
     private var files: [TorrentFile] { info?.visibleFiles ?? [] }
-    private var selectedSize: Int64 { files.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.length } }
+    private var selectedSize: Int64 { files.reduce(0) { selected.contains($1.id) ? $0 + $1.length : $0 } }
     private var title: String {
         if let info { return info.name }
         return target.magnet.displayName.isEmpty ? "磁力链接" : target.magnet.displayName
@@ -130,7 +130,7 @@ struct TorrentView: View {
             if !note.isEmpty {
                 Text(note).font(.caption.monospacedDigit()).foregroundStyle(Color.ink3)
             }
-            Text("热门资源通常几秒内就绪；冷门资源可能要等几分钟。离开此页会在后台继续查找，可从解析页「最近」回到这里；也可以不等，直接下载全部。")
+            Text("热门资源通常几秒就绪，冷门的可能要几分钟。离开此页会继续查找，可从解析页「最近」回来。")
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -149,11 +149,14 @@ struct TorrentView: View {
     // MARK: 文件
 
     private func fileSection(_ info: TorrentInfo) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // visibleFiles 每次访问都要重新过滤：这里取一次，不在每一行里重算
+        let files = info.visibleFiles
+        let multi = files.count > 1
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 SectionLabel(title: "文件 \(files.count) 个")
                 Spacer()
-                if files.count > 1 {
+                if multi {
                     Button(selected.count == files.count ? "全不选" : "全选") {
                         selected = selected.count == files.count ? [] : Set(files.map(\.id))
                     }
@@ -162,27 +165,27 @@ struct TorrentView: View {
             }
             LazyVStack(spacing: 0) {
                 ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
-                    fileRow(file, single: info.isSingleFile)
-                    if index < files.count - 1 { RowDivider(leading: files.count > 1 ? 92 : 64) }
+                    fileRow(file, multi: multi)
+                    if index < files.count - 1 { RowDivider(leading: multi ? 92 : 64) }
                 }
             }
             .card()
-            Text("BT 只下载不上传，只在应用打开时下载；切到后台约半分钟后暂停，回到前台自动继续。")
+            Text("只下载不上传；切到后台约半分钟后暂停，回到前台自动继续。")
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
                 .padding(.horizontal, 4)
         }
     }
 
-    private func fileRow(_ file: TorrentFile, single: Bool) -> some View {
+    private func fileRow(_ file: TorrentFile, multi: Bool) -> some View {
         let on = selected.contains(file.id)
         let folder = file.path.dropLast().joined(separator: "/")
         return Button {
-            guard files.count > 1 else { return }
+            guard multi else { return }
             if on { selected.remove(file.id) } else { selected.insert(file.id) }
         } label: {
             HStack(spacing: 12) {
-                if files.count > 1 { SelectMark(on: on) }
+                if multi { SelectMark(on: on) }
                 FileIcon(name: file.name)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(file.name).lineLimit(2).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
@@ -232,7 +235,7 @@ struct TorrentView: View {
         let dn = target.magnet.displayName.trimmingCharacters(in: .whitespaces)
         let name = dn.isEmpty ? "磁力链接 " + String(target.magnet.hexHash.prefix(8)) : dn
         app.downloads.enqueue(DownloadRequest(url: target.magnet.uri, fileName: name, kind: .torrent(files: nil), source: "磁力链接"))
-        app.show("已添加到下载，种子信息在下载列表里继续获取")
+        app.show("已添加到下载，种子信息稍后获取")
     }
 
     private func isQueued(_ magnet: MagnetLink) -> Bool {

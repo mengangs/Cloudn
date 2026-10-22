@@ -249,9 +249,15 @@ public final class XunleiResolver: ShareResolver, @unchecked Sendable {
         }
         let exp = XunleiCredential.jwtClaim(cred.accessToken, "exp").int64
         if cred.accessToken.isEmpty || (exp > 0 && exp - Int64(Date().timeIntervalSince1970) < 60) {
-            guard let renewed = await refresh(cred) else { throw CloudnError("迅雷登录已过期，请到「我的」页重新登录") }
+            // refresh_token 用过即换新：并发请求合并成一次续期（CredentialRenewal）
+            let current = cred
+            let renewedRaw = try await CredentialRenewal.shared.renew(.xunlei, raw: raw) { [self] in
+                guard let renewed = await refresh(current) else { throw CloudnError("迅雷登录已过期，请到「我的」页重新登录") }
+                await credentials.updateCookie(renewed.serialized, replacing: raw, for: .xunlei)
+                return renewed.serialized
+            }
+            guard let renewed = XunleiCredential.parse(renewedRaw) else { throw CloudnError("迅雷登录已过期，请到「我的」页重新登录") }
             cred = renewed
-            await credentials.updateCookie(cred.serialized, replacing: raw, for: .xunlei)
         }
         let device = cred.deviceId.nilIfBlank ?? guestDevice
         let captcha = await state.captcha ?? cred.captchaToken

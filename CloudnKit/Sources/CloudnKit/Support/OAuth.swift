@@ -60,7 +60,7 @@ public struct OAuthProvider: Sendable, Equatable {
         let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         if let error = value("error") {
-            let detail = value("error_description")?.replacingOccurrences(of: "+", with: " ") ?? error
+            let detail = Self.brief(value("error_description")?.replacingOccurrences(of: "+", with: " ") ?? "").nilIfBlank ?? error
             throw CloudnError(error == "access_denied" ? "已取消授权" : "\(name) 登录失败：\(detail)")
         }
         guard value("state") == request.state else { throw CloudnError("\(name) 登录失败：回调校验不一致，请重试") }
@@ -80,16 +80,25 @@ public struct OAuthProvider: Sendable, Equatable {
 
     private func token(_ fields: [(String, String)], previous: OAuthCredential?, client: HTTPClient) async throws -> OAuthCredential {
         let r = try await client.send(.postForm(tokenEndpoint, fields))
+        // 服务端临时故障 / 限流：不是登录失效，稍后重试即可
+        if r.status == 429 || r.status >= 500 { throw CloudnError("\(name) 登录服务暂时不可用（HTTP \(r.status)），请稍后重试") }
         guard let json = r.json else { throw CloudnError("\(name) 登录失败（HTTP \(r.status)）") }
         let access = json["access_token"].string
         guard r.isSuccess, !access.isEmpty else {
             let code = json["error"].string
             if code == "invalid_grant" { throw CloudnError("\(name) 登录已失效，请到「我的」页重新登录", code: 401) }
-            throw CloudnError("\(name) 登录失败：\(json["error_description"].string.nilIfBlank ?? code.nilIfBlank ?? "HTTP \(r.status)")")
+            throw CloudnError("\(name) 登录失败：\(Self.brief(json["error_description"].string).nilIfBlank ?? code.nilIfBlank ?? "HTTP \(r.status)")")
         }
         let lifetime = json["expires_in"].int64 > 0 ? json["expires_in"].int64 : 3600
         return OAuthCredential(refreshToken: json["refresh_token"].string.nilIfBlank ?? previous?.refreshToken ?? "", accessToken: access,
                                expiresAt: Int64(Date().timeIntervalSince1970) + lifetime, name: previous?.name ?? "")
+    }
+
+    /// 服务端的错误说明只留第一行（微软的会带上 Trace ID、Correlation ID、时间戳等几行诊断信息），过长截断
+    static func brief(_ description: String) -> String {
+        var line = description.components(separatedBy: .newlines).first { !$0.trimmed.isEmpty }?.trimmed ?? ""
+        if let r = line.range(of: " Trace ID:") { line = String(line[..<r.lowerBound]).trimmed }
+        return line.count > 120 ? String(line.prefix(120)) + "…" : line
     }
 
     static func challenge(for verifier: String) -> String {
@@ -137,4 +146,18 @@ public struct OAuthCredential: Equatable, Sendable {
 
     /// 还能用至少 5 分钟
     public var isFresh: Bool { !accessToken.isEmpty && expiresAt - 300 > Int64(Date().timeIntervalSince1970) }
+
+    /// 已保存账号的访问令牌；没登录返回 nil。快过期、或 rejected 正是刚被服务端拒绝（401）的那个时续期并回写。
+    /// 别的请求已经续期过（保存的令牌已不是 rejected）就直接用新的；并发续期合并成一次
+    static func accessToken(_ kind: AccountKind, provider: OAuthProvider, credentials: CredentialStore, client: HTTPClient,
+                            rejecting rejected: String? = nil) async throws -> String? {
+        guard let raw = await credentials.cookie(for: kind)?.nilIfBlank, let cred = parse(raw) else { return nil }
+        if cred.isFresh, cred.accessToken != rejected { return cred.accessToken }
+        let renewed = try await CredentialRenewal.shared.renew(kind, raw: raw) {
+            let renewed = try await provider.refresh(cred, client: client)
+            await credentials.updateCookie(renewed.serialized, replacing: raw, for: kind)
+            return renewed.serialized
+        }
+        return parse(renewed)?.accessToken
+    }
 }

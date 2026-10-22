@@ -35,7 +35,7 @@ struct SettingsView: View {
                     } header: {
                         Text("下载")
                     } footer: {
-                        Text("连接数越多速度越快，但部分网盘会限制并发；遇到失败可调低。切到后台后普通文件由系统继续下载，m3u8 与分轨视频会在回到前台时继续。下载的文件可在「文件」App →「我的 iPhone」→ Cloudn 中找到。")
+                        Text("切到后台后普通文件由系统继续下载，m3u8 与分轨视频回到前台后继续。文件在「文件」App →「我的 iPhone」→ Cloudn 中。")
                     }
 
                     Section {
@@ -50,7 +50,7 @@ struct SettingsView: View {
                     } header: {
                         Text("解析")
                     } footer: {
-                        Text("夸克免转存：先直接取直链，失败再临时转存；关闭后一律先转存再取链，下载完成后自动删除。多账号下载：同一网盘登录了多个账号时，批量下载按文件轮换账号取链；开启多源分片后，大文件还会同时用各账号的直链分段下载。中文口令：迅雷口令直接问迅雷；夸克 / UC 口令只能发给第三方「\(QuarkKouling.serviceName)」服务换取分享 ID（只发口令文字，不含任何账号信息），关闭后使用时会再询问。")
+                        Text("夸克免转存：先直接取链，失败再临时转存；关闭则总是先转存，下载后自动删除。多账号下载：同一网盘登录多个账号时，批量下载按文件轮换账号；多源分片会让大文件同时用各账号的直链下载。夸克 / UC 口令需发给第三方「\(QuarkKouling.serviceName)」换取分享 ID（只发口令文字），关闭后每次使用前询问。")
                     }
 
                     Section {
@@ -58,7 +58,7 @@ struct SettingsView: View {
                     } header: {
                         Text("磁力 / BT")
                     } footer: {
-                        Text("磁力链接靠 DHT 网络与 Tracker 寻找节点；自带的 Tracker 常已失效，附加几个公共 Tracker 能更快找到节点。BT 只下载不上传；只在应用打开时下载，切到后台约半分钟后暂停，回到前台自动继续。")
+                        Text("磁力链接自带的 Tracker 常已失效，附加公共 Tracker 能更快找到节点。BT 只下载不上传，切到后台约半分钟后暂停。")
                     }
 
                     Section {
@@ -70,7 +70,7 @@ struct SettingsView: View {
                     } header: {
                         Text("下载位置")
                     } footer: {
-                        Text("选择「文件」App 里的文件夹（如 iCloud 云盘）后，下载完成的文件会移动过去，并保留文件夹层级。\n\n如果选好文件夹点「打开」没有反应：部分签名安装方式下，系统不允许 App 直接访问外部文件夹。可以改在下载页点「选择」，勾选文件后点文件夹按钮「存储到「文件」」，由系统复制过去。")
+                        Text("选择「文件」App 中的文件夹（如 iCloud 云盘）后，下载完成的文件会移过去并保留目录层级。\n\n若选好后点「打开」没反应，是当前签名方式不允许访问外部文件夹：可在下载页多选文件，用文件夹按钮存储到「文件」。")
                     }
 
                     Section("外观") {
@@ -105,7 +105,7 @@ struct SettingsView: View {
                     } header: {
                         Text("更新")
                     } footer: {
-                        Text("从 GitHub Releases（\(UpdateChecker.repository)）读取最新版本，每天最多自动检查一次。")
+                        Text("从 GitHub Releases（\(UpdateChecker.repository)）检查，每天最多自动检查一次。")
                     }
 
                     Section {
@@ -121,7 +121,7 @@ struct SettingsView: View {
                     } header: {
                         Text("网络与 GitHub")
                     } footer: {
-                        Text("粘贴 GitHub 仓库、用户主页或 Release 链接即可浏览并下载文件。GitHub 访问慢时可填镜像，或在网络代理里填本机代理工具的地址。")
+                        Text("GitHub 访问慢时可选下载镜像，或设置网络代理。")
                     }
 
                     Section("诊断") {
@@ -247,7 +247,7 @@ struct UpdateSheet: View {
                         } header: {
                             Text("其他方式")
                         } footer: {
-                            Text("下载完成后在下载页长按安装包，用「分享」发送到 TrollStore、SideStore 等工具安装；也可以直接交给这些工具从链接安装。GitHub 访问慢时可在设置里选择镜像，或改用网盘下载。")
+                            Text("下载后在下载页长按安装包，用「分享」交给 TrollStore、SideStore 等工具安装。GitHub 慢时可改用网盘下载。")
                         }
                     }
                     Section {

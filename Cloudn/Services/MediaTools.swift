@@ -101,7 +101,7 @@ enum MediaTools {
     /// 存入相册（只申请「仅添加」权限）
     static func saveToPhotos(_ url: URL) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { throw MergeError("没有相册写入权限，请到系统设置中允许") }
+        guard status == .authorized || status == .limited else { throw MergeError("没有相册权限，请在系统设置中允许") }
         let isImage = FileNames.kind(of: url.lastPathComponent) == .image
         try await PHPhotoLibrary.shared().performChanges {
             let request = PHAssetCreationRequest.forAsset()

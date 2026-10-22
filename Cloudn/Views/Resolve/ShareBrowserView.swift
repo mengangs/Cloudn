@@ -375,9 +375,13 @@ struct ShareBrowserView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             if model.selecting {
-                Button(model.selection.count == visibleFiles.count ? "全不选" : "全选") {
-                    model.selection = model.selection.count == visibleFiles.count ? [] : Set(visibleFiles.map(\.fid))
+                // 按搜索过滤后看得见的文件判断（selection 里可能还有过滤掉的）
+                let visible = Set(visibleFiles.map(\.fid))
+                let allOn = !visible.isEmpty && visible.isSubset(of: model.selection)
+                Button(allOn ? "全不选" : "全选") {
+                    if allOn { model.selection.subtract(visible) } else { model.selection.formUnion(visible) }
                 }
+                .disabled(visible.isEmpty)
                 Button("完成") { model.selecting = false; model.selection = [] }
                     .fontWeight(.semibold)
             } else {
@@ -576,7 +580,7 @@ struct ShareBrowserView: View {
                 Clipboard.copy(link.url)
                 // 临时转存取到的直链：留一分钟给别的应用开始下载，之后清理网盘里的临时文件
                 model.releaseTemporary(link, after: 60)
-                app.show(link.cleanupToken == nil ? "已复制直链（需带请求头才能下载）" : "已复制直链（临时转存，约 1 分钟后清理）")
+                app.show(link.cleanupToken == nil ? "已复制直链（下载可能需带请求头）" : "已复制直链（临时转存约 1 分钟后清理）")
             }
         } label: {
             Label { Text("复制直链") } icon: { Image(icon: .link) }

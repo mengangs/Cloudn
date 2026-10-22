@@ -74,6 +74,23 @@ public enum HTTPError: Error, LocalizedError, Sendable {
         case .network(let m): return "网络请求失败：\(m)"
         }
     }
+
+    /// URLSession 的错误 → 简短的中文说明（系统自带的说明随设备语言变化，有的还很长）
+    static func from(_ error: Error) -> HTTPError {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return .network(error.localizedDescription) }
+        switch ns.code {
+        case NSURLErrorTimedOut: return .network("请求超时")
+        case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed: return .network("网络未连接")
+        case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: return .network("找不到服务器")
+        case NSURLErrorCannotConnectToHost: return .network("无法连接服务器")
+        case NSURLErrorNetworkConnectionLost: return .network("连接中断")
+        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasBadDate,
+             NSURLErrorServerCertificateNotYetValid, NSURLErrorServerCertificateHasUnknownRoot:
+            return .network("安全连接失败")
+        default: return .network(error.localizedDescription)
+        }
+    }
 }
 
 /// 统一的 HTTP 客户端。
@@ -121,7 +138,7 @@ public final class HTTPClient: @unchecked Sendable {
                         if (error as NSError).code == NSURLErrorCancelled {
                             cont.resume(throwing: CancellationError())
                         } else {
-                            cont.resume(throwing: HTTPError.network(error.localizedDescription))
+                            cont.resume(throwing: HTTPError.from(error))
                         }
                         return
                     }

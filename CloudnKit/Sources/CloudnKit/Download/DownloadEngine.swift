@@ -28,6 +28,8 @@ public actor DownloadEngine {
     private var lastBytes: [UUID: (Int64, Date)] = [:]
     /// 后台会话里各分片已收到、但还没写回数据文件的字节数（只用于显示进度）
     private var backgroundBytes: [UUID: [Int: Int64]] = [:]
+    /// 上次因后台进度推送列表的时间：十几段同时回报时每秒可能几十次，推送限流到每 0.5 秒一次
+    private var lastBackgroundPush = Date.distantPast
     private var observers: [UUID: AsyncStream<[DownloadItem]>.Continuation] = [:]
     private var ticker: Task<Void, Never>?
     private var lastSave = Date.distantPast
@@ -889,8 +891,17 @@ public actor DownloadEngine {
         let alreadyOnDisk = chunk.end < 0 ? 0 : offset - chunk.start - chunk.received
         backgroundBytes[itemId, default: [:]][chunkIndex] = max(0, written + alreadyOnDisk)
         syncProgress(i)
+        // 推送限流（分段写回 / 失败时 applyBackgroundChunk、backgroundChunkFailed 会立即推送，计时器也会定时刷新）
+        let now = Date()
+        guard now.timeIntervalSince(lastBackgroundPush) >= Self.backgroundPushInterval else {
+            ensureTicker()
+            return
+        }
+        lastBackgroundPush = now
         changed()
     }
+
+    static let backgroundPushInterval: TimeInterval = 0.5
 
     /// 后台分片失败：任务退回前台引擎，从已写回数据文件的位置续传（已写回的段保留）。
     /// 应用还在后台时先排队，回到前台再开始（不再交给后台会话，免得反复失败）

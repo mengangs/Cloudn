@@ -24,6 +24,8 @@ final class DownloadStore {
     private(set) var shareFiles: [String: [String: DownloadItem]] = [:]
     /// 分享链接 → 分享 ID 的解析缓存（链接解析是一串正则，不能每次进度刷新都跑）
     @ObservationIgnored private var shareIdCache: [String: String] = [:]
+    /// 已收到过引擎的列表
+    @ObservationIgnored private var received = false
     @ObservationIgnored let engine: DownloadEngine
     @ObservationIgnored private let resolvers: ShareResolvers
     @ObservationIgnored private let videoService: VideoParseService
@@ -48,6 +50,10 @@ final class DownloadStore {
     func enterBackground() { activity.enterBackground(items) }
 
     private func apply(_ list: [DownloadItem]) {
+        // 引擎在排队调度、落盘时也会推送没有变化的列表：内容相同就不赋值，免得列表页白白重绘。
+        // 第一次总要处理（上个进程留下的实时活动要据此结束）
+        guard list != items || !received else { return }
+        received = true
         items = list
         activity.update(with: list)
 

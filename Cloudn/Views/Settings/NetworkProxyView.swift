@@ -42,7 +42,7 @@ struct NetworkProxyView: View {
                         }
                     }
                 } footer: {
-                    Text("关闭时跟随系统网络（包括 VPN 与系统代理）。开启后解析、下载、上传、GitHub 请求和应用内的网页登录页都经这个代理；已打开的网页要关掉重开才改用新代理，切到后台后由系统接管的下载要等下次打开应用才改用。磁力（BT）连接不走这里的代理。")
+                    Text("关闭时跟随系统网络（含 VPN 与系统代理）。开启后解析、下载、上传和网页登录都走此代理；已打开的网页需重开，后台下载需重新打开应用后生效。磁力（BT）不走此代理。")
                 }
 
                 if settings.proxyEnabled {
@@ -65,7 +65,7 @@ struct NetworkProxyView: View {
                         }
                         .disabled(testing || draft == nil)
                     } footer: {
-                        if draft == nil { Text("填写地址和端口（1–65535）后生效。") }
+                        if draft == nil { Text("填写地址和端口（1–65535）后可测试。") }
                     }
                 }
             }

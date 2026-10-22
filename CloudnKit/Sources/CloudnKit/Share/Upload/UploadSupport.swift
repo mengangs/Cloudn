@@ -169,7 +169,7 @@ final class UploadSession: NSObject, URLSessionDataDelegate, @unchecked Sendable
         lock.unlock()
         guard let h else { return }
         if let error {
-            h.completion(.failure((error as NSError).code == NSURLErrorCancelled ? CancellationError() : HTTPError.network(error.localizedDescription)))
+            h.completion(.failure((error as NSError).code == NSURLErrorCancelled ? CancellationError() : HTTPError.from(error)))
             return
         }
         guard let http = task.response as? HTTPURLResponse, let url = task.originalRequest?.url else {

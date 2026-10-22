@@ -363,13 +363,14 @@ struct GitHubSettingsView: View {
                         Button("清除 Token") {
                             app.settings.githubToken = ""
                             token = ""
+                            app.show("已清除 Token")
                         }
                         .foregroundStyle(Color.clayInk)
                     }
                 } header: {
                     Text("GitHub Token（可选）")
                 } footer: {
-                    Text("未填写时每小时只能调用 60 次 GitHub 接口；填写后提升到 5000 次，并能浏览自己的私有仓库。Token 只保存在本机钥匙串，建议只授予只读权限。")
+                    Text("不填每小时只能调用 60 次接口，填写后为 5000 次，并可浏览私有仓库。Token 只存在本机钥匙串，建议只给只读权限。")
                 }
                 Section {
                     mirrorRow(name: "直连 GitHub", prefix: "")
@@ -389,7 +390,7 @@ struct GitHubSettingsView: View {
                             .textCase(nil)
                     }
                 } footer: {
-                    Text("默认直连。下面几个是常见的公共镜像，只有选中后才会使用；GitHub 文件与 Release 附件会经「前缀 + 原始地址」下载。镜像由第三方运营，可能失效或限速，私有仓库的文件不要走镜像。")
+                    Text("选中后，GitHub 文件与 Release 附件经「前缀 + 原始地址」下载。镜像由第三方运营，可能失效或限速；私有仓库不要用镜像。")
                 }
             }
             .listRowBackground(Color.surface)

@@ -22,6 +22,8 @@ final class TorrentFetchStore {
 
     private(set) var statuses: [String: Status] = [:]
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    /// 每次开始的编号：被取消的旧查找收尾时据此认出自己已不是当前那次
+    @ObservationIgnored private var tokens: [String: UUID] = [:]
     @ObservationIgnored private let cacheDirectory: URL
     @ObservationIgnored private let extraTrackers: () -> [String]
 
@@ -39,18 +41,24 @@ final class TorrentFetchStore {
         statuses[key] = Status()
         let cache = cacheDirectory
         let trackers = extraTrackers()
+        let token = UUID()
+        tokens[key] = token
         tasks[key] = Task { [weak self] in
             do {
                 let info = try await TorrentMetadata.fetch(magnet, cacheDirectory: cache, extraTrackers: trackers) { connected, known, note in
-                    Task { @MainActor in self?.update(key) { $0.connected = connected; $0.known = known; $0.note = note } }
+                    Task { @MainActor in self?.update(key, token) { $0.connected = connected; $0.known = known; $0.note = note } }
                 }
-                self?.update(key) { $0.info = info; $0.error = nil }
+                self?.update(key, token) { $0.info = info; $0.error = nil }
             } catch is CancellationError {
-                self?.update(key) { $0.error = nil }
+                self?.update(key, token) { $0.error = nil }
             } catch {
-                self?.update(key) { $0.error = error.localizedDescription }
+                self?.update(key, token) { $0.error = error.localizedDescription }
             }
-            self?.tasks[key] = nil
+            // 取消后又重新开始的：tasks 里已是新的那次，不能清掉
+            if self?.tokens[key] == token {
+                self?.tasks[key] = nil
+                self?.tokens[key] = nil
+            }
         }
     }
 
@@ -58,11 +66,15 @@ final class TorrentFetchStore {
     func cancel(_ magnet: MagnetLink) {
         tasks[magnet.hexHash]?.cancel()
         tasks[magnet.hexHash] = nil
+        tokens[magnet.hexHash] = nil
     }
 
-    private func update(_ key: String, _ change: (inout Status) -> Void) {
+    /// 只接受当前这次查找的回报：被取消的旧查找晚到的进度、错误不能盖掉重新开始后的状态
+    private func update(_ key: String, _ token: UUID, _ change: (inout Status) -> Void) {
+        guard tokens[key] == token else { return }
         var s = statuses[key] ?? Status()
         change(&s)
-        statuses[key] = s
+        // 节点进度回报很频繁：没变化不写，免得种子页跟着重绘
+        if statuses[key] != s { statuses[key] = s }
     }
 }

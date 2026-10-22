@@ -335,7 +335,7 @@ struct DownloadsView: View {
                 .font(.cardTitle)
                 .foregroundStyle(Color.ink)
             if filter == .all {
-                Text("在「解析」页打开链接，点文件右侧的下载键即可").font(.footnote).foregroundStyle(Color.ink2)
+                Text("在「解析」页粘贴链接即可开始").font(.footnote).foregroundStyle(Color.ink2)
                 Button("去解析") { app.selectedTab = .resolve }
                     .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
                     .padding(.top, 4)

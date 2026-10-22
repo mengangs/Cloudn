@@ -141,7 +141,7 @@ struct ResolveView: View {
                     resolveKouling(consented: true)
                 }
             } message: {
-                Text("夸克 / UC 中文口令无法在本机还原，需要把口令文字发给第三方「\(QuarkKouling.serviceName)」服务换取分享 ID。只发送口令文字，不含任何账号信息；可在「设置 › 解析」中关闭。")
+                Text("夸克 / UC 口令需发给第三方「\(QuarkKouling.serviceName)」服务换取分享 ID，只发送口令文字，不含账号信息。可在「设置 › 解析」中更改。")
             }
             .alert(sniffOffer?.message ?? "", isPresented: Binding(get: { sniffOffer != nil }, set: { if !$0 { sniffOffer = nil } })) {
                 Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
@@ -154,8 +154,8 @@ struct ResolveView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text(sniffOffer?.loginKind.map { "登录\($0.displayName)后可以重新解析；也可以在网页里打开这个链接，播放后自动抓取视频地址下载。" }
-                     ?? "可以在网页里打开这个链接，播放后自动抓取视频地址下载。")
+                Text(sniffOffer?.loginKind.map { "登录\($0.displayName)后可重新解析，也可以用网页嗅探：在网页里播放后抓取视频。" }
+                     ?? "可以用网页嗅探：在网页里播放后抓取视频。")
             }
             .sheet(item: $loginKind, onDismiss: {
                 // 真的登录了（主账号是新保存的）才重新解析刚才失败的链接；取消登录不重试
@@ -395,7 +395,7 @@ struct ResolveView: View {
         case .github(.file): return "GitHub 文件 · 直接下载"
         case .github(.account(let owner)): return "GitHub · \(owner) 的仓库"
         case .github: return "GitHub 仓库"
-        case .direct: return "链接 · 文件直接下载，网页则嗅探其中的视频"
+        case .direct: return "链接 · 直接下载或网页嗅探"
         case .magnet(let m): return m.displayName.isEmpty ? "磁力链接" : "磁力链接 · " + m.displayName
         case nil:
             guard isKouling else { return "没有识别到链接" }
@@ -553,7 +553,10 @@ struct ResolveView: View {
                     HistoryRow(item: h, progress: downloadProgress(for: h.text)) { open(text: h.text) }
                         .contextMenu {
                             Button { Clipboard.copy(h.text) } label: { Label { Text("复制链接") } icon: { Image(icon: .link) } }
-                            Button { app.bookmarks.add(title: h.title, text: h.text, source: h.source) } label: {
+                            Button {
+                                app.bookmarks.add(title: h.title, text: h.text, source: h.source)
+                                app.show("已收藏")
+                            } label: {
                                 Label { Text("收藏") } icon: { Image(icon: .star) }
                             }
                             Button(role: .destructive) { withAnimation { app.bookmarks.removeHistory(h.id) } } label: {

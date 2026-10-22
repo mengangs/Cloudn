@@ -14,7 +14,8 @@ struct MyDriveView: View {
     var body: some View {
         if let manager = app.resolvers.manager(for: platform) {
             DriveFolderView(platform: platform, manager: manager, folderId: manager.driveRootId, title: platform.displayName, quota: quota)
-                .task { quota = await manager.quota() }
+                // 从子文件夹返回时 .task 会再跑一次：取到过就不重复请求
+                .task { if quota == nil { quota = await manager.quota() } }
         } else {
             ScrollView {
                 EmptyStateCard(icon: .cloud, title: "暂不支持", detail: "\(platform.displayName)暂不支持文件管理").padding(16)
@@ -100,7 +101,7 @@ struct DriveFolderView: View {
                 row(item)
                 .paperRow()
                 .rowDialog("删除「\(item.name)」？", isPresented: presenting($deleting) { $0.fid == item.fid },
-                           message: "删除后可在网盘的回收站中找回（以平台规则为准）") {
+                           message: "通常可在网盘回收站中找回") {
                     Button("删除", role: .destructive) { perform("已删除") { try await manager.delete([item]) } }
                 }
             }
@@ -153,6 +154,7 @@ struct DriveFolderView: View {
             TextField("名称", text: $nameText)
             Button("取消", role: .cancel) {}
             Button("确定") { if let target = naming { commitName(target) } }
+                .disabled(nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .sheet(item: $sharing) { file in
             DriveShareSheet(manager: manager, file: file)

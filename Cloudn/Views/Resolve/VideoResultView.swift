@@ -135,7 +135,7 @@ struct VideoResultView: View {
             IconView(.user, size: 18).foregroundStyle(Color.clayInk)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(kind.displayName)登录已失效").font(.footnote.weight(.semibold))
-                Text("重新登录后可获取更高清晰度或需登录才能看的内容").font(.caption)
+                Text("重新登录可获取更高清晰度").font(.caption)
             }
             .foregroundStyle(Color.clayInk)
             .fixedSize(horizontal: false, vertical: true)
@@ -288,7 +288,7 @@ struct VideoResultView: View {
             }
             .card()
             if videos.contains(where: { !$0.audioURL.isEmpty }) {
-                Text("分轨视频在线播放没有声音，下载完成后会自动合并为带声音的 MP4")
+                Text("分轨视频在线播放无声，下载后会自动合并音轨")
                     .font(.caption)
                     .foregroundStyle(Color.ink3)
                     .padding(.horizontal, 4)
@@ -298,7 +298,7 @@ struct VideoResultView: View {
 
     @ViewBuilder
     private func videoMenu(_ media: VideoMedia) -> some View {
-        Button { Clipboard.copy(media.url); app.show("已复制直链（部分平台需带请求头才能下载）") } label: {
+        Button { Clipboard.copy(media.url); app.show("已复制直链（下载可能需带请求头）") } label: {
             Label { Text("复制直链") } icon: { Image(icon: .link) }
         }
         if let url = URL(string: media.url) {
@@ -521,7 +521,7 @@ struct VideoResultView: View {
                 }
             }
             .card()
-            Text("点「下载所选」后逐条解析，每条按最高画质加入下载。")
+            Text("逐条按最高画质加入下载")
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
                 .padding(.horizontal, 4)

@@ -14,7 +14,7 @@ extension DouyinParser {
     func parseUser(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         let pageURL = Self.userPageURL(link.id)
         guard let extractor else {
-            throw VideoParseError(.unsupported, "抖音主页需要用 App 内置的网页内核加载作品列表，当前环境不支持")
+            throw VideoParseError(.unsupported, "当前环境无法加载抖音主页（需要 App 内置的网页内核）")
         }
         let hook = ProfileCollectionJS.hookScript(urlMarker: "aweme/v1/web/aweme/post", handler: Self.userPostHandlerJS,
                                                   cardSelector: Self.userCardSelector)

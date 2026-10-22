@@ -24,7 +24,7 @@ struct DownloadDebugView: View {
                 if let item {
                     content(item)
                 } else {
-                    EmptyStateCard(icon: .warning, title: "任务已删除", detail: "这条下载记录已不存在。")
+                    EmptyStateCard(icon: .warning, title: "任务已删除")
                         .padding(16)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.paper)
@@ -39,7 +39,8 @@ struct DownloadDebugView: View {
                 if let item {
                     ToolbarItem(placement: .primaryAction) {
                         Button("复制") {
-                            UIPasteboard.general.string = Self.snapshot(item, sha256: sha256, log: logLines)
+                            // 走 Clipboard：解析页不会把复制出去的地址当成新链接再提示
+                            Clipboard.copy(Self.snapshot(item, sha256: sha256, log: logLines))
                             app.show("已复制调试信息")
                         }
                     }
@@ -96,7 +97,7 @@ struct DownloadDebugView: View {
                     } header: {
                         Text("文件校验")
                     } footer: {
-                        Text("与发布方给出的校验值比对，可确认文件完整、未被篡改。大文件需要一点时间。")
+                        Text("与发布方给出的校验值比对，确认文件完整、未被篡改。")
                     }
                 }
                 Section {

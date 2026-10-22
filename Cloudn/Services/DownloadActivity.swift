@@ -14,15 +14,19 @@ final class DownloadActivity {
 
     /// 上次创建失败的时间（在后台时创建必然失败，不要每次进度刷新都重试）
     private var lastStartFailure = Date.distantPast
+    /// 这一轮的实时活动被用户划掉（或被系统结束）：不再重建，等任务全部结束后的下一轮再显示
+    private var suppressed = false
 
     /// 设置页开关（默认开启）
     private var enabled: Bool { UserDefaults.standard.object(forKey: "liveActivity") as? Bool ?? true }
 
     init() {
         // 上一个进程留下的实时活动（进程被杀时没来得及结束）：接管第一个，多余的结束掉
+        // 已结束、已划掉的不能再更新，接管了也只会让这一轮不显示
         let existing = Activity<DownloadActivityAttributes>.activities
-        activity = existing.first
-        for extra in existing.dropFirst() {
+        let alive = existing.first { $0.activityState == .active || $0.activityState == .stale }
+        activity = alive
+        for extra in existing where extra.id != alive?.id {
             Task { await extra.end(nil, dismissalPolicy: .immediate) }
         }
     }
@@ -33,8 +37,14 @@ final class DownloadActivity {
             return
         }
         let active = items.filter { $0.status.isActive }
+        if let current = activity, current.activityState == .dismissed || current.activityState == .ended {
+            activity = nil
+            lastState = nil
+            suppressed = !active.isEmpty
+        }
         if activity == nil {
-            guard !active.isEmpty, Date().timeIntervalSince(lastStartFailure) > 30 else { return }
+            if active.isEmpty { suppressed = false }
+            guard !active.isEmpty, !suppressed, Date().timeIntervalSince(lastStartFailure) > 30 else { return }
             baselineCompleted = Set(items.filter { $0.status == .completed }.map(\.id))
             start(state(items, active: active))
             return

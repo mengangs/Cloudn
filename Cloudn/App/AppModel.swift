@@ -204,7 +204,8 @@ final class AppModel {
         do {
             try await MediaTools.saveToPhotosSmart(file)
         } catch {
-            show(error.localizedDescription, error: true)
+            // 自动存相册在后台悄悄进行：提示里带上是哪一步出的错
+            show("自动存相册失败：\(error.localizedDescription)", error: true)
         }
     }
 
@@ -258,7 +259,7 @@ final class AppModel {
             if let pwd = share.pwd, !pwd.isEmpty, ShareLinkParser.parse(text)?.pwd != pwd { text += " 提取码：\(pwd)" }
             pendingInput = text
             selectedTab = .resolve
-            show("没能自动下载：\(error.localizedDescription)，已打开分享页", error: true)
+            show("自动下载失败，已打开分享页：\(error.localizedDescription)", error: true)
         }
     }
 

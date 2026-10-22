@@ -115,10 +115,6 @@ struct AccountsView: View {
             .navigationTitle("我的")
             .toolbar {
                 // 平台多了列表很长：设置放到右上角，不用滑到底
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { layoutGroup = .drives } label: { Image(systemName: "arrow.up.arrow.down") }
-                        .accessibilityLabel("排序与显示")
-                }
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink { SettingsView() } label: { IconView(.gear, size: 18) }
                         .accessibilityLabel("设置")
@@ -275,7 +271,7 @@ struct AccountsView: View {
                     .background(Color.fillMuted, in: Circle())
                 Text(hidden > 0 ? "更多网盘" : "排序与显示").font(.subheadline.weight(.medium)).foregroundStyle(Color.ink2)
                 if hidden > 0 {
-                    Text("还有 \(hidden) 个未显示").font(.caption).foregroundStyle(Color.ink3)
+                    Text("\(hidden) 个未显示").font(.caption).foregroundStyle(Color.ink3)
                 }
             }
             .padding(14)

@@ -13,7 +13,7 @@ struct BookmarksView: View {
         NavigationStack {
             List {
                 if app.bookmarks.bookmarks.isEmpty {
-                    EmptyStateCard(icon: .star, title: "还没有收藏", detail: "在分享页右上角点星标即可收藏，下次一键打开").inList()
+                    EmptyStateCard(icon: .star, title: "还没有收藏", detail: "在分享页点右上角的星标收藏").inList()
                 }
                 Group {
                     ForEach(app.bookmarks.bookmarks) { b in

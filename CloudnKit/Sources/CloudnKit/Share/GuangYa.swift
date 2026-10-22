@@ -161,12 +161,25 @@ public final class GuangYaResolver: ShareResolver, @unchecked Sendable {
 
     /// 已保存的登录凭据；令牌临近过期时先用 refresh_token 续期并回写
     func credential() async throws -> GuangYaCredential {
-        guard let raw = await credentials.cookie(for: .guangya)?.nilIfBlank, let cred = GuangYaCredential.parse(raw) else {
+        guard var raw = await credentials.cookie(for: .guangya)?.nilIfBlank, var cred = GuangYaCredential.parse(raw) else {
             throw SharePlatform.guangya.loginRequired
         }
+        // 登录校验时已续期过（保存的 refresh_token 可能已作废）：换成那次拿到的新凭据
+        if let newer = await CredentialRenewal.shared.validatedRenewal(.guangya, refreshToken: cred.refreshToken),
+           let parsed = GuangYaCredential.parse(newer) {
+            await credentials.updateCookie(newer, replacing: raw, for: .guangya)
+            raw = newer
+            cred = parsed
+        }
         let now = Int64(Date().timeIntervalSince1970)
-        guard cred.expiresAt > 0, cred.expiresAt - 300 < now, let renewed = await GuangYaLogin.refresh(cred, client: client) else { return cred }
-        await credentials.updateCookie(renewed.serialized, replacing: raw, for: .guangya)
+        guard cred.expiresAt > 0, cred.expiresAt - 300 < now else { return cred }
+        // 并发请求合并成一次续期；续期失败沿用旧凭据（由接口报登录失效）
+        let (stored, current, http, store) = (raw, cred, client, credentials)
+        guard let renewedRaw = try? await CredentialRenewal.shared.renew(.guangya, raw: stored, {
+            guard let renewed = await GuangYaLogin.refresh(current, client: http) else { throw CloudnError("光鸭云盘登录续期失败") }
+            await store.updateCookie(renewed.serialized, replacing: stored, for: .guangya)
+            return renewed.serialized
+        }), let renewed = GuangYaCredential.parse(renewedRaw) else { return cred }
         return renewed
     }
 

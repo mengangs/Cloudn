@@ -29,7 +29,7 @@ struct AuthExportView: View {
                             .submitLabel(.done)
                             .onSubmit { if canGenerate && file == nil { generate() } }
                     } footer: {
-                        Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。口令不会被保存，导入时需要同一个口令，请妥善记住。")
+                        Text("将导出 \(app.accounts.accounts.count + app.accounts.extras.values.reduce(0) { $0 + $1.count }) 个账号的登录凭据。导入时需要同一口令，请牢记。")
                     }
                     if let error { Section { Label(error, glyph: .warning).foregroundStyle(Color.clayInk) } }
                     if let file {

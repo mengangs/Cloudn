@@ -30,7 +30,7 @@ struct PlatformConnectionsView: View {
                         }
                     }
                 } footer: {
-                    Text("每个任务同时开几条连接，越多越快。默认 \(DownloadSettings().connectionsPerTask) 条；百度、115 对并发敏感，默认最多 2 条（百度多连接会被判异常下载，115 并发多了会 403）。遇到 403 或频繁失败时可单独调低。")
+                    Text("每个任务同时开几条连接，越多越快。默认 \(DownloadSettings().connectionsPerTask) 条；百度、115 对并发敏感，默认最多 2 条。遇到 403 或频繁失败时可调低。")
                 }
             }
             .listRowBackground(Color.surface)

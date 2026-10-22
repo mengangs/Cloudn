@@ -418,6 +418,8 @@ struct RangeTransfer {
         }
         if let failure { throw failure }
         if chunk.end < 0 {
+            // 不带 Range 的探测给过总长：没收够就是提前断流（不能把总长改成已收到的长度当成完成），重试时从断点续传
+            if Self.endedEarly(received: progress.chunk(index).received, total: progress.total) { throw TransferError("连接提前断开") }
             progress.finishOpenEnded(index)
         } else if cap != nil {
             // 分段请求：这一段没取完（且分片也没被切短到已完成）才算断开
@@ -428,6 +430,11 @@ struct RangeTransfer {
         } else if !progress.chunk(index).isDone {
             throw TransferError("连接提前断开")
         }
+    }
+
+    /// 单流（长度未知的分片）读完时是否提前断开：探测拿到过总长且收到的不够
+    static func endedEarly(received: Int64, total: Int64) -> Bool {
+        total > 0 && received < total
     }
 
     /// source 为链接序号（0 为主链，探测总长度一律用主链）

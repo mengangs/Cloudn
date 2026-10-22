@@ -70,7 +70,7 @@ enum LivePhoto {
 
     static func save(image: URL, video: URL) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { throw LiveError("没有相册写入权限，请到系统设置中允许") }
+        guard status == .authorized || status == .limited else { throw LiveError("没有相册权限，请在系统设置中允许") }
         let identifier = UUID().uuidString
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("live-\(identifier)", isDirectory: true)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)

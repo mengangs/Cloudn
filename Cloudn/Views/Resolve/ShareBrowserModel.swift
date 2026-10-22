@@ -57,15 +57,15 @@ final class ShareBrowserModel: Hashable, Identifiable {
     /// 未登录 / 登录已失效时给用户的能力说明（nil 表示不需要提示）
     var guestNotice: String? {
         guard let kind = share.platform.accountKind else { return nil }
-        if app.accounts.isExpired(kind) { return "\(kind.displayName)登录已失效：取链、转存可能失败，重新登录后再试" }
+        if app.accounts.isExpired(kind) { return "\(kind.displayName)登录已失效，下载、转存可能失败" }
         guard !app.accounts.isLoggedIn(kind) else { return nil }
         switch share.platform {
-        case .quark: return "未登录夸克：可直接下载约 50MB 以内的文件，登录后不限大小"
-        case .uc: return "未登录 UC：也可以直接下载，登录后视频可取原画"
-        case .pan115: return "未登录 115：可直接下载小文件，大文件需要先登录"
+        case .quark: return "未登录夸克：只能下载约 50MB 以内的文件"
+        case .uc: return "未登录 UC：可直接下载，登录后视频取原画"
+        case .pan115: return "未登录 115：只能下载小文件"
         default:
             guard resolver?.supportsGuestDownload == false else { return nil }
-            return "未登录\(kind.displayName)：可以浏览分享内容，下载前请先到「我的」页登录"
+            return "未登录\(kind.displayName)：可浏览，下载需先登录"
         }
     }
 
@@ -108,13 +108,18 @@ final class ShareBrowserModel: Hashable, Identifiable {
             return
         }
         let list = try await resolver.list(session, dirId: dir)
-        let sorted = list.sorted { a, b in
-            a.isDirectory != b.isDirectory ? a.isDirectory : a.name.localizedStandardCompare(b.name) == .orderedAscending
-        }
+        let sorted = Self.sorted(list)
         cache[dir] = sorted
         // 等待期间已切到别的目录（或重新打开了分享）：结果只进缓存，不覆盖当前列表
         guard self.session == session, dir == currentDir else { return }
         files = sorted
+    }
+
+    /// 文件夹在前，再按文件名自然排序（缓存里的列表都按这个顺序）
+    private static func sorted(_ list: [ShareFile]) -> [ShareFile] {
+        list.sorted { a, b in
+            a.isDirectory != b.isDirectory ? a.isDirectory : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
     }
 
     func enter(_ dir: ShareFile) async {
@@ -237,7 +242,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
         guard let session, let resolver else { return }
         // 上一批还在取链（连点「下载全部」、或又点了「下载整个文件夹」）：不再并行开一批，免得重复入队
         guard batch == nil else {
-            app.show("正在获取直链，请等这一批完成")
+            app.show("上一批还在获取直链，请稍候")
             return
         }
         // 先占住进度条：展开文件夹要逐层请求，期间底部就显示进行中
@@ -303,7 +308,8 @@ final class ShareBrowserModel: Hashable, Identifiable {
         guard depth < 12 else { return }
         let list: [ShareFile]
         if let hit = cache[dir] { list = hit } else {
-            list = try await resolver.list(session, dirId: dir)
+            // 与浏览时同样排序后再进缓存：之后点进这个文件夹不会是乱序
+            list = try await Self.sorted(resolver.list(session, dirId: dir))
             cache[dir] = list
         }
         for f in list {

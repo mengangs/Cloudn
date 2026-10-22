@@ -157,14 +157,14 @@ struct SnifferView: View {
                     recorderStatus
                 }
                 Section {
-                    tip("1", "点「开始录制」后回到网页，从头播放视频，一直播到结尾。视频已经播过一段的话，开始录制后先刷新网页，否则已缓冲的开头录不到。")
-                    tip("2", "只能录到网页实际加载的内容：拖动进度条跳过的部分不会被录下。")
-                    tip("3", "可以用网页播放器自带的倍速（如 2 倍速）加快录制；尽量不要中途切换清晰度。")
-                    tip("4", "播完后点「停止并保存」，视频会出现在下载列表里。单次最多录 2 GB。")
+                    tip("1", "点「开始录制」后回到网页，从头播放到结尾。已播过一段的，先刷新网页，否则开头录不到。")
+                    tip("2", "只录网页实际加载的内容，拖动跳过的部分录不到。")
+                    tip("3", "可用播放器倍速加快录制，中途尽量别切清晰度。")
+                    tip("4", "播完点「停止并保存」，视频会出现在下载列表。单次最多 2 GB。")
                 } header: {
                     Text("怎么录")
                 } footer: {
-                    Text("这个网站用 MSE 分段播放，没有可直接下载的文件地址，只能边播边录。录制时可以关掉这个面板。")
+                    Text("该网站分段播放（MSE），没有可直接下载的地址，只能边播边录。录制时可关闭此面板。")
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { recorderButtons }
@@ -270,7 +270,7 @@ struct SnifferView: View {
             Button { browser.showingList = true } label: {
                 HStack(spacing: 6) {
                     if browser.loading { Spinner(size: 14) }
-                    Text(browser.medias.isEmpty ? "正在查找视频…" : "发现 \(browser.medias.count) 个媒体")
+                    Text(browser.medias.isEmpty ? (browser.loading ? "正在查找视频…" : "播放后自动抓取") : "发现 \(browser.medias.count) 个媒体")
                 }
             }
             .buttonStyle(PillButtonStyle(kind: browser.medias.isEmpty ? .secondary : .primary, height: 36))
@@ -291,7 +291,7 @@ struct SnifferView: View {
                 Section {
                     ForEach(main) { mediaRow($0) }
                 } footer: {
-                    Text("时长最长的排在最前面，一般就是正片。没找到正片？先在网页里点播放，真正的视频地址通常在开始播放后才出现。")
+                    Text("按时长排序，最长的通常是正片。没找到就先在网页里点播放。")
                 }
                 if !previews.isEmpty {
                     Section {
@@ -299,7 +299,7 @@ struct SnifferView: View {
                     } header: {
                         Text("可能是预览片段或广告")
                     } footer: {
-                        Text("不到 30 秒或很小的视频，多半是网页上的预览图、广告。")
+                        Text("不到 30 秒或很小的视频，多半是预览或广告。")
                     }
                 }
             }

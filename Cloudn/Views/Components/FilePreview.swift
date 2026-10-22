@@ -159,7 +159,7 @@ struct FilePreviewView: View {
                     } label: { Label("保存到相册", glyph: .image) }
                 }
                 Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: { Label("在「文件」中查看", glyph: .folder) }
-                Button { UIPasteboard.general.string = url.lastPathComponent; app.show("已复制文件名") } label: { Label("复制文件名", glyph: .paste) }
+                Button { Clipboard.copy(url.lastPathComponent); app.show("已复制文件名") } label: { Label("复制文件名", glyph: .paste) }
             } label: { IconView(.more, size: 16) }
                 .buttonStyle(PreviewBarButtonStyle(dark: immersive))
                 .accessibilityLabel("更多")
@@ -188,11 +188,11 @@ struct FilePreviewView: View {
         let size = fileSize ?? 0
         let tooSmall = (kind == .video || kind == .audio) && fileSize != nil && size < 1024
         let hint: String = switch kind {
-        case _ where tooSmall: "文件只有 \(ByteFormat.string(size))，不是完整的视频，可能下载没有成功，请重新下载"
-        case .image where imageFailed: "图片无法解码，可能文件已损坏或格式不受支持，可以用其他应用打开"
+        case _ where tooSmall: "文件只有 \(ByteFormat.string(size))，可能没有下载完整，请重新下载"
+        case .image where imageFailed: "图片无法解码，可能已损坏或格式不受支持"
         case _ where !(remuxIssue ?? "").isEmpty: remuxIssue ?? ""
-        case _ where canRemux: "正在把 \(url.pathExtension.uppercased()) 换成 MP4 封装后播放：音视频原样搬过去，不重新编码、画质不变，通常几秒钟"
-        case .video, .audio: "这个格式系统播放器不支持，可以用 VLC、Infuse 等应用打开"
+        case _ where canRemux: "正在把 \(url.pathExtension.uppercased()) 转为 MP4 封装播放，不重新编码、画质不变，通常几秒钟"
+        case .video, .audio: "系统播放器不支持此格式，可用 VLC、Infuse 等应用打开"
         case .archive: "压缩包可在「文件」App 中轻点解压"
         case .apk: "安装包请用「分享」发送到对应的安装工具"
         default: "可以用其他应用打开，或在「文件」App 中查看"
@@ -216,7 +216,7 @@ struct FilePreviewView: View {
                 if canRemux && convertError == nil {
                     if let converting {
                         VStack(spacing: 8) {
-                            ProgressView(value: converting)
+                            ProgressLine(value: converting)
                             Text("正在准备播放 \(Int(converting * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Color.ink3)
                         }
                         .padding(.vertical, 6)

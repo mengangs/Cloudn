@@ -100,10 +100,10 @@ struct WebLoginView: View {
         .task {
             hint = switch kind {
             case .quark: "可用手机号验证码登录；若只显示二维码，可在页面中切换登录方式"
-            case .xunlei, .pan123: "在页面中完成登录后会自动识别；如未识别，可点「完成」"
-            case .aliyun: "在页面中切换到短信验证码或账号密码登录（二维码要用另一台设备扫），登录后会自动识别"
-            case .douyin: "点页面右上角「登录」，用手机号验证码登录（二维码要用另一台设备扫），登录后会自动识别"
-            case .pixiv: "请用 pixiv 账号密码登录，出现人机验证时在页面里完成；Google / Apple 账号登录在这里无法使用"
+            case .xunlei, .pan123: "登录后会自动识别；未识别时点「完成」"
+            case .aliyun: "切换到短信验证码或账号密码登录（二维码需另一台设备扫），登录后自动识别"
+            case .douyin: "点右上角「登录」，用手机号验证码登录，登录后自动识别"
+            case .pixiv: "请用 pixiv 账号密码登录；Google / Apple 账号登录在内嵌网页中无法使用"
             case .tiktok: "选择「使用手机号 / 邮箱 / 用户名登录」；Google / Apple 账号登录在内嵌网页中无法使用"
             case .twitter, .instagram, .threads, .reddit, .facebook: "请用账号密码登录；Google / Apple 账号登录在内嵌网页中无法使用"
             default: nil
@@ -190,19 +190,19 @@ final class WebLoginStore {
             let text = Int(parts.first ?? "") ?? 0
             let controls = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
             let errors = parts.count > 2 ? parts[2] : ""
-            guard text < 5 && controls == 0 else { return }
+            // 有内容了（单页应用晚渲染出来）：收起之前的空白提示
+            guard text < 5 && controls == 0 else { self.blank = false; return }
             Log.error("网页登录：页面空白 \(webView.url?.host ?? "")（加载失败的资源：\(errors.isEmpty ? "无记录" : errors)）")
             let site = self.lastHost.replacingOccurrences(of: "www.", with: "")
             if self.lastStatus == 429 || self.lastStatus == 403 {
                 // Instagram 等对它认为可疑的 IP（机房、VPN 出口）直接回 429 / 403 和空页面：换网络环境才行，换页面版本没用
-                self.blankHint = "\(site) 拒绝了这次访问（HTTP \(self.lastStatus)），返回的是空页面。"
-                    + "这通常是当前网络的出口 IP（VPN / 机房节点）被它限制了，与 App 无关，在 Safari 里打开也会是空白。\n\n"
-                    + "请换一个节点（最好是住宅 IP），或关掉 VPN 改用其他网络后重试；稍等一段时间再试也可能恢复。"
+                self.blankHint = "\(site) 拒绝了访问（HTTP \(self.lastStatus)）。通常是当前网络的出口 IP（VPN / 机房节点）被限制，与 App 无关。\n\n"
+                    + "请换个节点（最好是住宅 IP）或换个网络后重试，也可以稍后再试。"
                 self.blank = true
                 return
             }
             self.blankHint = self.overseas
-                ? "页面打开了，但脚本或图片资源没有加载出来（常见原因：VPN 只让主站走代理，没包含它的资源域名，如 cdninstagram.com、fbcdn.net）。\n\n可以把 VPN 切到全局模式后重试，或改用电脑版页面。"
+                ? "页面资源没有加载出来，常见于 VPN 没代理它的资源域名（如 cdninstagram.com、fbcdn.net）。\n\n可把 VPN 切到全局模式后重试，或改用电脑版页面。"
                 : "页面打开了，但内容没有加载出来，可以重试或改用电脑版页面。"
             self.blank = true
         }
@@ -231,7 +231,7 @@ final class WebLoginStore {
         Log.error("网页登录：打开 \(url.host ?? "") 超时（20 秒没有收到页面）")
         webView?.stopLoading()
         loadError = overseas
-            ? "连接 \(url.host ?? "登录页") 超时，没有收到页面。\n\n海外平台在国内网络下无法直接访问，请开启 VPN（全局或让该网站走代理），或在「设置 › 网络代理」里填写代理"
+            ? "连接 \(url.host ?? "登录页") 超时。\n\n海外平台需开启 VPN，或在「设置 › 网络代理」中填写代理"
             : "网络连接超时，请检查网络后重试"
     }
 
@@ -244,7 +244,7 @@ final class WebLoginStore {
         var message = e.localizedDescription
         if e.domain == NSURLErrorDomain, [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
                                           NSURLErrorCannotFindHost, NSURLErrorSecureConnectionFailed].contains(e.code), overseas {
-            message += "\n\n海外平台在国内网络下无法直接访问，请开启 VPN，或在「设置 › 网络代理」里填写代理"
+            message += "\n\n海外平台需开启 VPN，或在「设置 › 网络代理」中填写代理"
         }
         loadError = message
     }
