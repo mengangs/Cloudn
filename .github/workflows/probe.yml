@@ -1,0 +1,7 @@
+name: probe
+on: push
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -s -m 20 https://uplb.115.com/3.0/gettoken.php | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:(v if k in ('StatusCode','Expiration') else type(v).__name__+str(len(str(v)))) for k,v in d.items()})"
