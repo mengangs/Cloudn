@@ -89,8 +89,12 @@ struct DriveShareSheet: View {
                    presenting: revoking) { share in
                 Button("取消分享", role: .destructive) { revoke(share) }
                 Button("保留", role: .cancel) {}
-            } message: { _ in
-                Text("取消后，拿到这个链接的人就打不开了。")
+            } message: { share in
+                if let folder = share.inheritedFrom {
+                    Text("这个分享来自上级文件夹「\(folder)」，取消后该文件夹及其中所有文件都不再通过链接公开。")
+                } else {
+                    Text("取消后，拿到这个链接的人就打不开了。")
+                }
             }
             .onAppear {
                 if let first = manager.shareExpiryOptions.first { options.expiry = first }
@@ -104,6 +108,9 @@ struct DriveShareSheet: View {
             let details = [share.audience, share.role, share.expires.isEmpty ? "永久" : "\(share.expires) 到期",
                            share.hasPassword ? "有密码" : nil].compactMap { $0 }
             Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(Color.ink3)
+            if let folder = share.inheritedFrom {
+                Text("来自上级文件夹「\(folder)」").font(.caption).foregroundStyle(Color.clayInk)
+            }
         }
         .contentShape(Rectangle())
         .contextMenu {

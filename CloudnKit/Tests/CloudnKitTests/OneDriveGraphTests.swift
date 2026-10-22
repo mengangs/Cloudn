@@ -121,6 +121,12 @@ final class GoogleDriveAPITests: XCTestCase {
         XCTAssertEqual(user?.audience, "a@b.com")
         XCTAssertEqual(user?.role, "可编辑")
         XCTAssertNil(GoogleDriveResolver.parseShareInfo(JSON(text: #"{"id":"2","type":"user","role":"owner"}"#)!, url: ""))
+        // 继承自上级文件夹的权限要找出来源；文件本身也有一份时可以直接删
+        let inherited = JSON(text: #"{"id":"anyoneWithLink","type":"anyone","role":"reader","permissionDetails":[{"inherited":true,"inheritedFrom":"folder1"}]}"#)!
+        XCTAssertEqual(GoogleDriveResolver.inheritedSource(inherited), "folder1")
+        let mixed = JSON(text: #"{"id":"anyoneWithLink","type":"anyone","role":"reader","permissionDetails":[{"inherited":true,"inheritedFrom":"folder1"},{"inherited":false}]}"#)!
+        XCTAssertNil(GoogleDriveResolver.inheritedSource(mixed))
+        XCTAssertNil(GoogleDriveResolver.inheritedSource(JSON(text: #"{"id":"x","type":"anyone"}"#)!))
         let resolvers = ShareResolvers(credentials: NoCredentials())
         XCTAssertNotNil(resolvers.manager(for: .gdrive))
         XCTAssertNotNil(resolvers.saver(for: .gdrive))

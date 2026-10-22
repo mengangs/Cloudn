@@ -98,14 +98,17 @@ public struct DriveShareInfo: Sendable, Equatable, Identifiable {
     /// 过期时间（已格式化），永久为空
     public let expires: String
     public let hasPassword: Bool
+    /// 继承自上级文件夹的分享：该文件夹的名字（取消时会作用在那个文件夹上）
+    public let inheritedFrom: String?
 
-    public init(id: String, url: String, audience: String, role: String, expires: String, hasPassword: Bool) {
+    public init(id: String, url: String, audience: String, role: String, expires: String, hasPassword: Bool, inheritedFrom: String? = nil) {
         self.id = id
         self.url = url
         self.audience = audience
         self.role = role
         self.expires = expires
         self.hasPassword = hasPassword
+        self.inheritedFrom = inheritedFrom
     }
 }
 

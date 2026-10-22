@@ -211,10 +211,33 @@ extension GoogleDriveResolver: DriveManager {
     }
 
     public func existingShares(_ file: ShareFile) async throws -> [DriveShareInfo] {
-        let perms = try await apiRequest("GET", "/files/\(file.fid)/permissions?fields=permissions(id,type,role,emailAddress,domain,displayName,expirationTime)")
+        let perms = try await apiRequest("GET", "/files/\(file.fid)/permissions?fields=permissions(\(Self.permissionFields))")
         let info = try await apiRequest("GET", "/files/\(file.fid)?fields=webViewLink")
         let url = info["webViewLink"].string
-        return perms["permissions"].array.compactMap { Self.parseShareInfo($0, url: url) }
+        var folderNames: [String: String] = [:]
+        var result: [DriveShareInfo] = []
+        for p in perms["permissions"].array {
+            guard var share = Self.parseShareInfo(p, url: url) else { continue }
+            if let folder = Self.inheritedSource(p) {
+                if folderNames[folder] == nil {
+                    folderNames[folder] = (try? await apiRequest("GET", "/files/\(folder)?fields=name"))?["name"].string.nilIfBlank ?? "上级文件夹"
+                }
+                share = DriveShareInfo(id: Self.inheritedPrefix + folder + "|" + share.id, url: share.url, audience: share.audience,
+                                       role: share.role, expires: share.expires, hasPassword: false, inheritedFrom: folderNames[folder])
+            }
+            result.append(share)
+        }
+        return result
+    }
+
+    static let permissionFields = "id,type,role,emailAddress,domain,displayName,expirationTime,permissionDetails(inherited,inheritedFrom)"
+    static let inheritedPrefix = "inherited|"
+
+    /// 权限全部来自上级文件夹时，返回来源文件夹 id（文件本身也有同样的权限时返回 nil，可直接删）
+    static func inheritedSource(_ p: JSON) -> String? {
+        let details = p["permissionDetails"].array
+        guard !details.isEmpty, details.allSatisfy({ $0["inherited"].bool }) else { return nil }
+        return details.lazy.map { $0["inheritedFrom"].string }.first { !$0.isEmpty }
     }
 
     /// 文件所有者那一条不列出（不能移除）
@@ -237,8 +260,19 @@ extension GoogleDriveResolver: DriveManager {
         return DriveShareInfo(id: p["id"].string, url: url, audience: audience, role: roleText, expires: expires, hasPassword: false)
     }
 
+    /// 继承来的分享只能在来源文件夹上取消（Google 不允许单个文件去掉继承的权限）
     public func revokeShare(_ file: ShareFile, id: String) async throws {
-        try await apiRequest("DELETE", "/files/\(file.fid)/permissions/\(id)")
+        if id.hasPrefix(Self.inheritedPrefix) {
+            let parts = id.dropFirst(Self.inheritedPrefix.count).split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { throw CloudnError("分享信息有误，请刷新后再试") }
+            try await apiRequest("DELETE", "/files/\(parts[0])/permissions/\(parts[1])")
+            return
+        }
+        do {
+            try await apiRequest("DELETE", "/files/\(file.fid)/permissions/\(id)")
+        } catch let error as CloudnError where error.message.contains("inherited") {
+            throw CloudnError("这个分享来自上级文件夹，单个文件不能取消。请到上级文件夹的「分享设置」里取消")
+        }
     }
 }
 
