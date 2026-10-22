@@ -1,6 +1,6 @@
 name: Live parse check
 
-# 每日用真实链接解析海外平台，接口一变就能当天发现（失败时 GitHub 会给仓库所有者发邮件）。
+# 每日用真实链接解析海外平台与 Google 云端硬盘 / OneDrive / 阿里云盘分享，接口一变就能当天发现（失败时 GitHub 会给仓库所有者发邮件）。
 # 国内平台从海外服务器访问会被拦，不在这里巡检。
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
         env:
           CLOUDN_LIVE: "1"
           CLOUDN_LIVE_REPORT: ${{ runner.temp }}/live-report.md
-        run: swift test --filter LiveParseTests
+        run: swift test --filter "LiveParseTests|LiveDriveTests"
       - name: Summary
         if: always()
         run: |

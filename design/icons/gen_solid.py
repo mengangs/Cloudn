@@ -84,9 +84,19 @@ write('ilanzou', D(cloud, U(T(star, 1.15, 0.3, 4.2), S(T(star, 1.15, 0.3, 4.2), 
 ac = ['M7 39L18.5 9L30 39', 'M11.5 28h14', 'M42 26.5a6 6 0 1 0 0 9']
 write('acfun', D(badge_square, *[S(T(P(d), 0.66, -0.6, 0.4), 3.4) for d in ac]))
 
+# OneDrive：前后两朵实心云，前云描边外再留一圈缝把后云切开
+od_front = 'M38.5 38.5H19A5.5 5.5 0 1 1 21.04 27.89A9 9 0 1 1 38.98 27.52A5.5 5.5 0 0 1 38.5 38.5Z'
+od_back = U(C(10.5, 25.5, 7), C(20.5, 18.5, 10), R(10.5, 22, 20, 10.5, 0))
+write('onedrive', U(solid(od_front), D(od_back, S(P(od_front), 6))))
+
+# 阿里云盘：外轮廓（含描边）与内轮廓之间的环带填满
+ali_outer = 'M39.733 24.737c1.235-10.152-6.06-20.563-18.345-20.563C11.51 4.174 3.359 12.854 3.502 23.559c.131 9.814 8.629 19.028 17.887 20.104c9.812 1.141 19.368-3.722 23.033-14.041c.252-.71-.11-1.492-.998-1.709l-3.172-.773c-.883-.215-.718-.761-.518-2.403z'
+ali_inner = P('M32.569 23.766c.761-5.816-3.807-11.409-9.591-11.972c-4.844-.472-11.916 2.574-11.836 11.934c.06 7.112 6.124 12.032 11.836 12.606c6.432.647 11.931-2.521 14.189-8.874c.155-.437-.078-.881-.615-1.052l-3.664-1.163c-.534-.17-.451-.47-.319-1.479z')
+write('aliyun', D(solid(ali_outer), ali_inner))
+
 # Simple Icons（CC0）
 for name, src in [('baidu', 'baidu'), ('bilibili', 'bilibili'), ('douyin', 'tiktok'), ('kuaishou', 'kuaishou'),
-                  ('weibo', 'sinaweibo'), ('pixiv', 'pixiv'), ('github', 'github')]:
+                  ('weibo', 'sinaweibo'), ('pixiv', 'pixiv'), ('github', 'github'), ('gdrive', 'googledrive')]:
     s = open(os.path.join(SI, src + '.svg')).read()
     d = re.search(r'<path d="([^"]+)"', s).group(1)
     open(os.path.join(OUT, name + '.svg'), 'w').write(

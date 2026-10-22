@@ -70,8 +70,10 @@
 | 123 云盘 · 139 网盘 | 浏览 | 下载、转存、管理 |
 | 光鸭云盘 | 公开分享直接下载 | 分享者关闭免登录下载时也能下、转存、管理 |
 | 蓝奏云 · 蓝奏云优享版 | 直接下载 | 管理我的网盘、转存（优享版） |
+| 阿里云盘 | 浏览 | 下载 |
+| Google 云端硬盘 · OneDrive | 浏览、下载（文件夹整批下载；Google 文档 / 表格 / 幻灯片自动导出为 Word / Excel / PowerPoint） | — |
 
-提取码自动识别；迅雷中文口令可以直接粘贴。夸克 / UC 的中文口令只能在夸克 App 里还原，Cloudn 可以把口令文字发给第三方「星海」服务换取分享链接——只发口令文字、不含任何账号信息，首次使用前会征得你同意，可在设置中关闭。
+提取码自动识别；迅雷中文口令可以直接粘贴。OneDrive 个人版（1drv.ms）与工作或学校版（SharePoint）的分享都支持，设了密码的分享填上密码即可。夸克 / UC 的中文口令只能在夸克 App 里还原，Cloudn 可以把口令文字发给第三方「星海」服务换取分享链接——只发口令文字、不含任何账号信息，首次使用前会征得你同意，可在设置中关闭。
 
 ### 短视频与图集（近 50 个平台）
 
@@ -148,7 +150,7 @@ Cloudn 没有上架 App Store，可以通过以下方式安装：
 <details>
 <summary><b>为什么有些网盘要登录才能下载？</b></summary>
 
-百度、迅雷、115（大文件）等平台不给未登录用户下载地址。登录后 Cloudn 会把文件临时转存到你的网盘取直链，下载开始后立即删除，不占你的空间。
+百度、迅雷、115（大文件）等平台不给未登录用户下载地址。登录后 Cloudn 会把文件临时转存到你的网盘取直链，下载开始后立即删除，不占你的空间。阿里云盘的分享也要登录后才能下载，但不需要转存。
 </details>
 
 <details>
@@ -223,10 +225,12 @@ Cloudn 以 [GNU AGPL-3.0](LICENSE) 发布。
 
 Cloudn 是独立开发的应用，与 YunX 项目及其作者没有关联；但其中部分网盘与视频平台的协议实现参考了开源项目 [YunX](https://github.com/CYQawa/YunX)（AGPL-3.0），依照该许可，Cloudn 的源代码同样以 AGPL-3.0 开放，相关文件头部已注明来源。
 
+Google 云端硬盘分享的解析参考了 [gdown](https://github.com/wkentaro/gdown)（MIT License，Copyright (c) 2015 Kentaro Wada）；阿里云盘与 OneDrive 工作或学校版分享参考了 [OpenList](https://github.com/OpenListTeam/OpenList)（AGPL-3.0）。
+
 其他视频平台的解析分别参考了 [ParseHub](https://github.com/z-mio/ParseHub)（MIT License，Copyright (c) 2024 梓澪）、[parse-video](https://github.com/wujunwei928/parse-video)（MIT License，Copyright (c) 2022 wujunwei928）与 [yt-dlp](https://github.com/yt-dlp/yt-dlp)（Unlicense）；YouTube 签名求解脚本取自 yt-dlp-ejs（Unlicense，内含 meriyah / ISC 与 astring / MIT）。
 
-- 线性平台图标改绘自 [Arcticons](https://github.com/Arcticons-Team/Arcticons)（CC BY-SA 4.0）；115、光鸭、蓝奏云、蓝奏优享、AcFun 及后来新增的平台为本项目按同规格绘制（CC BY-SA 4.0）
-- 实心平台图标中百度、哔哩哔哩、抖音、快手、微博、小红书、Pixiv、GitHub 取自 [Simple Icons](https://simpleicons.org)（CC0 1.0），其余由本项目绘制（CC BY-SA 4.0）
+- 线性平台图标改绘自 [Arcticons](https://github.com/Arcticons-Team/Arcticons)（CC BY-SA 4.0，阿里云盘亦取自其中）；115、光鸭、蓝奏云、蓝奏优享、AcFun、Google Drive、OneDrive 及后来新增的其他平台为本项目按同规格绘制（CC BY-SA 4.0）
+- 实心平台图标中百度、哔哩哔哩、抖音、快手、微博、小红书、Pixiv、GitHub、Google Drive 取自 [Simple Icons](https://simpleicons.org)（CC0 1.0），其余由本项目绘制（CC BY-SA 4.0）
 - 标题字体为[思源宋体](https://github.com/notofonts/noto-cjk)子集（SIL Open Font License 1.1）
 - 各平台名称与标识归其所有者，仅用于标明来源
 

@@ -125,6 +125,7 @@ public enum AccountValidator {
         case .pan123: return Pan123Resolver.normalizeToken(trimmed)
         case .xunlei: return XunleiCredential.parse(trimmed)?.serialized ?? trimmed
         case .guangya: return GuangYaCredential.parse(trimmed)?.serialized ?? trimmed
+        case .aliyun: return AliyunCredential.parse(trimmed)?.serialized ?? trimmed
         default: return trimmed
         }
     }
@@ -192,6 +193,9 @@ public enum AccountValidator {
         case .lanzou:
             guard let params = await LanzouAccount.loginParams(cookie: cookie) else { return nil }
             return "蓝奏云用户 \(params.uid)"
+        case .aliyun:
+            guard let cred = AliyunCredential.parse(cookie) else { return nil }
+            return await AliyunCredential.nickname(cred, client: .shared)
         }
     }
 }

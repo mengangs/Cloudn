@@ -270,6 +270,8 @@ extension AccountStore {
         let valid: Bool
         if kind == .xunlei, let xunlei = resolvers.resolver(for: .xunlei) as? XunleiResolver {
             valid = await xunlei.checkLogin()
+        } else if kind == .aliyun, let aliyun = resolvers.resolver(for: .aliyun) as? AliyunResolver {
+            valid = await aliyun.checkLogin()
         } else {
             valid = await AccountValidator.validate(kind, cookie: cookie) != nil
         }
@@ -310,6 +312,7 @@ extension AccountKind {
         case .guangya: return URL(string: "https://www.guangyapan.com/")!
         case .ilanzou: return URL(string: "https://www.ilanzou.com/")!
         case .lanzou: return URL(string: "https://up.woozooo.com/account.php?action=login")!
+        case .aliyun: return URL(string: AliyunResolver.loginURL)!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
@@ -335,6 +338,8 @@ extension AccountKind {
         // 139 的 PC 版页面在 WebView 里会因环境检测白屏，用移动版
         case .c139: return C139Resolver.loginUA
         case .guangya, .ilanzou, .lanzou: return VideoHTTP.uaChrome
+        // 手机版页面只引导下载 App，没有网页登录
+        case .aliyun: return VideoHTTP.uaChrome
         case .bilibili: return VideoHTTP.uaChrome
         // 移动 UA 下没有登录页（/login 返回 404）
         case .xiaohongshu: return VideoHTTP.uaChrome
@@ -356,6 +361,7 @@ extension AccountKind {
         case .pan115: return .cookies(Pan115Resolver.cookieDomains)
         case .c139: return .cookies(C139Resolver.cookieDomains)
         case .lanzou: return .cookies(["woozooo.com"])
+        case .aliyun: return .script(AliyunResolver.readScript)
         case .guangya, .ilanzou: return .cookies([])
         case .bilibili: return .cookies(["bilibili.com"])
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
@@ -376,6 +382,7 @@ extension AccountKind {
         case .pan115: return Pan115Resolver.isValidCookie(credential) && credential.contains("SEID=")
         case .c139: return C139Resolver.isValidCookie(credential)
         case .lanzou: return LanzouAccount.isValidCookie(credential)
+        case .aliyun: return AliyunCredential.parse(credential) != nil
         case .guangya, .ilanzou: return false
         case .bilibili: return credential.contains("SESSDATA=")
         // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
@@ -402,6 +409,7 @@ extension AccountKind {
         case .guangya: return "登录后可下载受限分享（临时转存后取链），并支持转存"
         case .ilanzou: return "登录后可转存分享到自己的网盘"
         case .lanzou: return "登录后可管理自己的蓝奏云文件"
+        case .aliyun: return "阿里云盘分享要登录后才能下载"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "登录后可解析 R18 与受限作品"
@@ -428,6 +436,7 @@ extension AccountKind {
         case .guangya: return "粘贴网页 localStorage 中的 access_token（建议改用账号密码 / 短信登录）"
         case .ilanzou: return "粘贴 {\"appToken\":…,\"uuid\":…} 形式的凭据（建议改用账号密码登录）"
         case .lanzou: return "需包含 ylogin 与 phpdisk_info"
+        case .aliyun: return "粘贴网页 localStorage 中 token 的值（JSON），或 refresh_token"
         case .bilibili: return "需包含 SESSDATA"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
@@ -439,7 +448,7 @@ extension AccountKind {
 
     var manualPlaceholder: String {
         switch self {
-        case .xunlei, .pan123, .guangya, .ilanzou: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
+        case .xunlei, .pan123, .guangya, .ilanzou, .aliyun: return "在电脑浏览器登录后，从开发者工具复制登录凭据"
         default: return "在电脑浏览器登录后复制请求头里的 Cookie"
         }
     }
@@ -456,6 +465,7 @@ extension AccountKind {
         case .guangya: return "g.circle.fill"
         case .ilanzou: return "y.circle.fill"
         case .lanzou: return "l.circle.fill"
+        case .aliyun: return "a.circle.fill"
         case .bilibili: return "play.tv.fill"
         case .xiaohongshu: return "book.closed.fill"
         case .pixiv: return "paintpalette.fill"
@@ -483,7 +493,7 @@ extension AccountKind {
         case .xunlei: return LoginWebView.xunleiRenderFix
         case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
         // 只有桌面版的登录页（115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
-        case .pan115, .pan123, .lanzou, .zhihu: return LoginWebView.fitToWidthScript
+        case .pan115, .pan123, .lanzou, .zhihu, .aliyun: return LoginWebView.fitToWidthScript
         default: return nil
         }
     }

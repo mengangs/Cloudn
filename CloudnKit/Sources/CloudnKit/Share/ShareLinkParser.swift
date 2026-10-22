@@ -22,6 +22,9 @@ public enum ShareLinkParser {
     private static let ilanzou = Rx(#"(?:^|[/.])ilanzou\.(?:com|net|org|cn)/s/([A-Za-z0-9_-]+)"#, ignoreCase: true)
     private static let lanzou = Rx(#"(?:^|[/.])(?:lanzou[a-z0-9-]*|lan[zs]o[ux])\.(?:com|net|org|cn)/(?:[A-Za-z0-9_-]+/)?([A-Za-z0-9]+)"#, ignoreCase: true)
 
+    private static let aliyun = Rx(#"(?:alipan|aliyundrive)\.com/s/([A-Za-z0-9]+)"#, ignoreCase: true)
+    private static let onedrive = Rx(#"^https?://(?:1drv\.ms/|onedrive\.live\.com/|[A-Za-z0-9-]+\.sharepoint\.com/:[a-z]:/)"#, ignoreCase: true)
+
     private static let pwdInURL = Rx(#"[?&]pwd=([A-Za-z0-9]+)"#)
     private static let pwdIn115URL = Rx(#"[?&]password=([A-Za-z0-9]+)"#)
     private static let pwdInLanzouURL = Rx(#"[?&](?:pwd|pass|passcode|password)=([A-Za-z0-9]+)"#, ignoreCase: true)
@@ -57,6 +60,10 @@ public enum ShareLinkParser {
         if let id = guangya.first(in: url) { return make(id, .guangya) }
         if let id = ilanzou.first(in: url) { return make(id, .ilanzou, pwdRx: pwdInLanzouURL) }
         if let id = lanzou.first(in: url) { return make(id, .lanzou, pwdRx: pwdInLanzouURL) }
+        if let id = aliyun.first(in: url) { return make(id, .aliyun) }
+        if let target = GoogleDriveResolver.target(of: url) { return ParsedShare(shareId: target.id, pwd: nil, platform: .gdrive, url: url) }
+        // OneDrive 的分享 id 就是链接本身（接口用 base64 编码后的完整链接）
+        if onedrive.matches(url) { return ParsedShare(shareId: url, pwd: textPwd, platform: .onedrive, url: url) }
         return nil
     }
 }

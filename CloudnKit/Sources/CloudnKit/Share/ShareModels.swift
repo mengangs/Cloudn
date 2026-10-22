@@ -3,7 +3,7 @@ import Foundation
 
 /// 网盘平台。识别规则见 `ShareLinkParser`，解析能力见 `SharePlatform.isResolvable`。
 public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, xunlei, baidu, c139, pan123, pan115, guangya, ilanzou, lanzou
+    case quark, uc, xunlei, baidu, c139, pan123, pan115, guangya, ilanzou, lanzou, aliyun, gdrive, onedrive
 
     public var id: String { rawValue }
 
@@ -19,6 +19,9 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .guangya: return "光鸭云盘"
         case .ilanzou: return "蓝奏云优享版"
         case .lanzou: return "蓝奏云"
+        case .aliyun: return "阿里云盘"
+        case .gdrive: return "Google 云端硬盘"
+        case .onedrive: return "OneDrive"
         }
     }
 
@@ -38,6 +41,8 @@ public enum SharePlatform: String, Codable, CaseIterable, Sendable, Identifiable
         case .guangya: return .guangya
         case .ilanzou: return .ilanzou
         case .lanzou: return .lanzou
+        case .aliyun: return .aliyun
+        case .gdrive, .onedrive: return nil
         }
     }
 }
@@ -120,7 +125,7 @@ public struct DownloadLink: Sendable, Equatable {
 
 /// 需要登录的平台账号类型
 public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
+    case quark, uc, baidu, xunlei, pan123, pan115, c139, guangya, ilanzou, lanzou, aliyun, bilibili, xiaohongshu, pixiv, zhihu, yuanbao
     /// 海外视频平台（可选登录：解析受限内容、避开游客限额）
     case twitter, instagram, tiktok, reddit, facebook, threads
 
@@ -138,6 +143,7 @@ public enum AccountKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .guangya: return "光鸭云盘"
         case .ilanzou: return "蓝奏云优享版"
         case .lanzou: return "蓝奏云"
+        case .aliyun: return "阿里云盘"
         case .bilibili: return "哔哩哔哩"
         case .xiaohongshu: return "小红书"
         case .pixiv: return "Pixiv"
