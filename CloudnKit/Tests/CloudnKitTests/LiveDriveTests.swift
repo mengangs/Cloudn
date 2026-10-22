@@ -44,6 +44,28 @@ final class LiveDriveTests: XCTestCase {
         XCTAssertEqual(files.first?.name.hasSuffix(".pptx"), true, files.first?.name ?? "")
     }
 
+    /// 个人版普通分享（项目作者提供的测试分享）
+    func testOneDrivePersonal() async throws {
+        let (session, files) = try await open("https://1drv.ms/i/c/2cfe0cfed29e6708/IQCZyIbnV7DzSL60RKz3-HRoAS1sWyDMF2wmjyFX2B-MOok")
+        let first = try await firstFile(session, in: files)
+        let file = try XCTUnwrap(first)
+        XCTAssertGreaterThan(file.size, 0)
+        let link = try await resolver(.onedrive).downloadLink(session, file: file)
+        try await assertRange(link)
+    }
+
+    /// 项目作者提供的测试文件夹
+    func testGoogleFolderOwner() async throws {
+        let (session, files) = try await open("https://drive.google.com/drive/folders/1kMqRu5L3V13dzxD16dEPiHKRX49TzVN7")
+        XCTAssertFalse(files.isEmpty, session.title)
+        if let file = try await firstFile(session, in: files) {
+            let link = try await resolver(.gdrive).downloadLink(session, file: file)
+            if !Self.isGoogleDoc(file) { try await assertRange(link) }
+        }
+    }
+
+    private static func isGoogleDoc(_ f: ShareFile) -> Bool { f.token.hasPrefix("doc:") }
+
     func testOneDriveSharePointFolder() async throws {
         let (session, files) = try await open("https://stuhiteducn-my.sharepoint.com/:f:/g/personal/1150700117_stu_hit_edu_cn/EumyrYnHDMtIiNoAHNshbXUBHU5diRWyGVB1rmso860kog?e=KKEKOO")
         XCTAssertEqual(session.title, "CID")
