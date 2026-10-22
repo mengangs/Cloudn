@@ -84,9 +84,13 @@ struct DriveShareSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
             }
             .task { await loadExisting() }
-            .confirmationDialog("取消这个分享链接？", isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
-                                titleVisibility: .visible, presenting: revoking) { share in
+            // 用居中的提示框：确认菜单在表单页里会以气泡形式弹在顶部工具栏旁边
+            .alert("取消这个分享链接？", isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
+                   presenting: revoking) { share in
                 Button("取消分享", role: .destructive) { revoke(share) }
+                Button("保留", role: .cancel) {}
+            } message: { _ in
+                Text("取消后，拿到这个链接的人就打不开了。")
             }
             .onAppear {
                 if let first = manager.shareExpiryOptions.first { options.expiry = first }

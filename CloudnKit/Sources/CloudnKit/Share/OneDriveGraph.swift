@@ -150,11 +150,23 @@ extension OneDriveResolver: DriveManager {
 
     public func driveDownloadLink(_ file: ShareFile) async throws -> DownloadLink {
         guard !file.isDirectory else { throw CloudnError("文件夹无法直接下载") }
-        let json = try await graphRequest("GET", Self.itemPath(file.fid) + "?$select=id,size,@microsoft.graph.downloadUrl")
-        let url = json["@microsoft.graph.downloadUrl"].string
+        // 个人版带 $select 时常常不返回直链字段：取完整条目；还没有就请求 /content，读 302 跳转里的预授权地址
+        let json = try await graphRequest("GET", Self.itemPath(file.fid))
+        var url = json["@microsoft.graph.downloadUrl"].string
+        if url.isEmpty { url = try await contentRedirect(file.fid) }
         guard !url.isEmpty else { throw CloudnError("OneDrive 没有返回下载地址") }
         let size = json["size"].int64 > 0 ? json["size"].int64 : file.size
         return DownloadLink(fileName: file.name, url: url, size: size, headers: ["User-Agent": Self.ua])
+    }
+
+    /// GET /content 不跟随跳转，Location 就是免授权的下载地址
+    private func contentRedirect(_ id: String) async throws -> String {
+        guard let token = try await graphToken() else { throw SharePlatform.onedrive.loginRequired }
+        let r = try await client.send(HTTPRequest(url: Self.graph + Self.itemPath(id) + "/content",
+                                                  headers: [("Authorization", "Bearer " + token)], followRedirects: false))
+        if (300..<400).contains(r.status), let location = r.header("Location") { return location }
+        if !r.isSuccess { throw Self.graphError(r) }
+        return ""
     }
 
     public func createFolder(_ name: String, in parentId: String) async throws {

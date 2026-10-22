@@ -24,6 +24,22 @@ struct AccountsView: View {
         AccountKind.allCases.filter { $0.isDrive && !app.settings.hiddenDrives.contains($0.rawValue) }
     }
 
+    /// 平台越来越多：默认只列登录过的（含已失效的），其余收起，展开状态记住
+    @AppStorage("accounts.drivesExpanded") private var drivesExpanded = false
+    @AppStorage("accounts.videosExpanded") private var videosExpanded = false
+
+    private func hasAccount(_ kind: AccountKind) -> Bool { app.accounts.accounts[kind] != nil }
+
+    private var shownDrives: [AccountKind] {
+        guard !drivesExpanded else { return visibleDrives }
+        let mine = visibleDrives.filter(hasAccount)
+        // 一个都没登录时给几个常用的，免得这一块空着
+        return mine.isEmpty ? Array(visibleDrives.prefix(4)) : mine
+    }
+
+    private var videoKinds: [AccountKind] { AccountKind.allCases.filter { !$0.isDrive } }
+    private var shownVideos: [AccountKind] { videosExpanded ? videoKinds : videoKinds.filter(hasAccount) }
+
     /// 账号有变（登录、退出、续期）时重新取容量
     private var accountsKey: String {
         app.accounts.accounts.sorted { $0.key.rawValue < $1.key.rawValue }
@@ -42,27 +58,39 @@ struct AccountsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(title: "网盘", trailing: loggedInSummary)
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                            ForEach(visibleDrives) { driveTile($0) }
+                            ForEach(shownDrives) { driveTile($0) }
                         }
-                        Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号；右上角绿点表示已登录，红点表示登录已失效（每 6 小时最多自动检测一次）。")
-                            .font(.caption)
-                            .foregroundStyle(Color.ink3)
-                            .padding(.horizontal, 4)
+                        let hiddenDrives = visibleDrives.count - shownDrives.count
+                        if hiddenDrives > 0 || drivesExpanded {
+                            expandButton(expanded: $drivesExpanded, collapsedTitle: "展开其余 \(hiddenDrives) 个网盘")
+                        }
+                        if drivesExpanded {
+                            Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号；右上角绿点表示已登录，红点表示登录已失效（每 6 小时最多自动检测一次）。")
+                                .font(.caption)
+                                .foregroundStyle(Color.ink3)
+                                .padding(.horizontal, 4)
+                        }
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        SectionLabel(title: "视频平台")
+                        let loggedVideos = videoKinds.filter(hasAccount).count
+                        SectionLabel(title: "视频平台", trailing: loggedVideos == 0 ? "未登录" : "已登录 \(loggedVideos) 个")
                         VStack(spacing: 0) {
-                            let kinds = AccountKind.allCases.filter { !$0.isDrive }
+                            let kinds = shownVideos
                             ForEach(Array(kinds.enumerated()), id: \.element) { index, kind in
                                 videoRow(kind)
-                                if index < kinds.count - 1 { RowDivider(leading: 60) }
+                                RowDivider(leading: 60)
                             }
+                            expandButton(expanded: $videosExpanded,
+                                         collapsedTitle: kinds.isEmpty ? "登录视频平台（\(videoKinds.count) 个）" : "展开其余 \(videoKinds.count - kinds.count) 个平台")
+                                .padding(.horizontal, 14)
                         }
                         .card()
-                        Text("小红书、知乎需要登录；Pixiv 未登录只能解析公开作品；X、Instagram、TikTok、Reddit、Facebook 登录可选，登录后可解析受限内容并减少游客限流；其余平台无需登录。")
-                            .font(.caption)
-                            .foregroundStyle(Color.ink3)
-                            .padding(.horizontal, 4)
+                        if videosExpanded {
+                            Text("小红书、知乎需要登录；抖音登录后可获取主页全部作品；Pixiv 未登录只能解析公开作品；X、Instagram、TikTok、Reddit、Facebook 登录可选，登录后可解析受限内容并减少游客限流；其余平台无需登录。")
+                                .font(.caption)
+                                .foregroundStyle(Color.ink3)
+                                .padding(.horizontal, 4)
+                        }
                     }
                     VStack(spacing: 0) {
                         NavigationLink { SettingsView() } label: { linkRow(.gear, "设置") }
@@ -90,6 +118,13 @@ struct AccountsView: View {
             .background(Color.paper)
             .task(id: accountsKey) { await refreshStatus() }
             .navigationTitle("我的")
+            .toolbar {
+                // 平台多了列表很长：设置放到右上角，不用滑到底
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink { SettingsView() } label: { IconView(.gear, size: 18) }
+                        .accessibilityLabel("设置")
+                }
+            }
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
@@ -322,6 +357,25 @@ struct AccountsView: View {
 
     private func clearPendingAdd() {
         app.accounts.pendingAdd = nil
+    }
+
+    /// 「展开其余 N 个 / 收起」
+    private func expandButton(expanded: Binding<Bool>, collapsedTitle: String) -> some View {
+        Button {
+            withAnimation(.snappy) { expanded.wrappedValue.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Text(expanded.wrappedValue ? "收起" : collapsedTitle)
+                IconView(.chevronRight, size: 12)
+                    .rotationEffect(.degrees(expanded.wrappedValue ? -90 : 90))
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Color.ink2)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
