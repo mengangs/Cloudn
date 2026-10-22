@@ -409,7 +409,7 @@ extension AccountKind {
         case .guangya: return "登录后可下载受限分享（临时转存后取链），并支持转存"
         case .ilanzou: return "登录后可转存分享到自己的网盘"
         case .lanzou: return "登录后可管理自己的蓝奏云文件"
-        case .aliyun: return "阿里云盘分享要登录后才能下载"
+        case .aliyun: return "登录后可下载分享、转存，并管理自己的阿里云盘"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "登录后可解析 R18 与受限作品"

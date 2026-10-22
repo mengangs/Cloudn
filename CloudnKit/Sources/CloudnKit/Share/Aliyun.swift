@@ -18,9 +18,11 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
     /// 网页版把登录态 JSON 存在 localStorage 的 token 里
     public static let readScript = "(function(){try{return localStorage.getItem('token')||''}catch(e){return ''}})()"
 
-    private let credentials: CredentialStore
-    private let client: HTTPClient
-    private let tokens = TokenCache()
+    let credentials: CredentialStore
+    let client: HTTPClient
+    let tokens = TokenCache()
+    /// 个人盘账号信息按访问令牌缓存（令牌换了就重新取，也就自然跟着切换账号）
+    let driveCache = DriveCache()
 
     public init(credentials: CredentialStore = NoCredentials(), client: HTTPClient = .shared) {
         self.credentials = credentials
@@ -135,10 +137,12 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
     // MARK: 登录
 
     /// 当前账号的 access_token；未登录返回 nil。快过期时用 refresh_token 续期并回写（refresh_token 每次续期都会换新）
-    func accessToken() async throws -> String? {
+    func accessToken(forceRefresh: Bool = false) async throws -> String? {
         guard let raw = await credentials.cookie(for: .aliyun)?.nilIfBlank, let cred = AliyunCredential.parse(raw) else { return nil }
-        if !cred.accessToken.isEmpty, cred.expiresAt - 300 > Int64(Date().timeIntervalSince1970) { return cred.accessToken }
-        if let cached = await tokens.access(cred.refreshToken) { return cached }
+        if !forceRefresh {
+            if !cred.accessToken.isEmpty, cred.expiresAt - 300 > Int64(Date().timeIntervalSince1970) { return cred.accessToken }
+            if let cached = await tokens.access(cred.refreshToken) { return cached }
+        }
         let renewed = try await AliyunCredential.refresh(cred, client: client)
         await credentials.updateCookie(renewed.serialized, replacing: raw, for: .aliyun)
         await tokens.setAccess(renewed.refreshToken, renewed.accessToken)
@@ -150,7 +154,22 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
         (try? await accessToken()) != nil
     }
 
-    private actor TokenCache {
+    actor DriveCache {
+        private var access = ""
+        private var account: DriveAccount?
+        func get(_ token: String) -> DriveAccount? { token == access ? account : nil }
+        func set(_ token: String, _ a: DriveAccount) { access = token; account = a }
+        /// 设备签名只跟用户 id 有关，算一次要做两次椭圆曲线标量乘：按用户缓存
+        private var signatures: [String: (deviceId: String, signature: String, publicKey: String)] = [:]
+        func signature(_ userId: String) -> (deviceId: String, signature: String, publicKey: String)? {
+            if let s = signatures[userId] { return s }
+            let s = AliyunResolver.deviceSignature(userId: userId)
+            signatures[userId] = s
+            return s
+        }
+    }
+
+    actor TokenCache {
         var shares: [String: String] = [:]
         var pwds: [String: String] = [:]
         var accesses: [String: String] = [:]

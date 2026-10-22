@@ -70,7 +70,7 @@
 | 123 云盘 · 139 网盘 | 浏览 | 下载、转存、管理 |
 | 光鸭云盘 | 公开分享直接下载 | 分享者关闭免登录下载时也能下、转存、管理 |
 | 蓝奏云 · 蓝奏云优享版 | 直接下载 | 管理我的网盘、转存（优享版） |
-| 阿里云盘 | 浏览 | 下载 |
+| 阿里云盘 | 浏览 | 下载、转存、管理我的网盘（资源库 / 备份盘）、上传（支持秒传） |
 | Google 云端硬盘 · OneDrive | 浏览、下载（文件夹整批下载；Google 文档 / 表格 / 幻灯片自动导出为 Word / Excel / PowerPoint） | — |
 
 提取码自动识别；迅雷中文口令可以直接粘贴。OneDrive 个人版（1drv.ms）与工作或学校版（SharePoint）的分享都支持，设了密码的分享填上密码即可。夸克 / UC 的中文口令只能在夸克 App 里还原，Cloudn 可以把口令文字发给第三方「星海」服务换取分享链接——只发口令文字、不含任何账号信息，首次使用前会征得你同意，可在设置中关闭。
@@ -225,7 +225,7 @@ Cloudn 以 [GNU AGPL-3.0](LICENSE) 发布。
 
 Cloudn 是独立开发的应用，与 YunX 项目及其作者没有关联；但其中部分网盘与视频平台的协议实现参考了开源项目 [YunX](https://github.com/CYQawa/YunX)（AGPL-3.0），依照该许可，Cloudn 的源代码同样以 AGPL-3.0 开放，相关文件头部已注明来源。
 
-Google 云端硬盘分享的解析参考了 [gdown](https://github.com/wkentaro/gdown)（MIT License，Copyright (c) 2015 Kentaro Wada）；阿里云盘与 OneDrive 工作或学校版分享参考了 [OpenList](https://github.com/OpenListTeam/OpenList)（AGPL-3.0）。
+Google 云端硬盘分享的解析参考了 [gdown](https://github.com/wkentaro/gdown)（MIT License，Copyright (c) 2015 Kentaro Wada）；阿里云盘（含个人盘的设备签名）与 OneDrive 工作或学校版分享参考了 [OpenList](https://github.com/OpenListTeam/OpenList)（AGPL-3.0）。
 
 其他视频平台的解析分别参考了 [ParseHub](https://github.com/z-mio/ParseHub)（MIT License，Copyright (c) 2024 梓澪）、[parse-video](https://github.com/wujunwei928/parse-video)（MIT License，Copyright (c) 2022 wujunwei928）与 [yt-dlp](https://github.com/yt-dlp/yt-dlp)（Unlicense）；YouTube 签名求解脚本取自 yt-dlp-ejs（Unlicense，内含 meriyah / ISC 与 astring / MIT）。
 
