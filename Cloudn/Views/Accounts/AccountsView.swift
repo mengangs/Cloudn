@@ -15,61 +15,33 @@ struct AccountsView: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var importData: ImportData?
-    @State private var quotas: [SharePlatform: DriveQuota] = [:]
+    /// 容量：先显示上次缓存的，后台取到新的再替换（取失败保留旧值），避免进页面时整块消失再出现
+    @State private var quotas: [String: CachedQuota] = CachedQuota.load()
     /// 上次取容量的时间与当时的账号：切回本页时 10 分钟内不重复请求
     @State private var quotaLoaded: (at: Date, key: String)?
 
-    /// 设置里勾选显示的网盘（默认全部），按自定义顺序
-    private var visibleDrives: [AccountKind] {
-        allDrives.filter { !app.settings.hiddenDrives.contains($0.rawValue) }
-    }
-
-    /// 平台越来越多：默认只列登录过的（含已失效的），其余收起，展开状态记住
-    @AppStorage("accounts.drivesExpanded") private var drivesExpanded = false
-    @AppStorage("accounts.videosExpanded") private var videosExpanded = false
-    /// 自定义顺序（逗号分隔的 rawValue；新增的平台排在末尾）
+    /// 顺序与显示由「排序与显示」决定（PlatformLayout）；不再折叠，没显示的从末尾的「更多」进去开
     @AppStorage("accounts.driveOrder") private var driveOrder = ""
     @AppStorage("accounts.videoOrder") private var videoOrder = ""
-    /// 收起时显示哪些：自定义过就按自定义，否则显示已登录的
     @AppStorage("accounts.drivePinned") private var drivePinned = ""
     @AppStorage("accounts.videoPinned") private var videoPinned = ""
     @AppStorage("accounts.drivePinnedSet") private var drivePinnedSet = false
     @AppStorage("accounts.videoPinnedSet") private var videoPinnedSet = false
-
-    /// 「排序与显示」编辑状态：拖动排序、点眼睛切换收起时是否显示
-    @State private var editing = false
-    @State private var editDrives: [AccountKind] = []
-    @State private var editVideos: [AccountKind] = []
-    @State private var reordering = false
+    @State private var layoutGroup: PlatformLayout.Group?
 
     private func hasAccount(_ kind: AccountKind) -> Bool { app.accounts.accounts[kind] != nil }
 
-    private var allDrives: [AccountKind] { Self.ordered(AccountKind.allCases.filter(\.isDrive), by: driveOrder) }
-    private var videoKinds: [AccountKind] { Self.ordered(AccountKind.allCases.filter { !$0.isDrive }, by: videoOrder) }
+    private var allDrives: [AccountKind] { PlatformLayout.ordered(AccountKind.allCases.filter(\.isDrive), by: driveOrder) }
+    private var videoKinds: [AccountKind] { PlatformLayout.ordered(AccountKind.allCases.filter { !$0.isDrive }, by: videoOrder) }
 
-    private var pinnedDrives: [AccountKind] {
-        if drivePinnedSet { return visibleDrives.filter { Self.split(drivePinned).contains($0.rawValue) } }
-        let mine = visibleDrives.filter(hasAccount)
-        // 一个都没登录时给几个常用的，免得这一块空着
-        return mine.isEmpty ? Array(visibleDrives.prefix(4)) : mine
+    private var shownDrives: [AccountKind] {
+        drivePinnedSet ? allDrives.filter { PlatformLayout.split(drivePinned).contains($0.rawValue) }
+            : PlatformLayout.defaultPinned(allDrives, drives: true, hidden: app.settings.hiddenDrives, hasAccount: hasAccount)
     }
 
-    private var pinnedVideos: [AccountKind] {
-        videoPinnedSet ? videoKinds.filter { Self.split(videoPinned).contains($0.rawValue) } : videoKinds.filter(hasAccount)
-    }
-
-    private var shownDrives: [AccountKind] { drivesExpanded ? visibleDrives : pinnedDrives }
-    private var shownVideos: [AccountKind] { videosExpanded ? videoKinds : pinnedVideos }
-
-    private static func split(_ value: String) -> [String] { value.split(separator: ",").map(String.init) }
-
-    /// 按保存的顺序排；没出现过的保持原有先后，排在后面
-    private static func ordered(_ kinds: [AccountKind], by saved: String) -> [AccountKind] {
-        var rank: [String: Int] = [:]
-        for (i, raw) in split(saved).enumerated() where rank[raw] == nil { rank[raw] = i }
-        return kinds.enumerated().sorted { a, b in
-            (rank[a.element.rawValue] ?? 10_000 + a.offset) < (rank[b.element.rawValue] ?? 10_000 + b.offset)
-        }.map(\.element)
+    private var shownVideos: [AccountKind] {
+        videoPinnedSet ? videoKinds.filter { PlatformLayout.split(videoPinned).contains($0.rawValue) }
+            : PlatformLayout.defaultPinned(videoKinds, drives: false, hidden: [], hasAccount: hasAccount)
     }
 
     /// 账号有变（登录、退出、续期）时重新取容量
@@ -87,46 +59,26 @@ struct AccountsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if editing {
-                        editSections
-                    } else {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(title: "网盘", trailing: loggedInSummary)
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                             ForEach(shownDrives) { driveTile($0) }
+                            moreTile(hidden: allDrives.count - shownDrives.count)
                         }
-                        let hiddenDrives = visibleDrives.count - shownDrives.count
-                        if hiddenDrives > 0 || drivesExpanded {
-                            expandButton(expanded: $drivesExpanded, collapsedTitle: "展开其余 \(hiddenDrives) 个网盘")
-                        }
-                        if drivesExpanded {
-                            Text("蓝奏云、蓝奏优享、光鸭的公开分享无需登录；其余网盘未登录也能浏览分享，夸克 / UC / 115 还能直接下载部分文件。长按可管理账号；右上角绿点表示已登录，红点表示登录已失效（每 6 小时最多自动检测一次）。")
-                                .font(.caption)
-                                .foregroundStyle(Color.ink3)
-                                .padding(.horizontal, 4)
-                        }
+                        .animation(.snappy, value: shownDrives)
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         let loggedVideos = videoKinds.filter(hasAccount).count
                         SectionLabel(title: "视频平台", trailing: loggedVideos == 0 ? "未登录" : "已登录 \(loggedVideos) 个")
                         VStack(spacing: 0) {
-                            let kinds = shownVideos
-                            ForEach(Array(kinds.enumerated()), id: \.element) { index, kind in
+                            ForEach(shownVideos) { kind in
                                 videoRow(kind)
                                 RowDivider(leading: 60)
                             }
-                            expandButton(expanded: $videosExpanded,
-                                         collapsedTitle: kinds.isEmpty ? (videoPinnedSet ? "展开全部 \(videoKinds.count) 个平台" : "登录视频平台（\(videoKinds.count) 个）") : "展开其余 \(videoKinds.count - kinds.count) 个平台")
-                                .padding(.horizontal, 14)
+                            moreVideosRow(hidden: videoKinds.count - shownVideos.count)
                         }
                         .card()
-                        if videosExpanded {
-                            Text("小红书、知乎需要登录；抖音登录后可获取主页全部作品；Pixiv 未登录只能解析公开作品；X、Instagram、TikTok、Reddit、Facebook 登录可选，登录后可解析受限内容并减少游客限流；其余平台无需登录。")
-                                .font(.caption)
-                                .foregroundStyle(Color.ink3)
-                                .padding(.horizontal, 4)
-                        }
-                    }
+                        .animation(.snappy, value: shownVideos)
                     }
                     VStack(spacing: 0) {
                         NavigationLink { SettingsView() } label: { linkRow(.gear, "设置") }
@@ -151,29 +103,28 @@ struct AccountsView: View {
                 .padding(.bottom, 24)
                 .readableWidth()
             }
-            // 拖动排序时不让列表跟着滚
-            .scrollDisabled(reordering)
             .background(Color.paper)
             .onChange(of: loggedKinds) { old, new in
-                // 自定义过收起时显示哪些：新登录的平台自动加进去，免得登录完找不到
+                // 自定义过显示哪些：新登录的平台自动显示，免得登录完找不到
                 let added = new.subtracting(old)
                 guard !added.isEmpty else { return }
-                if drivePinnedSet { drivePinned = (Self.split(drivePinned) + added.filter { $0.isDrive }.map(\.rawValue)).joined(separator: ",") }
-                if videoPinnedSet { videoPinned = (Self.split(videoPinned) + added.filter { !$0.isDrive }.map(\.rawValue)).joined(separator: ",") }
+                if drivePinnedSet { drivePinned = (PlatformLayout.split(drivePinned) + added.filter(\.isDrive).map(\.rawValue)).joined(separator: ",") }
+                if videoPinnedSet { videoPinned = (PlatformLayout.split(videoPinned) + added.filter { !$0.isDrive }.map(\.rawValue)).joined(separator: ",") }
             }
             .task(id: accountsKey) { await refreshStatus() }
             .navigationTitle("我的")
             .toolbar {
                 // 平台多了列表很长：设置放到右上角，不用滑到底
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(editing ? "完成" : "排序") { editing ? endEditing() : beginEditing() }
-                        .fontWeight(editing ? .semibold : .regular)
+                    Button { layoutGroup = .drives } label: { Image(systemName: "arrow.up.arrow.down") }
+                        .accessibilityLabel("排序与显示")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink { SettingsView() } label: { IconView(.gear, size: 18) }
                         .accessibilityLabel("设置")
                 }
             }
+            .sheet(item: $layoutGroup) { PlatformLayoutView(group: $0) }
             .sheet(isPresented: $exporting) { AuthExportView() }
             .sheet(item: $importData) { AuthImportView(data: $0.data) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
@@ -220,7 +171,7 @@ struct AccountsView: View {
     private func driveTile(_ kind: AccountKind) -> some View {
         let account = app.accounts.accounts[kind]
         let platform = kind.drivePlatform
-        let quota = platform.flatMap { quotas[$0] }
+        let quota = platform.flatMap { quotas[$0.rawValue] }.flatMap { $0.owner == account?.nickname ? $0.quota : nil }
         let expired = app.accounts.isExpired(kind)
         return Menu {
             accountMenu(kind)
@@ -250,7 +201,9 @@ struct AccountsView: View {
                         ProgressLine(value: min(1, Double(quota.used) / Double(quota.total)))
                         Text("\(ByteFormat.string(quota.used)) / \(ByteFormat.string(quota.total))")
                             .font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(1).minimumScaleFactor(0.8)
+                            .contentTransition(.numericText())
                     }
+                    .animation(.snappy, value: quota)
                 } else {
                     Text(account == nil ? "点按登录" : " ").font(.monoSmall).foregroundStyle(Color.ink3)
                 }
@@ -311,97 +264,51 @@ struct AccountsView: View {
 
     private var loggedKinds: Set<AccountKind> { Set(app.accounts.accounts.keys) }
 
-    private func beginEditing() {
-        editDrives = visibleDrives
-        editVideos = videoKinds
-        // 第一次编辑：把当前收起时看到的固定下来，之后按眼睛开关
-        if !drivePinnedSet { drivePinned = pinnedDrives.map(\.rawValue).joined(separator: ","); drivePinnedSet = true }
-        if !videoPinnedSet { videoPinned = pinnedVideos.map(\.rawValue).joined(separator: ","); videoPinnedSet = true }
-        withAnimation(.snappy) { editing = true }
-    }
-
-    private func endEditing() {
-        withAnimation(.snappy) { editing = false }
-    }
-
-    /// 编辑状态：全部平台按住拖动排序，眼睛决定收起时是否显示
-    private var editSections: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "hand.draw")
-                Text("按住卡片拖动调整顺序；点眼睛设置收起时是否显示，展开后仍会列出全部。")
-            }
-            .font(.caption)
-            .foregroundStyle(Color.ink3)
-            .padding(.horizontal, 4)
-            VStack(alignment: .leading, spacing: 10) {
-                SectionLabel(title: "网盘", trailing: "收起时显示 \(editDrives.filter { isPinned($0) }.count) 个")
-                ReorderableGrid(items: $editDrives, columns: 2, rowHeight: 60, spacing: 10, dragging: $reordering) { kind in
-                    editCell(kind, handle: false)
+    /// 网格末尾的「更多网盘」：虚线框，点开排序与显示
+    private func moreTile(hidden: Int) -> some View {
+        Button { layoutGroup = .drives } label: {
+            VStack(spacing: 8) {
+                Image(systemName: hidden > 0 ? "plus" : "arrow.up.arrow.down")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.ink2)
+                    .frame(width: 34, height: 34)
+                    .background(Color.fillMuted, in: Circle())
+                Text(hidden > 0 ? "更多网盘" : "排序与显示").font(.subheadline.weight(.medium)).foregroundStyle(Color.ink2)
+                if hidden > 0 {
+                    Text("还有 \(hidden) 个未显示").font(.caption).foregroundStyle(Color.ink3)
                 }
             }
-            VStack(alignment: .leading, spacing: 10) {
-                SectionLabel(title: "视频平台", trailing: "收起时显示 \(editVideos.filter { isPinned($0) }.count) 个")
-                ReorderableGrid(items: $editVideos, columns: 1, rowHeight: 56, spacing: 8, dragging: $reordering) { kind in
-                    editCell(kind, handle: true)
-                }
+            .padding(14)
+            // 和旁边的网盘卡片同高
+            .frame(maxWidth: .infinity, minHeight: 140)
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.hairline, style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
             }
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .transition(.opacity)
-        .onChange(of: editDrives) { _, kinds in
-            // 设置里隐藏掉的网盘不参与编辑，保留在末尾
-            let rest = allDrives.filter { !kinds.contains($0) }
-            driveOrder = (kinds + rest).map(\.rawValue).joined(separator: ",")
-        }
-        .onChange(of: editVideos) { _, kinds in
-            videoOrder = kinds.map(\.rawValue).joined(separator: ",")
-        }
+        .buttonStyle(.plain)
     }
 
-    private func isPinned(_ kind: AccountKind) -> Bool {
-        Self.split(kind.isDrive ? drivePinned : videoPinned).contains(kind.rawValue)
-    }
-
-    private func togglePinned(_ kind: AccountKind) {
-        var list = Self.split(kind.isDrive ? drivePinned : videoPinned)
-        if let i = list.firstIndex(of: kind.rawValue) { list.remove(at: i) } else { list.append(kind.rawValue) }
-        withAnimation(.snappy) {
-            if kind.isDrive { drivePinned = list.joined(separator: ",") } else { videoPinned = list.joined(separator: ",") }
-        }
-    }
-
-    private func editCell(_ kind: AccountKind, handle: Bool) -> some View {
-        let pinned = isPinned(kind)
-        return HStack(spacing: 10) {
-            if handle {
-                Image(systemName: "line.3.horizontal")
+    /// 视频平台卡片的最后一行：「更多视频平台」
+    private func moreVideosRow(hidden: Int) -> some View {
+        Button { layoutGroup = .videos } label: {
+            HStack(spacing: 12) {
+                Image(systemName: hidden > 0 ? "plus" : "arrow.up.arrow.down")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.ink3)
+                    .foregroundStyle(Color.ink2)
+                    .frame(width: 32, height: 32)
+                    .background(Color.fillMuted, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                Text(hidden > 0 ? "更多视频平台" : "排序与显示").font(.subheadline.weight(.medium)).foregroundStyle(Color.ink2)
+                Spacer(minLength: 0)
+                if hidden > 0 { Text("\(hidden) 个未显示").font(.caption).foregroundStyle(Color.ink3) }
+                IconView(.chevronRight, size: 12).foregroundStyle(Color.ink3)
             }
-            PlatformTile(mark: .account(kind), size: 30, dimmed: !pinned)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kind.displayName).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink).lineLimit(1)
-                Text(hasAccount(kind) ? "已登录" : "未登录").font(.caption2).foregroundStyle(Color.ink3)
-            }
-            Spacer(minLength: 0)
-            Button { togglePinned(kind) } label: {
-                Image(systemName: pinned ? "eye" : "eye.slash")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(pinned ? Color.ink : Color.ink3)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(pinned ? "收起时显示" : "收起时隐藏")
+            .padding(.horizontal, 14)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(Color.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .sensoryFeedback(.selection, trigger: pinned)
+        .buttonStyle(.plain)
     }
 
     private func linkRow(_ icon: Icon, _ title: String) -> some View {
@@ -421,13 +328,13 @@ struct AccountsView: View {
         if app.accounts.accounts[kind] == nil {
             loginOptions(kind)
             Divider()
-            Button { beginEditing() } label: { Label("排序与显示…", systemImage: "arrow.up.arrow.down") }
+            Button { layoutGroup = kind.isDrive ? .drives : .videos } label: { Label("排序与显示…", systemImage: "arrow.up.arrow.down") }
         } else {
             if let platform = kind.drivePlatform, app.resolvers.manager(for: platform) != nil {
                 Button { drivePlatform = platform } label: { Label("我的网盘", glyph: .cloud) }
             }
             Button { listKind = kind } label: { Label("账号管理 / 添加账号", glyph: .user) }
-            Button { beginEditing() } label: { Label("排序与显示…", systemImage: "arrow.up.arrow.down") }
+            Button { layoutGroup = kind.isDrive ? .drives : .videos } label: { Label("排序与显示…", systemImage: "arrow.up.arrow.down") }
             Button { Task { await checkNow(kind) } } label: { Label("检查登录状态", glyph: .check) }
             Menu { loginOptions(kind) } label: { Label("重新登录", glyph: .refresh) }
             Button(role: .destructive) { logoutKind = kind } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
@@ -451,10 +358,10 @@ struct AccountsView: View {
         if let loaded = quotaLoaded, loaded.key == key, Date().timeIntervalSince(loaded.at) < 600 {
             // 容量不重取
         } else {
-            await loadQuotas()
+            let fresh = await loadQuotas()
             quotaLoaded = (Date(), key)
             for kind in AccountKind.allCases {
-                if let platform = kind.drivePlatform, quotas[platform] != nil { app.accounts.recordHealth(kind, valid: true) }
+                if let platform = kind.drivePlatform, fresh.contains(platform) { app.accounts.recordHealth(kind, valid: true) }
             }
         }
         await app.accounts.checkHealth(AccountKind.allCases, resolvers: app.resolvers)
@@ -470,23 +377,31 @@ struct AccountsView: View {
         }
     }
 
-    /// 已登录网盘的容量（并发取，取不到就不显示）
-    private func loadQuotas() async {
-        let targets = AccountKind.allCases.compactMap { kind -> (SharePlatform, DriveManager)? in
-            guard kind.isDrive, app.accounts.accounts[kind] != nil, let platform = kind.drivePlatform,
+    /// 已登录网盘的容量（并发取）；返回这次取到的平台。取不到的保留上次的值，退出登录的去掉
+    @discardableResult
+    private func loadQuotas() async -> Set<SharePlatform> {
+        let targets = AccountKind.allCases.compactMap { kind -> (SharePlatform, String, DriveManager)? in
+            guard kind.isDrive, let account = app.accounts.accounts[kind], let platform = kind.drivePlatform,
                   let manager = app.resolvers.manager(for: platform) else { return nil }
-            return (platform, manager)
+            return (platform, account.nickname, manager)
         }
-        var result: [SharePlatform: DriveQuota] = [:]
-        await withTaskGroup(of: (SharePlatform, DriveQuota?).self) { group in
-            for (platform, manager) in targets {
-                group.addTask { (platform, await manager.quota()) }
+        var result = quotas.filter { key, _ in targets.contains { $0.0.rawValue == key } }
+        var fresh = Set<SharePlatform>()
+        await withTaskGroup(of: (SharePlatform, String, DriveQuota?).self) { group in
+            for (platform, owner, manager) in targets {
+                group.addTask { (platform, owner, await manager.quota()) }
             }
-            for await (platform, quota) in group {
-                if let quota { result[platform] = quota }
+            for await (platform, owner, quota) in group {
+                guard let quota else { continue }
+                result[platform.rawValue] = CachedQuota(used: quota.used, total: quota.total, owner: owner)
+                fresh.insert(platform)
             }
         }
-        quotas = result
+        if result != quotas {
+            quotas = result
+            CachedQuota.save(result)
+        }
+        return fresh
     }
 
     @ViewBuilder
@@ -506,24 +421,6 @@ struct AccountsView: View {
         app.accounts.pendingAdd = nil
     }
 
-    /// 「展开其余 N 个 / 收起」
-    private func expandButton(expanded: Binding<Bool>, collapsedTitle: String) -> some View {
-        Button {
-            withAnimation(.snappy) { expanded.wrappedValue.toggle() }
-        } label: {
-            HStack(spacing: 6) {
-                Text(expanded.wrappedValue ? "收起" : collapsedTitle)
-                IconView(.chevronRight, size: 12)
-                    .rotationEffect(.degrees(expanded.wrappedValue ? -90 : 90))
-            }
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(Color.ink2)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
 
     /// 首选方式：网页登录 → 应用内账号密码 → 手动粘贴
     private func startLogin(_ kind: AccountKind) {
@@ -637,4 +534,24 @@ struct ImportData: Identifiable {
 extension AccountKind {
     /// 对应的网盘平台（视频账号为 nil）
     var drivePlatform: SharePlatform? { SharePlatform.allCases.first { $0.accountKind == self } }
+}
+
+/// 网盘容量缓存（按平台，记下属于哪个账号，换账号后不显示旧的）
+struct CachedQuota: Codable, Equatable {
+    var used: Int64
+    var total: Int64
+    var owner: String
+
+    var quota: DriveQuota { DriveQuota(used: used, total: total) }
+
+    private static let key = "accounts.quotaCache"
+
+    static func load() -> [String: CachedQuota] {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [:] }
+        return (try? JSONDecoder().decode([String: CachedQuota].self, from: data)) ?? [:]
+    }
+
+    static func save(_ value: [String: CachedQuota]) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: key)
+    }
 }

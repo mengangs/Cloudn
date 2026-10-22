@@ -15,9 +15,14 @@ actor AccountVault: CredentialStore {
     private var cache: [AccountKind: Account] = [:]
     private var extras: [AccountKind: [Account]] = [:]
     private let onChange: @Sendable () -> Void
+    /// 启动时从钥匙串读到的账号：界面同步拿来用，首帧就显示已登录状态，不闪「未登录」
+    nonisolated let initialAccounts: [AccountKind: Account]
+    nonisolated let initialExtras: [AccountKind: [Account]]
 
     init(onChange: @escaping @Sendable () -> Void) {
         self.onChange = onChange
+        var cache: [AccountKind: Account] = [:]
+        var extras: [AccountKind: [Account]] = [:]
         for kind in AccountKind.allCases {
             if let data = Keychain.read(kind.rawValue), let account = try? JSONDecoder().decode(Account.self, from: data) {
                 cache[kind] = account
@@ -26,6 +31,10 @@ actor AccountVault: CredentialStore {
                 extras[kind] = list
             }
         }
+        self.cache = cache
+        self.extras = extras
+        initialAccounts = cache
+        initialExtras = extras
     }
 
     /// 默认返回主账号；多账号下载时按 AccountSlot 轮换
@@ -144,12 +153,15 @@ final class AccountStore {
         vault = AccountVault { [weak self] in
             Task { @MainActor in await self?.reload() }
         }
-        Task { await reload() }
+        accounts = vault.initialAccounts
+        extras = vault.initialExtras
     }
 
     func reload() async {
-        accounts = await vault.all()
-        extras = await vault.allExtras()
+        let all = await vault.all(), allExtras = await vault.allExtras()
+        // 没变就不写，免得观察者（「我的」页）白白重算、重取容量
+        if all != accounts { accounts = all }
+        if allExtras != extras { extras = allExtras }
     }
 
     func isLoggedIn(_ kind: AccountKind) -> Bool { accounts[kind] != nil }
