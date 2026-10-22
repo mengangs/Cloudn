@@ -161,6 +161,21 @@ final class GlobalDriveTests: XCTestCase {
         XCTAssertTrue(AliyunResolver.error(JSON(text: #"{"code":"Other","message":"出错了"}"#)!, status: 400, fallback: "失败").message.contains("出错了"))
     }
 
+    func testListTimeText() {
+        XCTAssertEqual(ISO8601DateFormatter.listText("not a date"), "not a date")
+        let text = ISO8601DateFormatter.listText("2024-06-17T09:49:28.249Z")
+        XCTAssertTrue(text.range(of: #"^2024-06-1[78] \d{2}:49$"#, options: .regularExpression) != nil, text)
+    }
+
+    func testDouyinLoginCookie() {
+        XCTAssertTrue(DouyinParser.isLoggedIn(cookie: "ttwid=1; sessionid=abc; sid_tt=x"))
+        XCTAssertTrue(DouyinParser.isLoggedIn(cookie: "sessionid_ss=abc"))
+        XCTAssertFalse(DouyinParser.isLoggedIn(cookie: "ttwid=1; my_sessionid=abc"))
+        XCTAssertFalse(DouyinParser.isLoggedIn(cookie: "sessionid=; ttwid=1"))
+        XCTAssertEqual(VideoPlatform.douyin.accountKind, .douyin)
+        XCTAssertFalse(AccountKind.douyin.isDrive)
+    }
+
     func testPlatformsRegistered() {
         let resolvers = ShareResolvers(credentials: NoCredentials())
         for p in [SharePlatform.aliyun, .gdrive, .onedrive] {

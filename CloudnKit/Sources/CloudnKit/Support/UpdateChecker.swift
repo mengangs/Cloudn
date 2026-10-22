@@ -16,6 +16,8 @@ public struct AppRelease: Equatable, Sendable, Identifiable {
     public let publishedAt: String
     /// 预发布版（测试版）
     public let isPrerelease: Bool
+    /// IPA 附件大小（字节）；没有附件为 0
+    public var ipaSize: Int64 = 0
 }
 
 /// 检查更新：读取 GitHub 仓库的最新正式版，与当前版本号比较
@@ -52,12 +54,13 @@ public enum UpdateChecker {
 
     static func parse(_ json: JSON) -> AppRelease {
         let tag = json["tag_name"].string
-        let ipa = json["assets"].array.first { $0["name"].string.lowercased().hasSuffix(".ipa") }?["browser_download_url"].string ?? ""
+        let asset = json["assets"].array.first { $0["name"].string.lowercased().hasSuffix(".ipa") }
+        let ipa = asset?["browser_download_url"].string ?? ""
         var full = tag.trimmed
         if full.first == "v" || full.first == "V" { full.removeFirst() }
         return AppRelease(version: normalize(tag), tag: full, name: json["name"].string.nilIfBlank ?? tag, notes: json["body"].string,
                           pageURL: json["html_url"].string, ipaURL: ipa, publishedAt: json["published_at"].string,
-                          isPrerelease: json["prerelease"].bool)
+                          isPrerelease: json["prerelease"].bool, ipaSize: asset?["size"].int64 ?? 0)
     }
 
     /// 去掉 v 前缀与 -beta 之类的后缀

@@ -102,6 +102,7 @@ struct WebLoginView: View {
             case .quark: "可用手机号验证码登录；若只显示二维码，可在页面中切换登录方式"
             case .xunlei, .pan123: "在页面中完成登录后会自动识别；如未识别，可点「完成」"
             case .aliyun: "在页面中切换到短信验证码或账号密码登录（二维码要用另一台设备扫），登录后会自动识别"
+            case .douyin: "点页面右上角「登录」，用手机号验证码登录（二维码要用另一台设备扫），登录后会自动识别"
             case .pixiv: "请用 pixiv 账号密码登录，出现人机验证时在页面里完成；Google / Apple 账号登录在这里无法使用"
             case .tiktok: "选择「使用手机号 / 邮箱 / 用户名登录」；Google / Apple 账号登录在内嵌网页中无法使用"
             case .twitter, .instagram, .threads, .reddit, .facebook: "请用账号密码登录；Google / Apple 账号登录在内嵌网页中无法使用"

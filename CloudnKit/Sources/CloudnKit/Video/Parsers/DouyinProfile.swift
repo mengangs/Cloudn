@@ -38,14 +38,36 @@ extension DouyinParser {
             notice = ProfileCollectionJS.stoppedNotice(posts.entries.count)
         } else if posts.entries.count >= ProfileCollectionJS.maxItems {
             notice = "作品较多，只列出了前 \(posts.entries.count) 个"
-        } else if posts.hasMore {
-            notice = "只加载到前 \(posts.entries.count) 个作品（抖音网页版未登录时可能不再加载更多），可稍后重试"
+        } else if posts.hasMore || (!Self.isLoggedIn(cookie: cookie) && posts.entries.count <= Self.guestPageSize) {
+            // 未登录时网页版常常只给第一页（约 18 个），还报「没有更多」
+            notice = Self.isLoggedIn(cookie: cookie)
+                ? "只加载到前 \(posts.entries.count) 个作品（抖音要求验证或加载超时），可稍后重试"
+                : "未登录抖音时网页版通常只给第一页作品，到「我的」页登录抖音后可获取全部"
         }
         return VideoParseResult(platform: platform, title: title, author: nickname, cover: posts.entries.first?.cover ?? "",
                                 url: pageURL, notice: notice, entries: posts.entries)
     }
 
     static func userPageURL(_ secUID: String) -> String { "https://www.douyin.com/user/\(secUID)" }
+
+    /// 未登录时主页第一页的作品数
+    static let guestPageSize = 20
+
+    /// 网页登录后才有 sessionid（游客没有）
+    static func isLoggedIn(cookie: String) -> Bool {
+        cookie.range(of: #"(^|;\s*)sessionid(_ss)?=[^;]+"#, options: .regularExpression) != nil
+    }
+
+    /// 账号校验：passport 接口给出昵称；接口不认识时只要有 sessionid 就先当作有效（取主页时再看效果）
+    static func validate(cookie: String) async -> String? {
+        guard isLoggedIn(cookie: cookie) else { return nil }
+        let headers = [("User-Agent", VideoHTTP.uaChrome), ("Cookie", cookie), ("Referer", "https://www.douyin.com/")]
+        if let r = try? await VideoHTTP.send(.get("https://www.douyin.com/passport/web/account/info/", headers: headers)),
+           let json = r.json, json["message"].string == "success" {
+            return json["data"].string("screen_name", "name").nilIfBlank ?? "抖音用户"
+        }
+        return "抖音用户"
+    }
 
     /// 作品链接：图文走 /note/，其余走 /video/（两者都能被 VideoLinkParser 识别）
     static func workURL(id: String, note: Bool) -> String {
@@ -144,4 +166,9 @@ extension DouyinParser {
       } catch (e) { return JSON.stringify({ error: 'js: ' + e }); }
     })()
     """#
+}
+
+/// 应用层用的抖音登录态判断（解析器本身不公开）
+public enum DouyinAccount {
+    public static func looksLoggedIn(cookie: String) -> Bool { DouyinParser.isLoggedIn(cookie: cookie) }
 }

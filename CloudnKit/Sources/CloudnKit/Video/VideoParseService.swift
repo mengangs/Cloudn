@@ -136,6 +136,8 @@ public enum AccountValidator {
             return await QuarkFamilyResolver(config: .quark, credentials: NoCredentials()).fetchNickname(cookie: cookie)
         case .uc:
             return await QuarkFamilyResolver(config: .uc, credentials: NoCredentials()).fetchNickname(cookie: cookie)
+        case .douyin:
+            return await DouyinParser.validate(cookie: cookie)
         case .bilibili:
             return await BilibiliParser.nickname(cookie: cookie)
         case .xiaohongshu:

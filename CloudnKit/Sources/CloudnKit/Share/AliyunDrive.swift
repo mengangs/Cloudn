@@ -20,10 +20,15 @@ extension AliyunResolver {
         let deviceId: String
         let signature: String
         let publicKey: String
+        /// 相册；拿不到为空
+        var albumDrive = ""
 
-        /// 根目录列出的盘：有资源库时分两个盘，否则只有一个
-        var drives: [(id: String, name: String)] {
-            resourceDrive.isEmpty ? [(backupDrive, "备份盘")] : [(resourceDrive, "资源库"), (backupDrive, "备份盘")]
+        /// 根目录顶部的系统文件夹（与阿里云盘 App「文件」页一致）：有资源库时备份盘作为「备份文件」，再加「相册」
+        var systemFolders: [(id: String, name: String)] {
+            var out: [(String, String)] = []
+            if !resourceDrive.isEmpty, !backupDrive.isEmpty, backupDrive != resourceDrive { out.append((backupDrive, "备份文件")) }
+            if !albumDrive.isEmpty, albumDrive != defaultDrive { out.append((albumDrive, "相册")) }
+            return out
         }
 
         /// 转存、上传到「根目录」时落到哪个盘
@@ -58,7 +63,8 @@ extension AliyunResolver {
     static func parseDriveFile(_ j: JSON, drive: String, parent: String) -> ShareFile {
         let driveId = j["drive_id"].string.nilIfBlank ?? drive
         return ShareFile(fid: compose(drive: driveId, file: j["file_id"].string), name: j["name"].string, size: j["size"].int64,
-                         isDirectory: j["type"].string == "folder", parentId: parent, token: driveId, modified: j["updated_at"].string)
+                         isDirectory: j["type"].string == "folder", parentId: parent, token: driveId,
+                         modified: ISO8601DateFormatter.listText(j["updated_at"].string))
     }
 
     // MARK: 账号与请求
@@ -66,14 +72,31 @@ extension AliyunResolver {
     func driveAccount() async throws -> DriveAccount {
         guard let access = try await accessToken() else { throw SharePlatform.aliyun.loginRequired }
         if let cached = await driveCache.get(access) { return cached }
-        let json = try await rawDriveCall("/v2/user/get", [String: Any](), access: access, account: nil)
+        let json = try await userInfo(access: access)
         let userId = json["user_id"].string
         guard !userId.isEmpty, let sig = await driveCache.signature(userId) else { throw CloudnError("阿里云盘账号信息获取失败") }
-        let account = DriveAccount(userId: userId, backupDrive: json.string("backup_drive_id", "default_drive_id"),
+        var account = DriveAccount(userId: userId, backupDrive: json.string("backup_drive_id", "default_drive_id"),
                                    resourceDrive: json["resource_drive_id"].string, deviceId: sig.deviceId,
                                    signature: sig.signature, publicKey: sig.publicKey)
+        if let album = try? await rawDriveCall("/adrive/v1/user/albums_info", [String: Any](), access: access, account: account) {
+            account.albumDrive = album["data"].string("driveId", "drive_id")
+        }
+        Log.info("阿里云盘：资源库 \(account.resourceDrive.isEmpty ? "无" : account.resourceDrive)，备份盘 \(account.backupDrive)，相册 \(account.albumDrive.isEmpty ? "无" : account.albumDrive)")
         await driveCache.set(access, account)
         return account
+    }
+
+    /// 用户信息：资源库 / 备份盘的 id 只在用户服务（user.alipan.com）的返回里有，api 域名下的老接口只给 default_drive_id
+    private func userInfo(access: String) async throws -> JSON {
+        var fallback: JSON?
+        for host in ["https://user.alipan.com", "https://user.aliyundrive.com", Self.api] {
+            guard let json = try? await rawDriveCall("/v2/user/get", [String: Any](), access: access, account: nil, host: host),
+                  !json["user_id"].string.isEmpty else { continue }
+            if !json["resource_drive_id"].string.isEmpty { return json }
+            if fallback == nil { fallback = json }
+        }
+        guard let fallback else { throw CloudnError("阿里云盘账号信息获取失败，请到「我的」页重新登录") }
+        return fallback
     }
 
     /// 个人盘接口：设备会话失效时建会话重试一次，访问令牌失效时续期重试一次
@@ -168,11 +191,16 @@ extension AliyunResolver: DriveManager {
     public func listDrive(_ folderId: String) async throws -> [ShareFile] {
         let account = try await driveAccount()
         guard let (drive, file) = Self.split(folderId) else {
-            let drives = account.drives
-            // 只有一个盘时直接列它的根目录
-            if drives.count == 1 { return try await listDrive(Self.compose(drive: drives[0].id, file: "root")) }
-            return drives.map { ShareFile(fid: Self.compose(drive: $0.id, file: "root"), name: $0.name, size: 0, isDirectory: true, token: $0.id) }
+            // 根目录：资源库（老账号为备份盘）的内容，顶部放「备份文件」「相册」两个系统文件夹
+            let system = account.systemFolders.map {
+                ShareFile(fid: Self.compose(drive: $0.id, file: "root"), name: $0.name, size: 0, isDirectory: true, token: $0.id)
+            }
+            return system + (try await list(drive: account.defaultDrive, file: "root", parent: ""))
         }
+        return try await list(drive: drive, file: file, parent: folderId)
+    }
+
+    private func list(drive: String, file: String, parent folderId: String) async throws -> [ShareFile] {
         var all: [ShareFile] = []
         var marker = ""
         for _ in 0..<500 {

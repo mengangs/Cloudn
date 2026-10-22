@@ -212,7 +212,7 @@ public final class OneDriveResolver: ShareResolver, @unchecked Sendable {
     /// token 存所在的 driveId（子目录与取链都要用）
     static func parseItem(_ j: JSON, parent: String) -> ShareFile {
         ShareFile(fid: j["id"].string, name: j["name"].string, size: j["size"].int64, isDirectory: j.has("folder"),
-                  parentId: parent, token: j["parentReference"]["driveId"].string, modified: j["lastModifiedDateTime"].string)
+                  parentId: parent, token: j["parentReference"]["driveId"].string, modified: ISO8601DateFormatter.listText(j["lastModifiedDateTime"].string))
     }
 
     private actor ContextCache {

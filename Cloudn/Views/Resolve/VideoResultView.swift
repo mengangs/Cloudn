@@ -482,7 +482,8 @@ struct VideoResultView: View {
     private var entriesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                SectionLabel(title: "合集 \(result.entries.count) 个")
+                // 作者主页叫「作品」，播放列表 / 合集叫「合集」
+                SectionLabel(title: "\(result.title.hasSuffix("的作品") ? "作品" : "合集") \(result.entries.count) 个")
                 Spacer()
                 Button(unpicked.isEmpty ? "全不选" : "全选") {
                     unpicked = unpicked.isEmpty ? Set(result.entries.map(\.id)) : []

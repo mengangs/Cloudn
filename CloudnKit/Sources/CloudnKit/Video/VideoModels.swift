@@ -66,6 +66,7 @@ public enum VideoPlatform: String, Codable, CaseIterable, Sendable, Identifiable
     /// 登录后能力更强的平台对应的账号类型
     public var accountKind: AccountKind? {
         switch self {
+        case .douyin: return .douyin
         case .bilibili: return .bilibili
         case .xiaohongshu: return .xiaohongshu
         case .pixiv: return .pixiv

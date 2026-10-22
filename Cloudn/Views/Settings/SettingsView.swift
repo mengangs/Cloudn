@@ -188,7 +188,7 @@ extension SettingsView {
     }
 }
 
-/// 新版本提示：更新说明 + 前往下载
+/// 新版本提示：版本对比、更新说明、下载（GitHub / 网盘）或交给侧载工具直接安装
 struct UpdateSheet: View {
     let release: AppRelease
     @Environment(AppModel.self) private var app
@@ -198,52 +198,49 @@ struct UpdateSheet: View {
 
     private var shares: [ParsedShare] { UpdatePackage.shares(in: release.notes) }
 
+    /// 侧载工具的「从链接安装」：把 IPA 地址交给它自己下载安装
+    private static let installers: [(name: String, scheme: String)] = [
+        ("TrollStore", "apple-magnifier://install?url="), ("SideStore", "sidestore://install?url="), ("AltStore", "altstore://install?url=")
+    ]
+
     var body: some View {
         NavigationStack {
             List {
                 Group {
-                    Section {
-                        LabeledContent("新版本", value: release.isPrerelease ? "\(release.tag)（预发布）" : release.tag)
-                        LabeledContent("当前版本", value: AppModel.currentVersion)
-                    }
+                    Section { summary }
                     if !release.notes.isEmpty {
                         Section("更新说明") {
-                            Text(release.notes).font(.callout).textSelection(.enabled)
+                            MarkdownText(source: release.notes)
+                                .textSelection(.enabled)
+                                .padding(.vertical, 4)
                         }
                     }
                     if !release.ipaURL.isEmpty || !shares.isEmpty {
-                    Section {
-                        if !release.ipaURL.isEmpty {
-                            Button {
-                                let name = URL(string: release.ipaURL)?.lastPathComponent ?? "Cloudn.ipa"
-                                app.downloadGitHubFile(url: release.ipaURL, name: name.isEmpty ? "Cloudn.ipa" : name)
-                                app.selectedTab = .downloads
-                                dismiss()
-                            } label: { Label("从 GitHub 下载 IPA", glyph: .download) }
-                        }
-                        ForEach(shares, id: \.url) { share in
-                            Button {
-                                guard busy == nil else { return }
-                                busy = share.url
-                                Task {
-                                    await app.startUpdateDownload(share)
-                                    busy = nil
-                                    dismiss()
+                        Section {
+                            if !release.ipaURL.isEmpty { installMenu }
+                            ForEach(shares, id: \.url) { share in
+                                Button {
+                                    guard busy == nil else { return }
+                                    busy = share.url
+                                    Task {
+                                        await app.startUpdateDownload(share)
+                                        busy = nil
+                                        dismiss()
+                                    }
+                                } label: {
+                                    HStack {
+                                        Label("网盘下载 · \(share.platform.displayName)", glyph: .cloud)
+                                        Spacer()
+                                        if busy == share.url { Spinner(size: 16) }
+                                    }
                                 }
-                            } label: {
-                                HStack {
-                                    Label("网盘下载 · \(share.platform.displayName)", glyph: .cloud)
-                                    Spacer()
-                                    if busy == share.url { Spinner(size: 16) }
-                                }
+                                .disabled(busy != nil)
                             }
-                            .disabled(busy != nil)
+                        } header: {
+                            Text("其他方式")
+                        } footer: {
+                            Text("下载完成后在下载页长按安装包，用「分享」发送到 TrollStore、SideStore 等工具安装；也可以直接交给这些工具从链接安装。GitHub 访问慢时可在设置里选择镜像，或改用网盘下载。")
                         }
-                    } header: {
-                        Text("下载更新")
-                    } footer: {
-                        Text("下载完成后在下载页长按安装包，用「分享」发送到 TrollStore、SideStore 等工具安装。GitHub 访问慢时可在设置里选择镜像，或改用网盘下载。")
-                    }
                     }
                     Section {
                         if let url = URL(string: release.pageURL) {
@@ -259,12 +256,81 @@ struct UpdateSheet: View {
                 .listRowBackground(Color.surface)
             }
             .paperList()
+            .safeAreaInset(edge: .bottom) {
+                if !release.ipaURL.isEmpty {
+                    Button(action: downloadFromGitHub) {
+                        Label(release.ipaSize > 0 ? "下载更新 · \(ByteFormat.string(release.ipaSize))" : "下载更新", glyph: .download)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PillButtonStyle(kind: .primary, height: 50))
+                    .floatingShadow()
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+            }
             .navigationTitle("发现新版本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("稍后") { dismiss() } }
             }
         }
+    }
+
+    /// 1.0.0 → 1.1.0，发布日期与安装包大小
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(AppModel.currentVersion).font(.cardTitle).foregroundStyle(Color.ink3)
+                IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)
+                Text(release.tag).font(.pageTitle).foregroundStyle(Color.ink)
+                if release.isPrerelease {
+                    Text("预发布")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.claySoft, in: Capsule())
+                        .foregroundStyle(Color.clayInk)
+                }
+            }
+            let details = [Self.dateText(release.publishedAt).map { "发布于 \($0)" },
+                           release.ipaSize > 0 ? "安装包 \(ByteFormat.string(release.ipaSize))" : nil].compactMap { $0 }
+            if !details.isEmpty {
+                Text(details.joined(separator: " · ")).font(.footnote).foregroundStyle(Color.ink3)
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 交给侧载工具从链接直接安装
+    private var installMenu: some View {
+        Menu {
+            ForEach(Self.installers, id: \.name) { installer in
+                Button("用 \(installer.name) 安装") { install(with: installer) }
+            }
+        } label: {
+            Label("用侧载工具直接安装", glyph: .share)
+        }
+    }
+
+    private func downloadFromGitHub() {
+        let name = URL(string: release.ipaURL)?.lastPathComponent ?? "Cloudn.ipa"
+        app.downloadGitHubFile(url: release.ipaURL, name: name.isEmpty ? "Cloudn.ipa" : name, size: release.ipaSize > 0 ? release.ipaSize : -1)
+        app.selectedTab = .downloads
+        dismiss()
+    }
+
+    private func install(with installer: (name: String, scheme: String)) {
+        let ipa = GitHubMirror.apply(release.ipaURL, prefix: app.settings.githubMirror)
+        guard let encoded = ipa.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let url = URL(string: installer.scheme + encoded) else { return }
+        UIApplication.shared.open(url) { opened in
+            if !opened { app.show("没有找到 \(installer.name)，请先安装它，或改用「下载更新」", error: true) }
+        }
+    }
+
+    static func dateText(_ iso: String) -> String? {
+        guard let date = ISO8601DateFormatter().date(from: iso) else { return nil }
+        return date.formatted(.dateTime.year().month().day())
     }
 }
 

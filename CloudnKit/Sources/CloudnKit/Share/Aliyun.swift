@@ -79,7 +79,7 @@ public final class AliyunResolver: ShareResolver, @unchecked Sendable {
 
     static func parseFile(_ j: JSON, parent: String) -> ShareFile {
         ShareFile(fid: j["file_id"].string, name: j["name"].string, size: j["size"].int64, isDirectory: j["type"].string == "folder",
-                  parentId: parent, token: j["drive_id"].string, modified: j["updated_at"].string)
+                  parentId: parent, token: j["drive_id"].string, modified: ISO8601DateFormatter.listText(j["updated_at"].string))
     }
 
     // MARK: 分享令牌
@@ -242,6 +242,15 @@ public struct AliyunCredential: Equatable, Sendable {
 }
 
 extension ISO8601DateFormatter {
+    /// 列表里显示的修改时间：ISO 8601 转成本地「yyyy-MM-dd HH:mm」，认不出原样返回
+    static func listText(_ iso: String) -> String {
+        guard let date = flexible(iso) else { return iso }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: date)
+    }
+
     /// 带或不带毫秒的 ISO 8601 时间
     static func flexible(_ s: String) -> Date? {
         guard !s.isEmpty else { return nil }

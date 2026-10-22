@@ -53,10 +53,14 @@ final class AliyunDriveTests: XCTestCase {
         XCTAssertNil(AliyunResolver.split(""))
         XCTAssertNil(AliyunResolver.split("root"))
         let account = AliyunResolver.DriveAccount(userId: "u", backupDrive: "1", resourceDrive: "2", deviceId: "", signature: "", publicKey: "")
-        XCTAssertEqual(account.drives.map(\.name), ["资源库", "备份盘"])
+        XCTAssertEqual(account.systemFolders.map(\.name), ["备份文件"])
+        var withAlbum = account
+        withAlbum.albumDrive = "3"
+        XCTAssertEqual(withAlbum.systemFolders.map(\.id), ["1", "3"])
         XCTAssertEqual(account.defaultDrive, "2")
         let old = AliyunResolver.DriveAccount(userId: "u", backupDrive: "1", resourceDrive: "", deviceId: "", signature: "", publicKey: "")
-        XCTAssertEqual(old.drives.map(\.id), ["1"])
+        XCTAssertTrue(old.systemFolders.isEmpty)
+        XCTAssertEqual(old.defaultDrive, "1")
         let resolver = AliyunResolver()
         XCTAssertEqual(resolver.target("", account: account).drive, "2")
         XCTAssertEqual(resolver.target("", account: account).file, "root")

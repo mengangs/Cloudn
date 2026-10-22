@@ -313,6 +313,7 @@ extension AccountKind {
         case .ilanzou: return URL(string: "https://www.ilanzou.com/")!
         case .lanzou: return URL(string: "https://up.woozooo.com/account.php?action=login")!
         case .aliyun: return URL(string: AliyunResolver.loginURL)!
+        case .douyin: return URL(string: "https://www.douyin.com/")!
         case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
         // 必须直指 /login：站点根地址会跳到桌面信息流再叠登录弹窗
         case .xiaohongshu: return URL(string: "https://www.xiaohongshu.com/login")!
@@ -341,6 +342,8 @@ extension AccountKind {
         // 手机版页面只引导下载 App，没有网页登录
         case .aliyun: return VideoHTTP.uaChrome
         case .bilibili: return VideoHTTP.uaChrome
+        // 手机 UA 下网页只引导打开 App，没有登录入口
+        case .douyin: return VideoHTTP.uaChrome
         // 移动 UA 下没有登录页（/login 返回 404）
         case .xiaohongshu: return VideoHTTP.uaChrome
         case .pixiv: return VideoHTTP.uaChrome
@@ -364,6 +367,7 @@ extension AccountKind {
         case .aliyun: return .script(AliyunResolver.readScript)
         case .guangya, .ilanzou: return .cookies([])
         case .bilibili: return .cookies(["bilibili.com"])
+        case .douyin: return .cookies(["douyin.com"])
         case .xiaohongshu: return .cookies(["xiaohongshu.com"])
         case .pixiv: return .cookies(["pixiv.net"])
         case .zhihu: return .cookies(["zhihu.com"])
@@ -385,6 +389,7 @@ extension AccountKind {
         case .aliyun: return AliyunCredential.parse(credential) != nil
         case .guangya, .ilanzou: return false
         case .bilibili: return credential.contains("SESSDATA=")
+        case .douyin: return DouyinAccount.looksLoggedIn(cookie: credential)
         // 游客也会被种 web_session，这里只是触发校验的前置条件，真正结论由 AccountValidator 探测得出
         case .xiaohongshu: return credential.contains("web_session=")
         // 游客也有 PHPSESSID，登录后的才带「用户 ID_」前缀
@@ -411,6 +416,7 @@ extension AccountKind {
         case .lanzou: return "登录后可管理自己的蓝奏云文件"
         case .aliyun: return "登录后可下载分享、转存，并管理自己的阿里云盘"
         case .bilibili: return "登录后可解析 1080P 及以上清晰度"
+        case .douyin: return "登录后可获取作者主页的全部作品（未登录通常只有第一页）"
         case .xiaohongshu: return "小红书网页端要求登录后才能查看笔记"
         case .pixiv: return "登录后可解析 R18 与受限作品"
         case .zhihu: return "知乎接口要求登录后才能解析回答、文章与想法"
@@ -438,6 +444,7 @@ extension AccountKind {
         case .lanzou: return "需包含 ylogin 与 phpdisk_info"
         case .aliyun: return "粘贴网页 localStorage 中 token 的值（JSON），或 refresh_token"
         case .bilibili: return "需包含 SESSDATA"
+        case .douyin: return "需包含 sessionid"
         case .xiaohongshu: return "需包含 web_session（登录后的值）"
         case .pixiv: return "在电脑浏览器登录 pixiv.net 后复制 Cookie，需包含 PHPSESSID"
         case .zhihu: return "需包含 z_c0 与 d_c0"
@@ -467,6 +474,7 @@ extension AccountKind {
         case .lanzou: return "l.circle.fill"
         case .aliyun: return "a.circle.fill"
         case .bilibili: return "play.tv.fill"
+        case .douyin: return "music.note"
         case .xiaohongshu: return "book.closed.fill"
         case .pixiv: return "paintpalette.fill"
         case .zhihu: return "questionmark.bubble.fill"
@@ -493,7 +501,7 @@ extension AccountKind {
         case .xunlei: return LoginWebView.xunleiRenderFix
         case .xiaohongshu: return LoginWebView.viewportScript(width: 1280)
         // 只有桌面版的登录页（115、123、蓝奏云）按手机宽度渲染会被截掉右半边、还禁止滚动：按页面实际宽度缩放到一屏、恢复滚动与缩放
-        case .pan115, .pan123, .lanzou, .zhihu, .aliyun: return LoginWebView.fitToWidthScript
+        case .pan115, .pan123, .lanzou, .zhihu, .aliyun, .douyin: return LoginWebView.fitToWidthScript
         default: return nil
         }
     }
