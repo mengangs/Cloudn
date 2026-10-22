@@ -20,6 +20,7 @@ extension DouyinParser {
                                                   cardSelector: Self.userCardSelector)
         let raw = await extractor.extract(url: pageURL, userAgent: VideoHTTP.uaChrome, cookie: cookie,
                                           documentStartScripts: [hook], readyScript: ProfileCollectionJS.readyScript,
+                                          progressScript: ProfileCollectionJS.progressScript,
                                           extractScript: Self.userExtractJS, timeout: ProfileCollectionJS.extractorTimeout)
         guard let text = raw, let payload = JSON(text: text), payload["error"].string.isEmpty else {
             throw VideoParseError(.blocked, "抖音主页加载失败（可能需要网页验证），请稍后重试")
@@ -31,8 +32,11 @@ extension DouyinParser {
         var nickname = posts.nickname
         if nickname.isEmpty { nickname = Self.nickname(fromPageTitle: payload["pageTitle"].string) }
         let title = nickname.isEmpty ? "抖音用户的作品" : "\(nickname) 的作品"
+        CollectionProgress.report(fetched: posts.entries.count)
         var notice = ""
-        if posts.entries.count >= ProfileCollectionJS.maxItems {
+        if CollectionProgress.isStopRequested && posts.hasMore {
+            notice = ProfileCollectionJS.stoppedNotice(posts.entries.count)
+        } else if posts.entries.count >= ProfileCollectionJS.maxItems {
             notice = "作品较多，只列出了前 \(posts.entries.count) 个"
         } else if posts.hasMore {
             notice = "只加载到前 \(posts.entries.count) 个作品（抖音网页版未登录时可能不再加载更多），可稍后重试"

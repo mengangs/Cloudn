@@ -16,6 +16,10 @@ struct ResolveView: View {
     @State private var workTask: Task<Void, Never>?
     /// 当前这次解析的编号：被新的解析顶掉的旧任务结束时不再收起进度环
     @State private var workID: UUID?
+    /// 主页 / 播放列表这类翻页解析的实时进度（已获取多少个）；用户可提前停止、用已拿到的部分
+    @State private var collectProgress: CollectionProgress?
+    @State private var collectSnapshot: CollectionProgress.Snapshot?
+    @State private var collectStopping = false
     @State private var shareModel: ShareBrowserModel?
     @State private var videoResult: VideoParseResult?
     @State private var githubLink: GitHubLink?
@@ -284,6 +288,49 @@ struct ResolveView: View {
     /// 识别结果：平台 + 说明；网盘分享可就地改提取码
     @ViewBuilder
     private var detectionRow: some View {
+        if working, let snapshot = collectSnapshot, snapshot.fetched > 0 {
+            collectProgressRow(snapshot)
+        } else {
+            plainDetectionRow
+        }
+    }
+
+    /// 翻页解析中：已获取数（接口给了总数时带上），右侧「停止」用已拿到的部分出结果
+    private func collectProgressRow(_ snapshot: CollectionProgress.Snapshot) -> some View {
+        HStack(spacing: 8) {
+            if let mark = detectedMark {
+                PlatformGlyph(mark: mark, size: 15).foregroundStyle(Color.ink2)
+            }
+            Group {
+                if let total = snapshot.total {
+                    Text("正在获取 \(snapshot.fetched) / \(total)")
+                } else {
+                    Text("正在获取，已获取 \(snapshot.fetched) 个")
+                }
+            }
+            .font(.footnote)
+            .monospacedDigit()
+            .contentTransition(.numericText())
+            .foregroundStyle(Color.ink2)
+            .lineLimit(1)
+            Spacer(minLength: 0)
+            if collectStopping {
+                Text("正在停止…").font(.footnote).foregroundStyle(Color.ink3)
+            } else {
+                Button("停止") {
+                    collectProgress?.requestStop()
+                    collectStopping = true
+                }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.clayInk)
+                    .accessibilityLabel("停止加载，使用已获取的 \(snapshot.fetched) 个")
+            }
+        }
+        .padding(.trailing, 8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var plainDetectionRow: some View {
         HStack(spacing: 8) {
             if let mark = detectedMark {
                 PlatformGlyph(mark: mark, size: 15).foregroundStyle(Color.ink2)
@@ -612,6 +659,9 @@ struct ResolveView: View {
         workTask = nil
         workID = nil
         working = false
+        collectProgress = nil
+        collectSnapshot = nil
+        collectStopping = false
     }
 
     /// 解析失败时要不要给「去登录」：平台支持登录，且报错提到登录、还没登录或登录已失效
@@ -649,9 +699,28 @@ struct ResolveView: View {
             shareModel = ShareBrowserModel(app: app, share: share, pwd: effectivePwd, sourceText: source)
         case .video(let link):
             let text = input
+            let progress = CollectionProgress()
+            collectProgress = progress
+            collectSnapshot = nil
+            collectStopping = false
             run {
+                // 翻页解析每拿到一页报一次进度：只留最新一条，显示在识别行
+                let watcher = Task { @MainActor in
+                    for await snapshot in progress.updates where collectProgress === progress {
+                        withAnimation(.snappy) { collectSnapshot = snapshot }
+                    }
+                }
+                defer {
+                    watcher.cancel()
+                    progress.finish()
+                    if collectProgress === progress {
+                        collectProgress = nil
+                        collectSnapshot = nil
+                        collectStopping = false
+                    }
+                }
                 do {
-                    let result = try await app.videoService.parse(link)
+                    let result = try await CollectionProgress.$current.withValue(progress) { try await app.videoService.parse(link) }
                     try Task.checkCancellation()
                     guard !result.medias.isEmpty || !result.entries.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
                     app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,

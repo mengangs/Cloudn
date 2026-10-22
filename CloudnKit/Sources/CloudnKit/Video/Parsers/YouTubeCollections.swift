@@ -100,11 +100,19 @@ extension YouTubeParser {
             entries.append(e)
         }
         if entries.isEmpty, let error = Self.alertError(first) { throw error }
+        // 页头的「N videos」含已隐藏的不可用视频，只作进度参考；超过上限的按上限算
+        let total = Self.playlistVideoCount(first).map { min($0, Self.playlistLimit) }
+        CollectionProgress.report(fetched: entries.count, total: total)
 
         var token = firstPage.continuation
         var usedTokens = Set<String>()
         var incomplete = false
+        var stopped = false
         while !token.isEmpty && entries.count < Self.playlistLimit && !usedTokens.contains(token) {
+            if CollectionProgress.isStopRequested {
+                stopped = true
+                break
+            }
             usedTokens.insert(token)
             let next: JSON
             do {
@@ -122,6 +130,7 @@ extension YouTubeParser {
                 seen.insert(e.url)
                 entries.append(e)
             }
+            CollectionProgress.report(fetched: min(entries.count, Self.playlistLimit), total: total)
             token = page.continuation
         }
         let truncated = entries.count >= Self.playlistLimit && (entries.count > Self.playlistLimit || !token.isEmpty)
@@ -129,7 +138,9 @@ extension YouTubeParser {
         guard !entries.isEmpty else { throw VideoParseError(.unsupported, "这个 YouTube 播放列表里没有可下载的视频") }
 
         var notice = ""
-        if truncated {
+        if stopped {
+            notice = "已停止加载，列出了已获取的 \(entries.count) 个视频"
+        } else if truncated {
             notice = "播放列表较长，只列出了前 \(Self.playlistLimit) 个视频"
         } else if incomplete {
             notice = "播放列表后面的部分加载失败，只列出了 \(entries.count) 个视频"
@@ -351,6 +362,25 @@ extension YouTubeParser {
             cover = t["url"].string
         }
         return PlaylistInfo(title: title, author: author, description: description, cover: cover)
+    }
+
+    /// 页头报告的视频数（请求带 hl=en，形如「1,234 videos」）：旧版页头 numVideosText / stats、侧栏 stats、新版页头元数据行
+    static func playlistVideoCount(_ json: JSON) -> Int? {
+        let header = json["header"]["playlistHeaderRenderer"]
+        var candidates = [text(header["numVideosText"])] + header["stats"].array.map { text($0) }
+        for item in json["sidebar"]["playlistSidebarRenderer"]["items"].array {
+            candidates += item["playlistSidebarPrimaryInfoRenderer"]["stats"].array.map { text($0) }
+        }
+        let rows = json["header"]["pageHeaderRenderer"]["content"]["pageHeaderViewModel"]["metadata"]["contentMetadataViewModel"]["metadataRows"].array
+        for row in rows {
+            candidates += row["metadataParts"].array.map { $0["text"]["content"].string }
+        }
+        let pattern = Rx(#"^([\d,]+)\s+videos?$"#, ignoreCase: true)
+        for c in candidates {
+            guard let digits = pattern.first(in: c.trimmed) else { continue }
+            if let n = Int(digits.replacingOccurrences(of: ",", with: "")), n > 0 { return n }
+        }
+        return nil
     }
 
     /// alerts 里的 ERROR（播放列表不存在 / 私享）

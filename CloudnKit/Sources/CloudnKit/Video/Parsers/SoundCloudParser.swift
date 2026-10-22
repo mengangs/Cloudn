@@ -79,7 +79,16 @@ struct SoundCloudParser: VideoParser {
         let playlistID = info["id"].string
         let secret = info["secret_token"].string
         var fetched: [String: JSON] = [:]
+        // 进度按曲目算：响应里已完整的 + 已补全的 / 歌单曲目总数
+        let total = info["tracks"].array.count
+        let complete = total - missing.count
+        CollectionProgress.report(fetched: complete, total: total)
+        var stopped = false
         for batch in Self.batches(missing, size: 50) {
+            if CollectionProgress.isStopRequested {
+                stopped = true
+                break
+            }
             var extra: [(String, String)] = [("ids", batch.joined(separator: ","))]
             if !playlistID.isEmpty { extra.append(("playlistId", playlistID)) }
             if !secret.isEmpty { extra.append(("playlistSecretToken", secret)) }
@@ -89,8 +98,9 @@ struct SoundCloudParser: VideoParser {
                 let id = t["id"].string
                 if !id.isEmpty { fetched[id] = t }
             }
+            CollectionProgress.report(fetched: complete + fetched.count, total: total)
         }
-        let entries = Self.setEntries(info, fetched: fetched)
+        let entries = Self.setEntries(info, fetched: fetched, resolvedOnly: stopped)
         guard !entries.isEmpty else { throw VideoParseError(.unsupported, "这个 SoundCloud 歌单/专辑里没有曲目") }
         let title = info["title"].string
         let user = info["user"]
@@ -98,7 +108,7 @@ struct SoundCloudParser: VideoParser {
                                 author: user["username"].string, avatar: user["avatar_url"].string,
                                 cover: Self.artwork(info), text: info["description"].string,
                                 timestamp: Self.parseTime(info["created_at"].string), url: info["permalink_url"].string,
-                                entries: entries)
+                                notice: stopped ? "已停止加载，列出了已获取的 \(entries.count) 首曲目" : "", entries: entries)
     }
 
     private func api(_ url: String, clientID: String, extra: [(String, String)]) async throws -> HTTPResponse {
@@ -184,13 +194,15 @@ struct SoundCloudParser: VideoParser {
         return out
     }
 
-    /// 歌单曲目 → 条目（补全过的优先）；没有页面地址时用 api-v2 曲目地址（链接规则 kind "api" 能识别）
-    static func setEntries(_ info: JSON, fetched: [String: JSON]) -> [VideoEntry] {
+    /// 歌单曲目 → 条目（补全过的优先）；没有页面地址时用 api-v2 曲目地址（链接规则 kind "api" 能识别）。
+    /// resolvedOnly：用户提前停止时只列出已拿到完整信息的曲目
+    static func setEntries(_ info: JSON, fetched: [String: JSON], resolvedOnly: Bool = false) -> [VideoEntry] {
         let secret = info["secret_token"].string
         var out: [VideoEntry] = []
         for stub in info["tracks"].array {
             let id = stub["id"].string
             let track = fetched[id] ?? stub
+            if resolvedOnly && fetched[id] == nil && (stub["permalink_url"].string.isEmpty || stub["title"].string.isEmpty) { continue }
             var url = track["permalink_url"].string
             if url.isEmpty {
                 guard !id.isEmpty else { continue }

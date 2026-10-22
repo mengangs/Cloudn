@@ -18,6 +18,8 @@ extension KuaishouParser {
         let ok: Bool
         let pcursor: String
         let feedCount: Int
+        /// 本页作品 id（统计去重后的已获取数）
+        let photoIDs: [String]
         /// 需要验证（captcha）
         let needsVerify: Bool
 
@@ -32,11 +34,12 @@ extension KuaishouParser {
         let pageURL = Self.profileURL(userId)
         let httpPages = await fetchProfilePages(userId, cookie: cookie)
         var posts = Self.profilePosts(httpPages)
-        if posts.entries.isEmpty, let extractor {
+        if posts.entries.isEmpty, !CollectionProgress.isStopRequested, let extractor {
             let hook = ProfileCollectionJS.hookScript(urlMarker: "/graphql", handler: Self.profileHandlerJS,
                                                       cardSelector: Self.profileCardSelector)
             let raw = await extractor.extract(url: pageURL, userAgent: VideoHTTP.uaChrome, cookie: cookie,
                                               documentStartScripts: [hook], readyScript: ProfileCollectionJS.readyScript,
+                                              progressScript: ProfileCollectionJS.progressScript,
                                               extractScript: Self.profileExtractJS, timeout: ProfileCollectionJS.extractorTimeout)
             if let text = raw, let payload = JSON(text: text), payload["error"].string.isEmpty {
                 posts = Self.profilePosts([payload])
@@ -49,8 +52,11 @@ extension KuaishouParser {
             throw VideoParseError(.blocked, "没有取到该快手用户的作品（主页可能不公开、没有作品，或快手要求验证），请稍后重试")
         }
         let title = posts.author.isEmpty ? "快手用户的作品" : "\(posts.author) 的作品"
+        CollectionProgress.report(fetched: posts.entries.count)
         var notice = ""
-        if posts.entries.count >= ProfileCollectionJS.maxItems {
+        if CollectionProgress.isStopRequested && posts.hasMore {
+            notice = ProfileCollectionJS.stoppedNotice(posts.entries.count)
+        } else if posts.entries.count >= ProfileCollectionJS.maxItems {
             notice = "作品较多，只列出了前 \(posts.entries.count) 个"
         } else if posts.hasMore {
             notice = "只加载到前 \(posts.entries.count) 个作品（快手要求验证或加载超时），可稍后重试"
@@ -59,7 +65,7 @@ extension KuaishouParser {
                                 url: pageURL, notice: notice, entries: posts.entries)
     }
 
-    /// 直连 GraphQL 逐页取，出错 / 要验证 / 到上限 / 超时即停，返回已拿到的各页原文
+    /// 直连 GraphQL 逐页取，返回已拿到的各页原文
     private func fetchProfilePages(_ userId: String, cookie: String) async -> [JSON] {
         let headers: [(String, String)] = [
             ("User-Agent", VideoHTTP.uaChrome),
@@ -68,18 +74,29 @@ extension KuaishouParser {
             ("Referer", Self.profileURL(userId)),
             ("Cookie", cookie.isEmpty ? Self.guestCookie : cookie)
         ]
+        return await Self.collectProfilePages { cursor in
+            let request = HTTPRequest.postJSON(Self.graphqlURL, Self.profileQueryBody(userId: userId, pcursor: cursor), headers: headers)
+            guard let r = try? await VideoHTTP.send(request), r.isSuccess else { return nil }
+            return JSON(text: r.text)
+        }
+    }
+
+    /// 按 pcursor 逐页取（fetch 返回 nil 表示请求失败），出错 / 要验证 / 没有更多 / 到上限 / 超时 / 用户要求停止即停；
+    /// 每拿到一页报一次去重后的已获取数
+    static func collectProfilePages(timeLimit: TimeInterval = 40, fetch: (_ pcursor: String) async -> JSON?) async -> [JSON] {
         var pages: [JSON] = []
         var cursor = ""
-        var count = 0
-        let deadline = Date().addingTimeInterval(40)
+        var seen = Set<String>()
+        let deadline = Date().addingTimeInterval(timeLimit)
         for _ in 0..<40 {
-            let request = HTTPRequest.postJSON(Self.graphqlURL, Self.profileQueryBody(userId: userId, pcursor: cursor), headers: headers)
-            guard let r = try? await VideoHTTP.send(request), r.isSuccess, let json = JSON(text: r.text) else { break }
-            let page = Self.profilePage(json)
+            guard let json = await fetch(cursor) else { break }
+            let page = profilePage(json)
             guard page.ok else { break }
             pages.append(json)
-            count += page.feedCount
-            if !page.hasMore || page.feedCount == 0 || count >= ProfileCollectionJS.maxItems || Date() > deadline { break }
+            seen.formUnion(page.photoIDs)
+            CollectionProgress.report(fetched: seen.count)
+            if !page.hasMore || page.feedCount == 0 || seen.count >= ProfileCollectionJS.maxItems || Date() > deadline
+                || CollectionProgress.isStopRequested { break }
             cursor = page.pcursor
         }
         return pages
@@ -108,7 +125,8 @@ extension KuaishouParser {
         let list = root["data"]["visionProfilePhotoList"]
         let feeds = list["feeds"].array
         let ok = messages.isEmpty && list.isObject && (list["result"].int == 1 || !feeds.isEmpty)
-        return ProfilePage(ok: ok, pcursor: list["pcursor"].string, feedCount: feeds.count, needsVerify: verify)
+        let ids = feeds.map { $0["photo"]["id"].string }.filter { !$0.isEmpty }
+        return ProfilePage(ok: ok, pcursor: list["pcursor"].string, feedCount: feeds.count, photoIDs: ids, needsVerify: verify)
     }
 
     /// visionProfilePhotoList 的一页或多页（也接受钩子脚本汇总后的同形 JSON）→ 作品条目，按 photo.id 去重、保持顺序

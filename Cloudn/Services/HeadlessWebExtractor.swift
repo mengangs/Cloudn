@@ -9,15 +9,22 @@ struct HeadlessWebExtractor: WebPageExtractor {
     func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
                  readyScript: String, extractScript: String, timeout: TimeInterval) async -> String? {
         await Self.perform(url: url, userAgent: userAgent, cookie: cookie, scripts: documentStartScripts,
-                           readyScript: readyScript, extractScript: extractScript, timeout: timeout)
+                           readyScript: readyScript, progressScript: nil, extractScript: extractScript, timeout: timeout)
+    }
+
+    /// 批量翻页：轮询时顺带报进度；用户要求提前停止时直接取回已收集的部分
+    func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
+                 readyScript: String, progressScript: String, extractScript: String, timeout: TimeInterval) async -> String? {
+        await Self.perform(url: url, userAgent: userAgent, cookie: cookie, scripts: documentStartScripts,
+                           readyScript: readyScript, progressScript: progressScript, extractScript: extractScript, timeout: timeout)
     }
 
     @MainActor
     private static func perform(url: String, userAgent: String, cookie: String, scripts: [String], readyScript: String,
-                                extractScript: String, timeout: TimeInterval) async -> String? {
+                                progressScript: String?, extractScript: String, timeout: TimeInterval) async -> String? {
         guard let session = HeadlessSession(url: url, userAgent: userAgent, scripts: scripts) else { return nil }
         await session.start(cookie: cookie)
-        return await session.run(readyScript: readyScript, extractScript: extractScript, timeout: timeout)
+        return await session.run(readyScript: readyScript, progressScript: progressScript, extractScript: extractScript, timeout: timeout)
     }
 }
 
@@ -91,7 +98,7 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
         }
     }
 
-    func run(readyScript: String, extractScript: String, timeout: TimeInterval) async -> String? {
+    func run(readyScript: String, progressScript: String? = nil, extractScript: String, timeout: TimeInterval) async -> String? {
         defer { teardown() }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -104,6 +111,11 @@ final class HeadlessSession: NSObject, WKNavigationDelegate {
             }
             if let ready = await evaluate(readyScript) as? Bool, ready {
                 return await evaluate(extractScript) as? String
+            }
+            if let progressScript {
+                CollectionProgress.report(scriptValue: await evaluate(progressScript))
+                // 用户点了「停止」：不再等加载完，取回已经收集到的
+                if CollectionProgress.isStopRequested { return await evaluate(extractScript) as? String }
             }
         }
         return nil

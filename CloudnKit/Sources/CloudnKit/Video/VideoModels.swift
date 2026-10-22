@@ -309,4 +309,17 @@ public protocol WebPageExtractor: Sendable {
     /// cookie（`a=1; b=2` 形式，可为空）在页面加载前写进该站点，用于登录后才能看的内容
     func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
                  readyScript: String, extractScript: String, timeout: TimeInterval) async -> String?
+    /// 同上，用于批量翻页：每轮轮询时再执行 progressScript，把返回值交给 `CollectionProgress.report(scriptValue:)`；
+    /// 用户要求提前停止（`CollectionProgress.isStopRequested`）时不再等 readyScript，直接执行 extractScript 取回已有内容
+    func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
+                 readyScript: String, progressScript: String, extractScript: String, timeout: TimeInterval) async -> String?
+}
+
+public extension WebPageExtractor {
+    /// 默认不报进度、不支持提前停止
+    func extract(url: String, userAgent: String, cookie: String, documentStartScripts: [String],
+                 readyScript: String, progressScript: String, extractScript: String, timeout: TimeInterval) async -> String? {
+        await extract(url: url, userAgent: userAgent, cookie: cookie, documentStartScripts: documentStartScripts,
+                      readyScript: readyScript, extractScript: extractScript, timeout: timeout)
+    }
 }

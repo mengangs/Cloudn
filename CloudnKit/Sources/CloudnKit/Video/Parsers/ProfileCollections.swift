@@ -113,6 +113,19 @@ enum ProfileCollectionJS {
     })()
     """
 
+    /// 进度：已收集的作品数（交给 CollectionProgress.report(scriptValue:)，见 WebPageExtractor 带 progressScript 的 extract）
+    static let progressScript = """
+    (function () {
+      var S = window.__cloudnProfile;
+      return S ? S.list.length : 0;
+    })()
+    """
+
+    /// 用户提前停止时结果里的说明
+    static func stoppedNotice(_ count: Int) -> String {
+        "已停止加载，列出了已获取的 \(count) 个作品"
+    }
+
     /// JS 字符串字面量（单引号，转义反斜杠 / 引号 / 换行）
     static func jsString(_ s: String) -> String {
         var out = "'"
