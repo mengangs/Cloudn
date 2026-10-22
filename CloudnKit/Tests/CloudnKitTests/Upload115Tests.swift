@@ -266,6 +266,9 @@ final class Upload115Tests: XCTestCase {
         XCTAssertEqual(token.accessKeyId, "AK")
         XCTAssertEqual(token.securityToken, "TOK")
         XCTAssertThrowsError(try Pan115Resolver.parseOSSToken(JSON(text: "{\"StatusCode\":\"403\"}")!))
+        // 现行返回用 AccessKeyId（小写 d）
+        let current = try Pan115Resolver.parseOSSToken(JSON(text: "{\"StatusCode\":\"200\",\"AccessKeySecret\":\"S\",\"SecurityToken\":\"T\",\"Expiration\":\"2026-10-23T00:25:11Z\",\"AccessKeyId\":\"STS.ID\"}")!)
+        XCTAssertEqual(current.accessKeyId, "STS.ID")
 
         XCTAssertNoThrow(try Pan115Resolver.checkOSSCallback(status: 200, body: Data("{\"state\":true,\"code\":0,\"data\":{}}".utf8), fallback: "x"))
         XCTAssertThrowsError(try Pan115Resolver.checkOSSCallback(status: 200, body: Data("{\"state\":false,\"message\":\"坏了\"}".utf8), fallback: "x"))

@@ -969,9 +969,13 @@ extension Pan115Resolver: DriveUploader {
     }
 
     static func parseOSSToken(_ json: JSON) throws -> OSSSigner {
-        let id = json["AccessKeyID"].string
+        // 115 把 AccessKeyID 改成过 AccessKeyId：两种写法都认
+        let id = json["AccessKeyId"].string.nilIfBlank ?? json["AccessKeyID"].string
         let secret = json["AccessKeySecret"].string
-        guard json["StatusCode"].string == "200", !id.isEmpty, !secret.isEmpty else { throw CloudnError("获取 115 上传凭证失败") }
+        guard json["StatusCode"].string == "200", !id.isEmpty, !secret.isEmpty else {
+            let status = json["StatusCode"].string
+            throw CloudnError("获取 115 上传凭证失败" + (status.isEmpty || status == "200" ? "" : "（\(status)）"))
+        }
         return OSSSigner(accessKeyId: id, accessKeySecret: secret, securityToken: json["SecurityToken"].string)
     }
 
