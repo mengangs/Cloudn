@@ -156,6 +156,104 @@ final class ZhihuBiliWeiboTests: XCTestCase {
         XCTAssertEqual(BilibiliParser.dynamicError(code: 4101152, message: "").kind, .notFound)
     }
 
+    /// opus 详情（专栏迁移后的长图文）：段落按序拼成全文，图片全部保留、去重、去缩略后缀、转 https
+    func testBiliOpusDetailFullArticle() {
+        let item = JSON(text: """
+        {"basic":{"title":"basic 标题","rid_str":"27380000"},"id_str":"857123456789012345",
+         "modules":[
+          {"module_type":"MODULE_TYPE_TITLE","module_title":{"text":"【steam版】职场女友带回家 v1.02通关心得（含图文全流程）"}},
+          {"module_type":"MODULE_TYPE_AUTHOR","module_author":{"name":"变成一条咸鱼了呀","face":"//i1.hdslb.com/bfs/face/f.jpg","pub_ts":1698300000}},
+          {"module_type":"MODULE_TYPE_CONTENT","module_content":{"paragraphs":[
+            {"para_type":1,"text":{"nodes":[{"type":"TEXT_NODE_TYPE_WORD","word":{"words":"第一段，","style":{}}},
+                                            {"type":"TEXT_NODE_TYPE_RICH","rich":{"text":"@某人","type":"RICH_TEXT_NODE_TYPE_AT"}},
+                                            {"type":"TEXT_NODE_TYPE_WORD","word":{"words":" 结尾  "}}]}},
+            {"para_type":2,"pic":{"pics":[{"url":"http://i0.hdslb.com/bfs/article/a.jpg@1256w_706h_!web-article-pic.webp","width":1,"height":1}]}},
+            {"para_type":1,"text":{"nodes":[{"word":{"words":""}}]}},
+            {"para_type":8,"heading":{"level":2,"nodes":[{"word":{"words":"第二章"}}]}},
+            {"para_type":5,"list":{"style":1,"items":[{"level":1,"order":1,"nodes":[{"word":{"words":"甲"}}]},
+                                                      {"level":1,"order":2,"nodes":[{"word":{"words":"乙"}}]}]}},
+            {"para_type":4,"text":{"nodes":[{"word":{"words":"引用"}}]}},
+            {"para_type":3,"line":{"pic":{"url":"https://i0.hdslb.com/bfs/article/line.png"}}},
+            {"para_type":2,"pic":{"pics":[{"url":"//i0.hdslb.com/bfs/article/b.png"},{"url":"https://i0.hdslb.com/bfs/article/a.jpg"}]}},
+            {"para_type":1,"text":{"nodes":[{"word":{"words":"最后一段"}}]}}
+          ]}},
+          {"module_type":"MODULE_TYPE_STAT","module_stat":{}}
+         ]}
+        """)!
+        let a = BilibiliParser.opusArticle(item)
+        XCTAssertEqual(a.title, "【steam版】职场女友带回家 v1.02通关心得（含图文全流程）")
+        XCTAssertEqual(a.author, "变成一条咸鱼了呀")
+        XCTAssertEqual(a.timestamp, 1698300000)
+        XCTAssertEqual(a.text, "第一段，@某人 结尾\n第二章\n1. 甲\n2. 乙\n> 引用\n————\n最后一段")
+        XCTAssertEqual(a.pics.map(\.url), ["https://i0.hdslb.com/bfs/article/a.jpg", "https://i0.hdslb.com/bfs/article/b.png"])
+        XCTAssertFalse(a.text.hasSuffix("…"))
+
+        // 动态摘要（截断 + 1 张图）与完整内容合并：完整的覆盖摘要
+        let summary = BiliOpusArticle(title: "", author: "UP", face: "", timestamp: 1, text: "第一段…",
+                                      pics: [BiliDynamicPic(url: "https://i0.hdslb.com/bfs/article/a.jpg", liveURL: "")])
+        let merged = BilibiliParser.merge(summary: summary, full: a)
+        XCTAssertEqual(merged.text, a.text)
+        XCTAssertEqual(merged.pics.count, 2)
+        XCTAssertEqual(BilibiliParser.merge(summary: summary, full: nil), summary)
+
+        // 图文动态的顶部图集 + 正文
+        let album = JSON(text: """
+        {"modules":[{"module_type":"MODULE_TYPE_TOP","module_top":{"display":{"album":{"pics":[{"url":"http://i0.hdslb.com/bfs/new_dyn/x.jpg","live_url":"https://upos/l.mp4"}]}}}},
+                    {"module_type":"MODULE_TYPE_CONTENT","module_content":{"paragraphs":[{"para_type":1,"text":{"nodes":[{"word":{"words":"长文字"}}]}}]}}]}
+        """)!
+        let b = BilibiliParser.opusArticle(album)
+        XCTAssertEqual(b.pics, [BiliDynamicPic(url: "https://i0.hdslb.com/bfs/new_dyn/x.jpg", liveURL: "https://upos/l.mp4")])
+        XCTAssertEqual(b.text, "长文字")
+    }
+
+    func testBiliCVArticleView() {
+        // 旧版 HTML 正文
+        let html = JSON(text: #"""
+        {"title":"专栏","author":{"name":"作者","face":"https://f"},"publish_time":1698300000,
+         "content":"<p>第一段&amp;</p><figure><img data-src=\"//i0.hdslb.com/bfs/article/a.jpg@progressive.webp\" src=\"\"/></figure><p>第二段<br/>换行</p><img src=\"//i0.hdslb.com/bfs/emote/e.png\"/><p>&nbsp;</p><figure><img data-src=\"//i0.hdslb.com/bfs/article/b.jpg\"/></figure>",
+         "origin_image_urls":["https://i0.hdslb.com/bfs/article/banner.jpg"]}
+        """#)!
+        let a = BilibiliParser.cvArticle(html)
+        XCTAssertEqual(a.title, "专栏")
+        XCTAssertEqual(a.author, "作者")
+        XCTAssertEqual(a.text, "第一段&\n第二段\n换行")
+        XCTAssertEqual(a.pics.map(\.url), ["https://i0.hdslb.com/bfs/article/a.jpg", "https://i0.hdslb.com/bfs/article/b.jpg"])
+
+        // 新版：opus.content.paragraphs
+        let opus = JSON(text: #"""
+        {"title":"新","content":"","opus":{"content":{"paragraphs":[{"para_type":1,"text":{"nodes":[{"word":{"words":"段落"}}]}},
+          {"para_type":2,"pic":{"pics":[{"url":"https://i0.hdslb.com/bfs/new_dyn/p.jpg"}]}}]}}}
+        """#)!
+        let b = BilibiliParser.cvArticle(opus)
+        XCTAssertEqual(b.text, "段落")
+        XCTAssertEqual(b.pics.map(\.url), ["https://i0.hdslb.com/bfs/new_dyn/p.jpg"])
+
+        // Quill delta
+        let delta = JSON(text: #"""
+        {"title":"d","content":"{\"ops\":[{\"insert\":\"一\\n\"},{\"insert\":{\"native-image\":{\"url\":\"//i0.hdslb.com/bfs/article/q.png\"}}},{\"insert\":\"二\\n\"}]}"}
+        """#)!
+        let c = BilibiliParser.cvArticle(delta)
+        XCTAssertEqual(c.text, "一\n二")
+        XCTAssertEqual(c.pics.map(\.url), ["https://i0.hdslb.com/bfs/article/q.png"])
+    }
+
+    func testBiliArticleLinksAndIDs() {
+        for url in ["https://www.bilibili.com/read/cv27380000", "https://www.bilibili.com/read/mobile?id=27380000",
+                    "https://m.bilibili.com/read/cv27380000?from=share"] {
+            let l = VideoLinkParser.parse(url)
+            XCTAssertEqual(l?.kind, "article", url)
+            XCTAssertEqual(l?.id, "27380000", url)
+        }
+        XCTAssertEqual(VideoLinkParser.parse("https://m.bilibili.com/opus/857123456789012345")?.kind, "dynamic")
+        let articleDyn = JSON(text: #"{"type":"DYNAMIC_TYPE_ARTICLE","basic":{"rid_str":"123"},"modules":{"module_dynamic":{"major":{"type":"MAJOR_TYPE_OPUS","opus":{"jump_url":"//www.bilibili.com/opus/1"}}}}}"#)!
+        XCTAssertEqual(BilibiliParser.articleID(articleDyn), "123")
+        let oldArticle = JSON(text: #"{"modules":{"module_dynamic":{"major":{"type":"MAJOR_TYPE_ARTICLE","article":{"id":456,"title":"T","desc":"D","covers":["https://i0.hdslb.com/c.jpg"]}}}}}"#)!
+        XCTAssertEqual(BilibiliParser.articleID(oldArticle), "456")
+        XCTAssertEqual(BilibiliParser.dynamicContent(oldArticle), .pictures([BiliDynamicPic(url: "https://i0.hdslb.com/c.jpg", liveURL: "")]))
+        XCTAssertEqual(BilibiliParser.dynamicTitle(oldArticle), "T")
+        XCTAssertEqual(BilibiliParser.dynamicText(oldArticle), "D")
+    }
+
     // MARK: 微博
 
     func testWeiboMobileLivephotoAndGif() {

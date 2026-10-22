@@ -421,7 +421,9 @@ struct VideoResultView: View {
             if selecting {
                 if on { selected.remove(media.id) } else { selected.insert(media.id) }
             } else {
-                preview = MediaPreviewItem(url: media.url, headers: media.headers, title: media.fileName, kind: .image)
+                // 带上整组图片：预览里左右滑动看其他图
+                preview = MediaPreviewItem(url: media.url, headers: media.headers, title: media.fileName, kind: .image,
+                                           gallery: images.map { .init(url: $0.url, headers: $0.headers, title: $0.fileName) })
             }
         } label: {
             Color.fillMuted

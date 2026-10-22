@@ -203,8 +203,9 @@ final class DropboxTests: XCTestCase {
         XCTAssertTrue(DropboxResolver.anonymousError(response(200, type: "text/html", url: "https://www.dropbox.com/sm/password?cont=x"))?.message.contains("密码") ?? false)
     }
 
-    func testOAuthProviderDisabledWithoutAppKey() {
-        XCTAssertEqual(OAuthProvider.dropboxAppKey, "")
-        XCTAssertNil(OAuthProvider.dropbox)
+    func testOAuthProviderConfigured() throws {
+        let provider = try XCTUnwrap(OAuthProvider.dropbox)
+        XCTAssertEqual(provider.clientId, OAuthProvider.dropboxAppKey)
+        XCTAssertEqual(provider.callbackScheme, "db-\(OAuthProvider.dropboxAppKey)")
     }
 }

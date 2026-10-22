@@ -143,6 +143,9 @@ struct FilePreviewView: View {
             }
             .foregroundStyle(immersive ? Color.white : Color.ink)
             .frame(maxWidth: .infinity)
+            if mode == .player, FileNames.kind(of: url.lastPathComponent) == .video {
+                RotateButton()
+            }
             ShareLink(item: url) { IconView(.share, size: 16) }
                 .buttonStyle(PreviewBarButtonStyle(dark: immersive))
                 .accessibilityLabel("分享")
@@ -367,13 +370,30 @@ struct PlayerController: UIViewControllerRepresentable {
 
 // MARK: - 图片
 
-/// 本地图片：双指缩放、拖动、双击放大 / 还原，单击切换操作栏
+/// 可缩放图片的来源：本地文件，或带请求头的网络图片
+enum ZoomSource: Equatable {
+    case file(URL)
+    case remote(String, headers: [String: String])
+}
+
+/// 图片：双指缩放、拖动、双击放大 / 还原，单击切换操作栏（本地文件与网络图片共用，图集翻页时每页一个）
 struct ZoomableImageFile: UIViewRepresentable {
-    let url: URL
+    let source: ZoomSource
     var onTap: () -> Void = {}
     /// 解码失败（文件损坏 / 格式不支持）
     var onFailure: () -> Void = {}
     var drag: DismissDrag?
+
+    init(source: ZoomSource, onTap: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}, drag: DismissDrag? = nil) {
+        self.source = source
+        self.onTap = onTap
+        self.onFailure = onFailure
+        self.drag = drag
+    }
+
+    init(url: URL, onTap: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}, drag: DismissDrag? = nil) {
+        self.init(source: .file(url), onTap: onTap, onFailure: onFailure, drag: drag)
+    }
 
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator(onTap: onTap, drag: drag)
@@ -438,10 +458,16 @@ struct ZoomableImageFile: UIViewRepresentable {
         spinner.startAnimating()
         let screen = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds }.first
         let maxPixel = max(screen?.width ?? 1024, screen?.height ?? 1366) * 3
-        let source = url
+        let source = source
         let coordinator = context.coordinator
         context.coordinator.loading = Task { @MainActor [weak imageView, weak spinner] in
-            let image = await Task.detached(priority: .userInitiated) { Self.downsampled(source, maxPixel: maxPixel) }.value
+            let image: UIImage?
+            switch source {
+            case .file(let url):
+                image = await Task.detached(priority: .userInitiated) { Self.downsampled(url, maxPixel: maxPixel) }.value
+            case .remote(let url, let headers):
+                image = await ImageLoader.shared.load(url, headers: headers)
+            }
             guard !Task.isCancelled else { return }
             spinner?.removeFromSuperview()
             if let image {
@@ -557,6 +583,42 @@ struct QuickLookContent: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - 横屏
+
+/// 视频横屏：锁定了竖屏也能切过去；关闭预览时转回竖屏
+@MainActor
+enum ScreenRotation {
+    private static var scene: UIWindowScene? {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+    }
+
+    static var isLandscape: Bool { scene?.effectiveGeometry.interfaceOrientation.isLandscape ?? false }
+
+    static func set(landscape: Bool) {
+        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait)) { _ in }
+    }
+}
+
+/// 预览顶栏的「横屏 / 竖屏」切换；离开预览时如果是它转的横屏，就转回来
+struct RotateButton: View {
+    var dark = true
+    @State private var landscape = false
+
+    var body: some View {
+        Button {
+            landscape.toggle()
+            ScreenRotation.set(landscape: landscape)
+        } label: {
+            Image(systemName: landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                .font(.system(size: 15, weight: .medium))
+        }
+        .buttonStyle(PreviewBarButtonStyle(dark: dark))
+        .accessibilityLabel(landscape ? "竖屏" : "横屏")
+        .onAppear { landscape = ScreenRotation.isLandscape }
+        .onDisappear { if landscape { ScreenRotation.set(landscape: false) } }
+    }
+}
+
 // MARK: - 下滑关闭
 
 /// 下滑关闭的回调：拖动距离；松手时的距离与速度
@@ -596,11 +658,12 @@ class DismissPanCoordinator: NSObject, UIGestureRecognizerDelegate {
         return v.y > 0 && v.y > abs(v.x) * 1.5
     }
 
+    /// 位移按窗口坐标量：被拖的视图本身在跟手移动、缩小，按它自己的坐标量会来回抖
     @objc func handle(_ pan: UIPanGestureRecognizer) {
-        let y = max(0, pan.translation(in: pan.view).y)
+        let y = max(0, pan.translation(in: nil).y)
         switch pan.state {
         case .changed: drag?.onChange(y)
-        case .ended: drag?.onEnd(y, pan.velocity(in: pan.view).y)
+        case .ended: drag?.onEnd(y, pan.velocity(in: nil).y)
         case .cancelled, .failed: drag?.onEnd(0, 0)
         default: break
         }

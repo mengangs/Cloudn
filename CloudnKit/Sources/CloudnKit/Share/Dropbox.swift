@@ -639,14 +639,14 @@ extension DropboxResolver: DriveOfflineDownloader {
 public extension OAuthProvider {
     /// Dropbox 的 App Key（在 dropbox.com/developers 注册应用后填入）；为空时不提供授权登录。
     /// 应用需开启下面 scopes 里的权限，并把 redirectURI 加到应用的 Redirect URIs
-    static let dropboxAppKey = ""
+    static let dropboxAppKey = "rasxxsb6j9q0s2y"
 
     static var dropbox: OAuthProvider? {
         guard !dropboxAppKey.isEmpty else { return nil }
         return OAuthProvider(name: "Dropbox", clientId: dropboxAppKey,
                              authorizeEndpoint: "https://www.dropbox.com/oauth2/authorize",
                              tokenEndpoint: "https://api.dropboxapi.com/oauth2/token",
-                             redirectURI: "db-\(dropboxAppKey)://oauth",
+                             redirectURI: "db-\(dropboxAppKey)://2/token",
                              scopes: ["account_info.read", "files.metadata.read", "files.metadata.write", "files.content.read",
                                       "files.content.write", "sharing.read", "sharing.write"],
                              extraAuthorizeParams: [("token_access_type", "offline")])

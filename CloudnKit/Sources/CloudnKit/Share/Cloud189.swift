@@ -2,7 +2,8 @@
 // 天翼云盘分享解析：getShareInfoByCodeV2 / checkAccessCode / listShareDir 匿名访问；
 // 取直链要登录：getFileDownloadUrl（带 shareId）再跟随一次 302 拿到真实地址。
 // 账号密码登录参考 OpenList（AGPL-3.0）drivers/189pc：unifyLoginForPC → appConf / encryptConf →
-// RSA 加密账号密码 → loginSubmit → getSessionForPC 换 sessionKey / accessToken / refreshToken。
+// RSA 加密账号密码 → loginSubmit → getSessionForPC 换 sessionKey / accessToken / refreshToken；
+// 新设备（-133）走短信二次校验：sendSmsCodeForSecondAuth → submitForSecondAuth，校验后保存 DEVICEID。
 // 登录后的接口走 cloud.189.cn 网页接口（?sessionKey= + AppKey 签名），参考 wes-lin/cloud189-sdk 与
 // OpenList drivers/189_share（power721/alist）、tickstep/cloudpan189-api（Apache-2.0）。
 import Foundation
@@ -526,12 +527,21 @@ public final class Cloud189Resolver: ShareResolver, @unchecked Sendable {
     }
 }
 
-/// 天翼云盘账号密码登录（OpenList drivers/189pc loginByPassword）
+/// 天翼云盘账号密码登录（OpenList drivers/189pc loginByPassword）。
+/// 新设备登录时 loginSubmit 返回 -133（设备二次校验）：保留这次登录的参数，
+/// 到「短信验证码」页 sendSmsCodeForSecondAuth 发码、submitForSecondAuth 提交（OpenList secondDeviceAuth）。
+/// 校验通过后服务端下发 DEVICEID Cookie，按账号存下来，下次登录带上就不再要求短信。
 struct Cloud189Login: PasswordLogin {
     let client: HTTPClient
     var accountHint: String { "手机号 / 邮箱" }
+    var supportsSMS: Bool { true }
 
     typealias R = Cloud189Resolver
+
+    /// 设备二次校验返回码
+    static let secondAuthResult = -133
+    /// 二次校验参数的有效期（lt 过期后只能重新用密码登录）
+    static let secondAuthTTL: TimeInterval = 10 * 60
 
     /// 登录页参数：请求头 lt / REQID、表单 paramId、老页面才有的 captchaToken、后续请求的 Referer
     struct LoginParams: Equatable {
@@ -542,23 +552,133 @@ struct Cloud189Login: PasswordLogin {
         var referer: String
     }
 
-    /// 登录过程的 Cookie（open.e.189.cn 用会话 Cookie 关联 lt）
+    /// 登录过程的 Cookie（open.e.189.cn 用会话 Cookie 关联 lt）；DEVICEID 只发给 e.189.cn
     final class Jar: @unchecked Sendable {
-        private(set) var pairs: [(name: String, value: String)] = []
+        private let lock = NSLock()
+        private var stored: [(name: String, value: String)] = []
+        private var device = ""
+
+        init(header: String = "", deviceId: String = "") {
+            device = deviceId
+            merge(header.split(separator: ";").compactMap { part in
+                let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                guard kv.count == 2, !kv[0].isEmpty else { return nil }
+                return (kv[0], kv[1])
+            })
+        }
+
+        var pairs: [(name: String, value: String)] { lock.withLock { stored } }
+        var deviceId: String { lock.withLock { device } }
+
         func merge(_ cookies: [(name: String, value: String)]) {
-            for c in cookies {
-                if let i = pairs.firstIndex(where: { $0.name == c.name }) { pairs[i].value = c.value } else { pairs.append(c) }
+            lock.withLock {
+                for c in cookies {
+                    if c.name == Cloud189Login.deviceCookie { if !c.value.isEmpty { device = c.value }; continue }
+                    if let i = stored.firstIndex(where: { $0.name == c.name }) { stored[i].value = c.value } else { stored.append(c) }
+                }
             }
         }
+
+        /// 会话 Cookie（不含 DEVICEID）
         var header: String { pairs.map { "\($0.name)=\($0.value)" }.joined(separator: "; ") }
+
+        func header(for url: String) -> String {
+            let host = URL(string: url)?.host?.lowercased() ?? ""
+            let device = deviceId
+            guard !device.isEmpty, host == "e.189.cn" || host.hasSuffix(".e.189.cn") else { return header }
+            return (pairs.map { "\($0.name)=\($0.value)" } + ["\(Cloud189Login.deviceCookie)=\(device)"]).joined(separator: "; ")
+        }
     }
+
+    static let deviceCookie = "DEVICEID"
+
+    /// 设备二次校验需要沿用的登录现场（全部放进 SMSChallenge.state）
+    struct SecondAuth: Equatable {
+        var account: String
+        var lt: String
+        var reqId: String
+        var paramId: String
+        var referer: String
+        /// RSA 加密后的账号（带 pre 前缀）
+        var userName: String
+        var pubKey: String
+        var pre: String
+        /// loginSubmit -133 返回的（加密 / 打码）手机号，原样回传
+        var mobile: String
+        var cookie: String
+        var deviceId: String
+        var finger: String
+
+        static let keys = ["account", "lt", "reqId", "paramId", "referer", "userName", "pubKey", "pre", "mobile", "cookie", "deviceId", "finger"]
+
+        var state: [String: String] {
+            ["account": account, "lt": lt, "reqId": reqId, "paramId": paramId, "referer": referer, "userName": userName,
+             "pubKey": pubKey, "pre": pre, "mobile": mobile, "cookie": cookie, "deviceId": deviceId, "finger": finger]
+        }
+
+        init(account: String, lt: String, reqId: String, paramId: String, referer: String, userName: String, pubKey: String,
+             pre: String, mobile: String, cookie: String, deviceId: String, finger: String) {
+            self.account = account; self.lt = lt; self.reqId = reqId; self.paramId = paramId; self.referer = referer
+            self.userName = userName; self.pubKey = pubKey; self.pre = pre; self.mobile = mobile; self.cookie = cookie
+            self.deviceId = deviceId; self.finger = finger
+        }
+
+        init?(state: [String: String]) {
+            func v(_ k: String) -> String { state[k] ?? "" }
+            guard !v("lt").isEmpty, !v("reqId").isEmpty, !v("userName").isEmpty, !v("pubKey").isEmpty, !v("mobile").isEmpty else { return nil }
+            self.init(account: v("account"), lt: v("lt"), reqId: v("reqId"), paramId: v("paramId"), referer: v("referer"),
+                      userName: v("userName"), pubKey: v("pubKey"), pre: v("pre"), mobile: v("mobile"), cookie: v("cookie"),
+                      deviceId: v("deviceId"), finger: v("finger"))
+        }
+
+        var params: LoginParams { LoginParams(lt: lt, reqId: reqId, paramId: paramId, captchaToken: "", referer: referer) }
+        var jar: Jar { Jar(header: cookie, deviceId: deviceId) }
+    }
+
+    /// 密码登录遇到 -133 时暂存现场，等用户到「短信验证码」页获取验证码（provider 每次现取，只能放静态区）
+    final class Pending: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: (auth: SecondAuth, at: Date)?
+        func set(_ auth: SecondAuth?, now: Date = Date()) { lock.withLock { value = auth.map { ($0, now) } } }
+        func get(now: Date = Date()) -> SecondAuth? {
+            lock.withLock {
+                guard let v = value, now.timeIntervalSince(v.at) < Cloud189Login.secondAuthTTL else { value = nil; return nil }
+                return v.auth
+            }
+        }
+    }
+
+    static let pending = Pending()
+
+    // MARK: 设备标识
+
+    /// user-finger：10 位数字，首位非 0（OpenList getUserFinger），按安装固定
+    static var finger: String {
+        let digits = DeviceFingerprint.hex("cloud189.finger", length: 16).compactMap(\.hexDigitValue).map(String.init).joined().prefix(10)
+        guard let first = digits.first else { return "1000000000" }
+        return (first == "0" ? "1" : "") + String(first == "0" ? digits.dropFirst() : digits)
+    }
+
+    private static func deviceKey(_ account: String) -> String {
+        "cloudn.cloud189.deviceId." + Crypto.md5Hex(account.trimmed.lowercased())
+    }
+
+    /// 通过短信校验后服务端下发的 DEVICEID（按账号保存）
+    static func savedDeviceId(_ account: String) -> String { UserDefaults.standard.string(forKey: deviceKey(account)) ?? "" }
+
+    static func saveDeviceId(_ id: String, account: String) {
+        guard !id.isEmpty, !account.trimmed.isEmpty else { return }
+        UserDefaults.standard.set(id, forKey: deviceKey(account))
+    }
+
+    // MARK: 账号密码
 
     func login(account: String, password: String) async throws -> String {
         let account = account.trimmed
         guard !account.isEmpty, !password.isEmpty else { throw CloudnError("请输入天翼云盘账号和密码") }
-        let jar = Jar()
-        let finger = DeviceFingerprint.hex("cloud189.finger", length: 16).compactMap(\.hexDigitValue).map(String.init).joined().prefix(10)
-        var params = try await loginParams(jar: jar, finger: String(finger))
+        let jar = Jar(deviceId: Self.savedDeviceId(account))
+        let finger = Self.finger
+        var params = try await loginParams(jar: jar, finger: finger)
 
         // RSA 公钥（与前缀 {NRP} 等）
         let conf = try await postJSON(R.authURL + "/api/logbox/config/encryptConf.do", [("appId", R.appId)], params: nil, jar: jar, finger: "")
@@ -569,15 +689,15 @@ struct Cloud189Login: PasswordLogin {
         let rsaUser = pre + user
         let rsaPass = pre + pass
 
-        // 需要图形验证码时让用户改用网页登录
-        let need = try await client.send(.postForm(R.authURL + "/api/logbox/oauth2/needcaptcha.do",
-                                                   [("appKey", R.appId), ("accountType", "02"), ("userName", rsaUser)],
-                                                   headers: headers(params, jar: jar, finger: String(finger))))
+        // 需要图形验证码时让用户改用网页登录（应用内没有图形验证码界面）
+        let needURL = R.authURL + "/api/logbox/oauth2/needcaptcha.do"
+        let need = try await client.send(.postForm(needURL, [("appKey", R.appId), ("accountType", "02"), ("userName", rsaUser)],
+                                                   headers: headers(params, jar: jar, finger: finger, url: needURL)))
         jar.merge(need.cookies)
         if need.text.trimmed != "0" && !need.text.trimmed.isEmpty {
             throw CloudnError("天翼云盘要求输入图形验证码，请改用网页登录")
         }
-        if params.paramId.isEmpty { params.paramId = try await paramId(params, jar: jar, finger: String(finger)) }
+        if params.paramId.isEmpty { params.paramId = try await paramId(params, jar: jar, finger: finger) }
 
         let form: [(String, String)] = [
             ("version", "v2.0"), ("apToken", ""), ("appKey", R.appId), ("pageKey", "normal"), ("accountType", "02"),
@@ -585,35 +705,127 @@ struct Cloud189Login: PasswordLogin {
             ("captchaToken", params.captchaToken), ("returnUrl", R.returnURL), ("dynamicCheck", "FALSE"),
             ("clientType", R.clientType), ("cb_SaveName", "1"), ("isOauth2", "false"), ("state", ""), ("paramId", params.paramId),
         ]
-        let result = try await postJSON(R.authURL + "/api/logbox/oauth2/loginSubmit.do", form, params: params, jar: jar, finger: String(finger))
+        let result = try await postJSON(R.authURL + "/api/logbox/oauth2/loginSubmit.do", form, params: params, jar: jar, finger: finger)
+        Self.saveDeviceId(jar.deviceId, account: account)
+
+        // 新设备：保留现场，引导到「短信验证码」页完成校验
+        if result["result"].int == Self.secondAuthResult, let mobile = result["mobile"].string.nilIfBlank {
+            Self.pending.set(SecondAuth(account: account, lt: params.lt, reqId: params.reqId, paramId: params.paramId,
+                                        referer: params.referer, userName: rsaUser, pubKey: pubKey, pre: pre, mobile: mobile,
+                                        cookie: jar.header, deviceId: jar.deviceId, finger: finger))
+            throw CloudnError("天翼云盘要求验证新设备：请切换到「短信验证码」，获取验证码后登录")
+        }
         if let err = Self.loginError(result) { throw err }
-        let toUrl = result["toUrl"].string
-        let session = try await R.sessionForPC(redirectURL: toUrl, client: client)
-        return session.serialized
+        Self.pending.set(nil)
+        return try await R.sessionForPC(redirectURL: result["toUrl"].string, client: client).serialized
     }
 
     /// loginSubmit 的结果 → 错误（成功返回 nil）
     static func loginError(_ json: JSON) -> CloudnError? {
         let result = json["result"].int
         let msg = json.string("msg", "message")
-        if result == -133 { return CloudnError("天翼云盘要求短信验证新设备，请改用网页登录") }
+        if result == secondAuthResult { return CloudnError("天翼云盘要求短信验证新设备，请改用网页登录") }
         if result == 0 && !json["toUrl"].string.isEmpty { return nil }
         if msg.contains("验证码") { return CloudnError("天翼云盘要求输入验证码，请改用网页登录") }
         return CloudnError(msg.isEmpty ? "天翼云盘登录失败" : "天翼云盘登录失败：\(msg)")
     }
 
-    private func headers(_ p: LoginParams?, jar: Jar, finger: String) -> [(String, String)] {
+    // MARK: 短信验证码（新设备二次校验）
+
+    func sendSMS(phone: String) async throws -> SMSChallenge {
+        guard let auth = Self.pending.get() else {
+            throw CloudnError("天翼云盘的短信验证码用于验证新设备：请先用「账号密码」登录，提示验证新设备后再回来获取验证码")
+        }
+        let jar = auth.jar
+        let req = Self.sendSMSRequest(auth, cookie: jar.header(for: Self.sendSMSURL))
+        let r = try await client.send(req)
+        jar.merge(r.cookies)
+        guard let json = r.json, json.isObject else { throw CloudnError("天翼云盘发送验证码失败（HTTP \(r.status)）") }
+        if let err = Self.smsError(json, action: "发送验证码") { throw err }
+        var next = auth
+        next.cookie = jar.header
+        next.deviceId = jar.deviceId
+        Self.pending.set(next)
+        return SMSChallenge(phone: phone, state: next.state, message: Self.sentMessage(mobile: auth.mobile))
+    }
+
+    func loginSMS(_ challenge: SMSChallenge, code: String) async throws -> String {
+        let code = code.trimmed
+        guard !code.isEmpty else { throw CloudnError("请输入短信验证码") }
+        guard let auth = SecondAuth(state: challenge.state) else { throw CloudnError("验证码已失效，请重新获取") }
+        guard let epd = Cloud189RSA.encryptHex(code, publicKey: auth.pubKey) else { throw CloudnError("天翼云盘登录失败：加密验证码失败") }
+        let jar = auth.jar
+        let req = Self.submitSMSRequest(auth, epd: auth.pre + epd, cookie: jar.header(for: Self.submitSMSURL))
+        let r = try await client.send(req)
+        jar.merge(r.cookies)
+        // 校验通过后下发 DEVICEID：存下来，下次密码登录就不再要求短信
+        Self.saveDeviceId(jar.deviceId, account: auth.account)
+        guard let json = r.json, json.isObject else { throw CloudnError("天翼云盘验证失败（HTTP \(r.status)）") }
+        if let err = Self.smsError(json, action: "验证") { throw err }
+        guard let toUrl = json["toUrl"].string.nilIfBlank else {
+            let msg = json.string("msg", "message")
+            throw CloudnError(msg.isEmpty ? "天翼云盘验证失败，请重新用账号密码登录" : "天翼云盘验证失败：\(msg)")
+        }
+        Self.pending.set(nil)
+        return try await R.sessionForPC(redirectURL: toUrl, client: client).serialized
+    }
+
+    static let sendSMSURL = R.authURL + "/api/logbox/oauth2/sendSmsCodeForSecondAuth.do"
+    static let submitSMSURL = R.authURL + "/api/logbox/oauth2/submitForSecondAuth.do"
+
+    /// sendSmsCodeForSecondAuth：mobile 用 -133 返回的值，验证码发到账号绑定的手机
+    static func sendSMSRequest(_ auth: SecondAuth, cookie: String) -> HTTPRequest {
+        .postForm(sendSMSURL, [("mobile", auth.mobile), ("appKey", R.appId)],
+                  headers: loginHeaders(auth.params, finger: auth.finger, cookie: cookie))
+    }
+
+    /// submitForSecondAuth：没有单独的验证码字段，验证码用登录公钥加密后放在 epd
+    static func submitSMSRequest(_ auth: SecondAuth, epd: String, cookie: String) -> HTTPRequest {
+        .postForm(submitSMSURL, [
+            ("mobile", auth.mobile), ("appKey", R.appId), ("userName", auth.userName), ("epd", epd), ("accountType", "02"),
+            ("returnUrl", R.returnURL), ("isOauth2", "false"), ("cb_SaveName", "1"), ("state", ""), ("paramId", auth.paramId),
+        ], headers: loginHeaders(auth.params, finger: auth.finger, cookie: cookie))
+    }
+
+    /// 发码 / 提交的结果：result 非 0 即失败
+    static func smsError(_ json: JSON, action: String) -> CloudnError? {
+        let result = json["result"].string
+        guard !result.isEmpty, result != "0" else { return nil }
+        let msg = json.string("msg", "message")
+        if msg.contains("图形") || msg.lowercased().contains("captcha") { return CloudnError("天翼云盘要求输入图形验证码，请改用网页登录") }
+        if msg.contains("过期") || msg.contains("失效") || msg.contains("超时") {
+            pending.set(nil)
+            return CloudnError("天翼云盘登录已超时，请重新用账号密码登录后再获取验证码")
+        }
+        return CloudnError(msg.isEmpty ? "天翼云盘\(action)失败（\(result)）" : "天翼云盘\(action)失败：\(msg)")
+    }
+
+    /// 打码手机号（如 138****8000）直接展示；加密串不展示
+    static func sentMessage(mobile: String) -> String {
+        if mobile.count <= 16, mobile.contains("*"), mobile.allSatisfy({ $0.isNumber || $0 == "*" }) {
+            return "验证码已发送到 \(mobile)，用于验证新设备"
+        }
+        return "验证码已发送到账号绑定的手机，用于验证新设备"
+    }
+
+    // MARK: 请求
+
+    static func loginHeaders(_ p: LoginParams?, finger: String, cookie: String) -> [(String, String)] {
         var h: [(String, String)] = [("Accept", "application/json;charset=UTF-8"), ("User-Agent", R.userAgent)]
         if let p {
             h += [("REQID", p.reqId), ("lt", p.lt), ("Referer", p.referer.nilIfBlank ?? R.authURL)]
             if !finger.isEmpty { h.append(("user-finger", finger)) }
         }
-        if !jar.header.isEmpty { h.append(("Cookie", jar.header)) }
+        if !cookie.isEmpty { h.append(("Cookie", cookie)) }
         return h
     }
 
+    private func headers(_ p: LoginParams?, jar: Jar, finger: String, url: String) -> [(String, String)] {
+        Self.loginHeaders(p, finger: finger, cookie: jar.header(for: url))
+    }
+
     private func postJSON(_ url: String, _ form: [(String, String)], params: LoginParams?, jar: Jar, finger: String) async throws -> JSON {
-        let r = try await client.send(.postForm(url, form, headers: headers(params, jar: jar, finger: finger)))
+        let r = try await client.send(.postForm(url, form, headers: headers(params, jar: jar, finger: finger, url: url)))
         jar.merge(r.cookies)
         guard let json = r.json, json.isObject else { throw CloudnError("天翼云盘登录失败（HTTP \(r.status)）") }
         return json
@@ -627,7 +839,7 @@ struct Cloud189Login: PasswordLogin {
         ])
         var body = ""
         for _ in 0..<10 {
-            let r = try await client.send(HTTPRequest(url: url, headers: headers(nil, jar: jar, finger: finger), followRedirects: false))
+            let r = try await client.send(HTTPRequest(url: url, headers: headers(nil, jar: jar, finger: finger, url: url), followRedirects: false))
             jar.merge(r.cookies)
             if (300..<400).contains(r.status), let loc = r.header("location"), let next = URL(string: loc, relativeTo: URL(string: url)) {
                 url = next.absoluteURL.absoluteString

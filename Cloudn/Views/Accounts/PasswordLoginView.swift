@@ -173,6 +173,13 @@ struct PasswordLoginView: View {
             } catch let challenge as LoginVerificationRequired {
                 verification = VerificationItem(challenge: challenge)
             } catch {
+                // 天翼云盘新设备要短信二次验证：自动切到短信页，给绑定手机发验证码
+                if kind == .cloud189, mode == .password, error.localizedDescription.contains("验证新设备") {
+                    phone = account
+                    mode = .sms
+                    Task { @MainActor in sendCode() }
+                    return
+                }
                 self.error = error.localizedDescription
             }
         }

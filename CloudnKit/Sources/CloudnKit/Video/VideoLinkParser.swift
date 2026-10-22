@@ -70,6 +70,8 @@ public enum VideoLinkParser {
         Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"t\.bilibili\.com/(?:h5/dynamic/detail/)?(\d{10,20})"#, ignoreCase: true)),
         Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"bilibili\.com/opus/(\d{10,20})"#, ignoreCase: true)),
         Rule(platform: .bilibili, kind: "dynamic", rx: Rx(#"m\.bilibili\.com/dynamic/(\d{10,20})"#, ignoreCase: true)),
+        Rule(platform: .bilibili, kind: "article", rx: Rx(#"bilibili\.com/read/(?:mobile/|native/)?cv(\d+)"#, ignoreCase: true)),
+        Rule(platform: .bilibili, kind: "article", rx: Rx(#"bilibili\.com/read/(?:mobile|native)/?\?(?:[^\s#]*?&)?id=(\d+)"#, ignoreCase: true)),
 
         // 先认回答再认问题：回答链接里也带 /question/
         Rule(platform: .zhihu, kind: "answer", rx: Rx(#"zhihu\.com/question/\d+/answer/(\d+)"#, ignoreCase: true)),

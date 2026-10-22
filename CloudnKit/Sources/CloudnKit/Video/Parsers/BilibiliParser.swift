@@ -26,6 +26,7 @@ struct BilibiliParser: VideoParser {
 
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         if link.kind == "dynamic" { return try await parseDynamic(link, cookie: cookie) }
+        if link.kind == "article" { return try await parseArticle(link, cookie: cookie) }
         return try await parseVideo(link, cookie: cookie)
     }
 
@@ -182,42 +183,81 @@ extension BilibiliParser {
     func parseDynamic(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         let id = link.id.isEmpty ? (Rx(#"(\d{16,20})"#).first(in: link.url) ?? "") : link.id
         guard !id.isEmpty else { throw VideoParseError(.unsupported, "没有识别出B站动态 ID") }
-        var requestCookie = cookie
-        if let ids = await Self.buvid() {
-            requestCookie = CookieUtil.setting("buvid3", ids.b3, in: requestCookie)
-            if !ids.b4.isEmpty { requestCookie = CookieUtil.setting("buvid4", ids.b4, in: requestCookie) }
-        }
-        var headers = Self.headers(requestCookie)
-        headers["Referer"] = "https://t.bilibili.com/\(id)"
-        let json = try await VideoHTTP.getJSON("\(Self.dynamicURL)?timezone_offset=-480&id=\(id)&features=itemOpusStyle",
+        let headers = await Self.fingerprintedHeaders(cookie, referer: "https://t.bilibili.com/\(id)")
+        let url = "https://t.bilibili.com/\(id)"
+        let json: JSON
+        do {
+            json = try await VideoHTTP.getJSON("\(Self.dynamicURL)?timezone_offset=-480&id=\(id)&features=itemOpusStyle",
                                                headers: headers, what: "B站动态")
+        } catch {
+            // 动态接口不通时直接取 opus 详情（专栏 / 图文都能拿到）
+            if let full = await Self.fetchOpusArticle(id: id, headers: headers) {
+                return try Self.articleResult(full, id: "dynamic_\(id)", url: url, cookie: cookie)
+            }
+            throw error
+        }
         let item = json["data"]["item"]
         guard json["code"].int == 0, item.isObject else {
+            if let full = await Self.fetchOpusArticle(id: id, headers: headers) {
+                return try Self.articleResult(full, id: "dynamic_\(id)", url: url, cookie: cookie)
+            }
             throw Self.dynamicError(code: json["code"].int, message: json["message"].string)
         }
-        switch Self.dynamicContent(item) {
-        case .video(let bvid):
+        let content = Self.dynamicContent(item)
+        if case .video(let bvid) = content {
             let videoLink = DetectedVideoLink(platform: .bilibili, kind: "video", id: bvid, url: "https://www.bilibili.com/video/\(bvid)")
             return try await parseVideo(videoLink, cookie: cookie)
-        case .pictures(let pics):
-            return try buildDynamic(item, id: id, pics: pics, cookie: cookie)
-        case .nothing:
-            throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频")
         }
+        // 动态接口只给摘要（专栏 / 长图文截断成「…」）和头几张图：再取 opus 详情拿完整正文与全部图片
+        let target = Self.contentItem(item)
+        let opusID = target["id_str"].string.nilIfBlank ?? id
+        var full = await Self.fetchOpusArticle(id: opusID, headers: headers)
+        if full == nil, let cvid = Self.articleID(target) {
+            full = try? await Self.fetchCVArticle(cvid: cvid, headers: headers)
+        }
+        var pics: [BiliDynamicPic] = []
+        if case .pictures(let p) = content { pics = p }
+        return try buildDynamic(item, id: id, pics: pics, full: full, cookie: cookie)
     }
 
-    private func buildDynamic(_ item: JSON, id: String, pics: [BiliDynamicPic], cookie: String) throws -> VideoParseResult {
-        guard !pics.isEmpty else { throw VideoParseError(.unsupported, "这条内容没有可下载的图片或视频") }
-        let text = Self.dynamicText(item)
-        let opusTitle = Self.dynamicTitle(item)
-        let title = opusTitle.isEmpty ? String(text.prefix(40)) : opusTitle
-        let base = FileNames.base(title, fallback: "bilibili_dynamic_\(id)")
-        let headers = Self.headers(cookie)
-        let medias = Self.dynamicMedias(pics, base: base, headers: headers)
-        let author = item["modules"]["module_author"]
-        return VideoParseResult(platform: .bilibili, title: title, author: author["name"].string, avatar: author["face"].string,
-                                cover: pics[0].url, text: text, timestamp: author["pub_ts"].int64,
-                                url: "https://t.bilibili.com/\(id)", medias: medias)
+    private func buildDynamic(_ item: JSON, id: String, pics: [BiliDynamicPic], full: BiliOpusArticle?, cookie: String) throws -> VideoParseResult {
+        let summary = BiliOpusArticle(title: Self.dynamicTitle(item), author: item["modules"]["module_author"]["name"].string,
+                                      face: item["modules"]["module_author"]["face"].string,
+                                      timestamp: item["modules"]["module_author"]["pub_ts"].int64,
+                                      text: Self.dynamicText(item), pics: Self.dedupePics(pics))
+        return try Self.articleResult(Self.merge(summary: summary, full: full), id: "dynamic_\(id)",
+                                      url: "https://t.bilibili.com/\(id)", cookie: cookie)
+    }
+
+    /// 动态摘要与完整图文合并：完整内容有的用完整的，缺的用摘要补
+    static func merge(summary: BiliOpusArticle, full: BiliOpusArticle?) -> BiliOpusArticle {
+        guard let full else { return summary }
+        var out = summary
+        if !full.title.isEmpty { out.title = full.title }
+        if !full.author.isEmpty { out.author = full.author }
+        if !full.face.isEmpty { out.face = full.face }
+        if full.timestamp > 0 { out.timestamp = full.timestamp }
+        if !full.text.isEmpty { out.text = full.text }
+        if !full.pics.isEmpty { out.pics = full.pics }
+        return out
+    }
+
+    /// 带正文的那条动态：转发动态取被转发的原动态
+    static func contentItem(_ item: JSON) -> JSON {
+        item["modules"]["module_dynamic"]["major"].isObject || !item["orig"].isObject ? item : item["orig"]
+    }
+
+    /// 专栏动态的 cv 号（basic.rid_str 或 major.article.id）
+    static func articleID(_ item: JSON) -> String? {
+        let major = item["modules"]["module_dynamic"]["major"]
+        let fromMajor = major["article"]["id"].string
+        if !fromMajor.isEmpty, fromMajor != "0" { return fromMajor }
+        if item["type"].string == "DYNAMIC_TYPE_ARTICLE" {
+            let rid = item["basic"]["rid_str"].string
+            if !rid.isEmpty, rid != "0" { return rid }
+        }
+        if let cv = Rx(#"read/cv(\d+)"#).first(in: major["opus"]["jump_url"].string) { return cv }
+        return nil
     }
 
     static func dynamicError(code: Int, message: String) -> VideoParseError {
@@ -246,6 +286,11 @@ extension BilibiliParser {
             let pics = major["opus"]["pics"].array.map { BiliDynamicPic(url: $0["url"].string, liveURL: $0["live_url"].string) }
             let valid = pics.filter { !$0.url.isEmpty }
             return valid.isEmpty ? .nothing : .pictures(valid)
+        case "MAJOR_TYPE_ARTICLE":
+            // 旧式专栏动态：这里只有封面，完整正文由 opus 详情 / 专栏接口补
+            let pics = major["article"]["covers"].array.map { BiliDynamicPic(url: $0.string, liveURL: "") }
+            let valid = pics.filter { !$0.url.isEmpty }
+            return valid.isEmpty ? .nothing : .pictures(valid)
         case "MAJOR_TYPE_DRAW":
             let pics = major["draw"]["items"].array.map { BiliDynamicPic(url: $0["src"].string, liveURL: "") }
             let valid = pics.filter { !$0.url.isEmpty }
@@ -256,7 +301,8 @@ extension BilibiliParser {
     }
 
     static func dynamicTitle(_ item: JSON) -> String {
-        let title = item["modules"]["module_dynamic"]["major"]["opus"]["title"].string
+        let major = item["modules"]["module_dynamic"]["major"]
+        let title = major["opus"]["title"].string.nilIfBlank ?? major["article"]["title"].string
         if title.isEmpty && item["orig"].isObject { return dynamicTitle(item["orig"]) }
         return title
     }
@@ -265,6 +311,8 @@ extension BilibiliParser {
         let dynamic = item["modules"]["module_dynamic"]
         let summary = dynamic["major"]["opus"]["summary"]["text"].string.trimmed
         if !summary.isEmpty { return summary }
+        let articleDesc = dynamic["major"]["article"]["desc"].string.trimmed
+        if !articleDesc.isEmpty { return articleDesc }
         let desc = dynamic["desc"]["text"].string.trimmed
         if !desc.isEmpty { return desc }
         return item["orig"].isObject ? dynamicText(item["orig"]) : ""

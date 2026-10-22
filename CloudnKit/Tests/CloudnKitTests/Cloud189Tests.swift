@@ -326,4 +326,134 @@ final class Cloud189Tests: XCTestCase {
         jar.merge([("a", "3")])
         XCTAssertEqual(jar.header, "a=3; b=2")
     }
+
+    // MARK: 新设备短信校验
+
+    func testJarDeviceId() {
+        let jar = Cloud189Login.Jar(header: "JSESSIONID=abc; LT=x=y", deviceId: "DEV1")
+        XCTAssertEqual(jar.header, "JSESSIONID=abc; LT=x=y")
+        XCTAssertEqual(jar.header(for: "https://open.e.189.cn/api/logbox/oauth2/loginSubmit.do"), "JSESSIONID=abc; LT=x=y; DEVICEID=DEV1")
+        // cloud.189.cn 不带 DEVICEID
+        XCTAssertEqual(jar.header(for: "https://cloud.189.cn/api/portal/unifyLoginForPC.action"), "JSESSIONID=abc; LT=x=y")
+        jar.merge([("DEVICEID", "DEV2"), ("c", "1")])
+        XCTAssertEqual(jar.deviceId, "DEV2")
+        XCTAssertEqual(jar.header, "JSESSIONID=abc; LT=x=y; c=1")
+        jar.merge([("DEVICEID", "")])
+        XCTAssertEqual(jar.deviceId, "DEV2")
+        XCTAssertEqual(Cloud189Login.Jar().header(for: "https://open.e.189.cn/x"), "")
+    }
+
+    static let sampleAuth = Cloud189Login.SecondAuth(
+        account: "13800138000", lt: "LT1", reqId: "REQ1", paramId: "P1",
+        referer: "https://open.e.189.cn/api/logbox/separate/web/index.html?appId=9317140619&lt=LT1&reqId=REQ1",
+        userName: "{NRP}AABB", pubKey: testPublicKey, pre: "{NRP}", mobile: "ENCMOBILE==", cookie: "JSESSIONID=s1",
+        deviceId: "", finger: "1234567890")
+
+    func testSecondAuthState() {
+        let auth = Self.sampleAuth
+        XCTAssertEqual(Cloud189Login.SecondAuth(state: auth.state), auth)
+        XCTAssertEqual(Set(auth.state.keys), Set(Cloud189Login.SecondAuth.keys))
+        var missing = auth.state
+        missing["mobile"] = ""
+        XCTAssertNil(Cloud189Login.SecondAuth(state: missing))
+        XCTAssertNil(Cloud189Login.SecondAuth(state: [:]))
+        XCTAssertEqual(auth.params.lt, "LT1")
+        XCTAssertEqual(auth.params.referer, auth.referer)
+    }
+
+    private func form(_ req: HTTPRequest) -> [String: String] {
+        let body = String(decoding: req.body ?? Data(), as: UTF8.self)
+        var out: [String: String] = [:]
+        for pair in body.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map {
+                String($0).replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? String($0)
+            }
+            out[kv[0]] = kv.count > 1 ? kv[1] : ""
+        }
+        return out
+    }
+
+    private func header(_ req: HTTPRequest, _ name: String) -> String? {
+        req.headers.first { $0.0.lowercased() == name.lowercased() }?.1
+    }
+
+    func testSendSMSRequest() {
+        let req = Cloud189Login.sendSMSRequest(Self.sampleAuth, cookie: "JSESSIONID=s1; DEVICEID=D")
+        XCTAssertEqual(req.url, "https://open.e.189.cn/api/logbox/oauth2/sendSmsCodeForSecondAuth.do")
+        XCTAssertEqual(req.method, "POST")
+        XCTAssertEqual(form(req), ["mobile": "ENCMOBILE==", "appKey": "9317140619"])
+        XCTAssertEqual(header(req, "lt"), "LT1")
+        XCTAssertEqual(header(req, "REQID"), "REQ1")
+        XCTAssertEqual(header(req, "user-finger"), "1234567890")
+        XCTAssertEqual(header(req, "Referer"), Self.sampleAuth.referer)
+        XCTAssertEqual(header(req, "Cookie"), "JSESSIONID=s1; DEVICEID=D")
+    }
+
+    func testSubmitSMSRequest() {
+        let req = Cloud189Login.submitSMSRequest(Self.sampleAuth, epd: "{NRP}CODEHEX", cookie: "")
+        XCTAssertEqual(req.url, "https://open.e.189.cn/api/logbox/oauth2/submitForSecondAuth.do")
+        let f = form(req)
+        XCTAssertEqual(f["mobile"], "ENCMOBILE==")
+        XCTAssertEqual(f["appKey"], "9317140619")
+        XCTAssertEqual(f["userName"], "{NRP}AABB")
+        XCTAssertEqual(f["epd"], "{NRP}CODEHEX")
+        XCTAssertEqual(f["accountType"], "02")
+        XCTAssertEqual(f["returnUrl"], "https://m.cloud.189.cn/zhuanti/2020/loginErrorPc/index.html")
+        XCTAssertEqual(f["isOauth2"], "false")
+        XCTAssertEqual(f["paramId"], "P1")
+        XCTAssertEqual(f["state"], "")
+        XCTAssertNil(header(req, "Cookie"))
+        XCTAssertEqual(header(req, "lt"), "LT1")
+    }
+
+    func testSMSErrors() {
+        XCTAssertNil(Cloud189Login.smsError(JSON(text: #"{"result":0,"msg":"发送成功"}"#)!, action: "发送验证码"))
+        XCTAssertNil(Cloud189Login.smsError(JSON(text: #"{"result":"0"}"#)!, action: "验证"))
+        XCTAssertEqual(Cloud189Login.smsError(JSON(text: #"{"result":-1,"msg":"短信验证码错误"}"#)!, action: "验证")?.message,
+                       "天翼云盘验证失败：短信验证码错误")
+        XCTAssertEqual(Cloud189Login.smsError(JSON(text: #"{"result":-9}"#)!, action: "发送验证码")?.message, "天翼云盘发送验证码失败（-9）")
+        XCTAssertEqual(Cloud189Login.smsError(JSON(text: #"{"result":-2,"msg":"请输入图形验证码"}"#)!, action: "发送验证码")?.message,
+                       "天翼云盘要求输入图形验证码，请改用网页登录")
+        XCTAssertEqual(Cloud189Login.smsError(JSON(text: #"{"result":-3,"msg":"登录信息已失效"}"#)!, action: "验证")?.message,
+                       "天翼云盘登录已超时，请重新用账号密码登录后再获取验证码")
+    }
+
+    func testSentMessage() {
+        XCTAssertEqual(Cloud189Login.sentMessage(mobile: "138****8000"), "验证码已发送到 138****8000，用于验证新设备")
+        XCTAssertEqual(Cloud189Login.sentMessage(mobile: "A1B2C3D4E5F6A7B8C9D0"), "验证码已发送到账号绑定的手机，用于验证新设备")
+    }
+
+    func testPendingTTL() {
+        let pending = Cloud189Login.Pending()
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        pending.set(Self.sampleAuth, now: t0)
+        XCTAssertEqual(pending.get(now: t0.addingTimeInterval(60)), Self.sampleAuth)
+        XCTAssertNil(pending.get(now: t0.addingTimeInterval(Cloud189Login.secondAuthTTL + 1)))
+        XCTAssertNil(pending.get(now: t0))
+    }
+
+    func testFingerAndSMSSupport() {
+        let finger = Cloud189Login.finger
+        XCTAssertEqual(finger.count, 10)
+        XCTAssertTrue(finger.allSatisfy(\.isNumber))
+        XCTAssertNotEqual(finger.first, "0")
+        XCTAssertEqual(Cloud189Login.finger, finger)
+        XCTAssertTrue(Cloud189Login(client: .shared).supportsSMS)
+    }
+
+    func testSMSWithoutPendingPasswordLogin() async {
+        Cloud189Login.pending.set(nil)
+        do {
+            _ = try await Cloud189Login(client: .shared).sendSMS(phone: "13800138000")
+            XCTFail("应提示先用账号密码登录")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("账号密码"))
+        }
+        do {
+            _ = try await Cloud189Login(client: .shared).loginSMS(SMSChallenge(phone: "1", state: [:]), code: "123456")
+            XCTFail("缺少现场应报错")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "验证码已失效，请重新获取")
+        }
+    }
 }

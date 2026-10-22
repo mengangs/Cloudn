@@ -10,6 +10,15 @@ struct MediaPreviewItem: Identifiable {
     let headers: [String: String]
     let title: String
     let kind: Kind
+    /// 图集：同一组图片，预览时左右滑动切换（为空表示只有这一张）
+    var gallery: [GalleryImage] = []
+
+    struct GalleryImage: Identifiable, Equatable {
+        let url: String
+        let headers: [String: String]
+        let title: String
+        var id: String { url }
+    }
 }
 
 /// 在线预览：视频/音频用 AVPlayer（逐请求带上直链要求的请求头），图片可缩放
@@ -20,6 +29,20 @@ struct MediaPreviewView: View {
     @State private var failure: String?
     /// 下滑关闭：手指往下拖的距离
     @State private var dragY: CGFloat = 0
+    /// 图集当前页
+    @State private var page = ""
+    @State private var chromeVisible = true
+
+    private var pages: [MediaPreviewItem.GalleryImage] {
+        item.gallery.isEmpty ? [.init(url: item.url, headers: item.headers, title: item.title)] : item.gallery
+    }
+
+    private var pageIndex: Int { pages.firstIndex { $0.id == page } ?? 0 }
+
+    private var title: String {
+        guard item.kind == .image, pages.count > 1 else { return item.title }
+        return "\(pageIndex + 1) / \(pages.count)"
+    }
 
     private var dismissDrag: DismissDrag {
         DismissDrag(onChange: { dragY = $0 }, onEnd: { distance, velocity in
@@ -37,19 +60,25 @@ struct MediaPreviewView: View {
                 Button { dismiss() } label: { IconView(.close, size: 15) }
                     .buttonStyle(PreviewBarButtonStyle(dark: true))
                     .accessibilityLabel("关闭")
-                Text(item.title)
-                    .font(.subheadline.weight(.semibold))
+                Text(title)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .contentTransition(.numericText())
                     .frame(maxWidth: .infinity)
-                // 与左侧按钮等宽，标题保持居中
-                Color.clear.frame(width: 38, height: 38)
+                if item.kind == .video {
+                    RotateButton()
+                } else {
+                    // 与左侧按钮等宽，标题保持居中
+                    Color.clear.frame(width: 38, height: 38)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 10)
-            .opacity(dragY > 0 ? 0 : 1)
+            .opacity(dragY > 0 || !chromeVisible ? 0 : 1)
+            .animation(.easeInOut(duration: 0.2), value: chromeVisible)
             ZStack {
                 switch item.kind {
                 case .video, .audio:
@@ -69,7 +98,22 @@ struct MediaPreviewView: View {
                         PlayerController(player: player, drag: dismissDrag).ignoresSafeArea(edges: .bottom)
                     }
                 case .image:
-                    ZoomableImage(url: item.url, headers: item.headers, drag: dismissDrag)
+                    if pages.count > 1 {
+                        // 图集：左右滑动翻页，每页可单独缩放；放大后先在图内平移，到边缘再翻页
+                        TabView(selection: $page) {
+                            ForEach(pages) { image in
+                                ZoomableImageFile(source: .remote(image.url, headers: image.headers),
+                                                  onTap: { chromeVisible.toggle() }, drag: dismissDrag)
+                                    .tag(image.id)
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        .ignoresSafeArea(edges: .bottom)
+                    } else {
+                        ZoomableImageFile(source: .remote(item.url, headers: item.headers),
+                                          onTap: { chromeVisible.toggle() }, drag: dismissDrag)
+                            .ignoresSafeArea(edges: .bottom)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -79,7 +123,11 @@ struct MediaPreviewView: View {
         .preferredColorScheme(.dark)
         .presentationBackground(.clear)
         // onAppear 可能不止一次（画中画回来等）：已有播放器就不重建，免得从头播放
-        .onAppear { if player == nil && failure == nil { startPlayer() } }
+        .onAppear {
+            if page.isEmpty { page = item.url }
+            if player == nil && failure == nil { startPlayer() }
+        }
+        .sensoryFeedback(.selection, trigger: page)
         .onDisappear { player?.pause() }
     }
 
@@ -103,48 +151,5 @@ struct MediaPreviewView: View {
                 }
             }
         }
-    }
-}
-
-struct ZoomableImage: View {
-    let url: String
-    var headers: [String: String] = [:]
-    /// 未放大时往下拖关闭
-    var drag: DismissDrag?
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
-
-    var body: some View {
-        RemoteImage(url: url, headers: headers, contentMode: .fit)
-            .scaleEffect(scale)
-            .offset(offset)
-            .gesture(
-                MagnifyGesture()
-                    .onChanged { scale = max(1, min(6, lastScale * $0.magnification)) }
-                    .onEnded { _ in lastScale = scale; if scale == 1 { offset = .zero; lastOffset = .zero } }
-                    .simultaneously(with: DragGesture()
-                        .onChanged { v in
-                            guard scale > 1 else {
-                                if v.translation.height > 0 && v.translation.height > abs(v.translation.width) { drag?.onChange(v.translation.height) }
-                                return
-                            }
-                            offset = CGSize(width: lastOffset.width + v.translation.width, height: lastOffset.height + v.translation.height)
-                        }
-                        .onEnded { v in
-                            guard scale > 1 else {
-                                let velocity = (v.predictedEndTranslation.height - v.translation.height) * 4
-                                drag?.onEnd(max(0, v.translation.height), velocity)
-                                return
-                            }
-                            lastOffset = offset
-                        })
-            )
-            .onTapGesture(count: 2) {
-                withAnimation(.spring) {
-                    if scale > 1 { scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero } else { scale = 2.5; lastScale = 2.5 }
-                }
-            }
     }
 }
