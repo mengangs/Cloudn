@@ -65,6 +65,8 @@ enum ScreenshotMode {
         case accountList = "account-list"
         case drive
         case settings
+        /// 真实网络：GitHub 仓库（和粘贴链接后的正常流程一样）
+        case github
 
         var tab: AppTab {
             switch self {
@@ -229,6 +231,7 @@ enum ScreenshotMode {
         switch screen {
         case .detect: return "链接: https://pan.baidu.com/s/1Xa9kLmN2bQ7rTcV 提取码: 8k2m 复制这段内容后打开百度网盘手机App，操作更方便哦"
         case .resolving, .resolveFailed: return "https://www.bilibili.com/video/BV1xK4y1Z7aB"
+        case .github: return "https://github.com/mengangs/Cloudn"
         case .collecting: return "https://www.douyin.com/user/MS4wLjABAAAAv7iSuuXDJGDvJkmH_vz1qkDZYo1apxgzaxdBSeIuPi2tKj"
         case .sharePassword: return "https://pan.baidu.com/s/1AbCdEfGh2jKmN3p"
         case .shareExpired: return "https://pan.quark.cn/s/0d9e8f7a6b5c"
@@ -794,7 +797,7 @@ struct ScreenshotRootView: View {
             shareModel = ShareBrowserModel(app: model, share: share, pwd: share.pwd, sourceText: ScreenshotMode.demoLink)
         }
         switch screen {
-        case .resolving, .collecting, .resolveFailed:
+        case .resolving, .collecting, .resolveFailed, .github:
             model.pendingInput = ScreenshotMode.demoLink
         case .batch:
             let job = ScreenshotMode.makeBatch()
