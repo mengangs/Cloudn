@@ -24,11 +24,10 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         buildCard()
-        for name in [NSNotification.Name.NSExtensionHostWillResignActive, .NSExtensionHostDidEnterBackground] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.hostLeft = true
-            })
-        }
+        // 只认「进入后台」：失去活跃状态（弹出系统提示等）不代表已经跳到了 Cloudn
+        observers.append(NotificationCenter.default.addObserver(forName: .NSExtensionHostDidEnterBackground, object: nil, queue: .main) { [weak self] _ in
+            self?.hostLeft = true
+        })
     }
 
     deinit {
@@ -63,14 +62,17 @@ final class ShareViewController: UIViewController {
     private func open() async -> Bool {
         guard let url = sharedURL else { return false }
         setOpening()
-        hostLeft = false
-        let accepted = await openHostApp(url)
-        if accepted {
+        // 依次试场景和应用对象的打开接口：系统说接受了还要等分享来源的应用真的进入后台，才算跳过去了
+        for target in openTargets() {
+            hostLeft = false
+            guard await openHostApp(url, via: target) else { continue }
             for _ in 0..<20 where !hostLeft { try? await Task.sleep(nanoseconds: 100_000_000) }
+            if hostLeft {
+                extensionContext?.completeRequest(returningItems: nil)
+                return true
+            }
         }
-        guard accepted, hostLeft else { return false }
-        extensionContext?.completeRequest(returningItems: nil)
-        return true
+        return false
     }
 
     // MARK: 界面
@@ -192,35 +194,67 @@ final class ShareViewController: UIViewController {
             .joined(separator: " ")
     }
 
-    /// 扩展里 UIApplication 的打开接口在编译期不可用：沿响应链找到能响应
-    /// openURL:options:completionHandler: 的对象（即应用对象），按方法实现直接调用。
-    /// 等系统回报是否真的打开了；3 秒没有回音按失败处理（走剪贴板兜底）
-    @MainActor
-    private func openHostApp(_ url: URL) async -> Bool {
-        typealias Completion = @convention(block) (Bool) -> Void
-        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, Completion?) -> Void
+    /// 能打开链接的对象：响应链上的场景（UIScene）和应用对象（UIApplication）。
+    /// 两者的打开方法同名（openURL:options:completionHandler:）但 options 的类型不同：
+    /// 场景是 UISceneOpenExternalURLOptions、应用是字典。以前遇到谁就按字典去调，新系统的扩展里
+    /// 响应链上先遇到的是场景，传字典进去就崩，扩展一闪就没了。所以只认这两类，按各自的签名调用
+    private enum OpenTarget {
+        case scene(UIResponder)
+        case application(UIResponder)
+    }
+
+    private func openTargets() -> [OpenTarget] {
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        let sceneClass: AnyClass? = NSClassFromString("UIScene")
+        let applicationClass: AnyClass? = NSClassFromString("UIApplication")
+        var scenes: [OpenTarget] = []
+        var applications: [OpenTarget] = []
         var responder: UIResponder? = self
         while let current = responder {
-            if current.responds(to: selector), let imp = current.method(for: selector) {
-                let open = unsafeBitCast(imp, to: OpenURL.self)
-                return await withCheckedContinuation { continuation in
-                    // 回调与超时只有先到的那个生效（都在主线程上）
-                    let once = ResumeOnce()
-                    let finish: (Bool) -> Void = { ok in
-                        guard !once.done else { return }
-                        once.done = true
-                        continuation.resume(returning: ok)
-                    }
-                    open(current, selector, url as NSURL, NSDictionary(), { ok in
-                        DispatchQueue.main.async { finish(ok) }
-                    })
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(false) }
+            if current.responds(to: selector) {
+                if let sceneClass, current.isKind(of: sceneClass) {
+                    scenes.append(.scene(current))
+                } else if let applicationClass, current.isKind(of: applicationClass) {
+                    applications.append(.application(current))
                 }
             }
             responder = current.next
         }
-        return false
+        return scenes + applications
+    }
+
+    /// 扩展里 UIApplication / UIScene 的打开接口在编译期不可用：按方法实现直接调用。
+    /// 等系统回报是否接受；3 秒没有回音按失败处理
+    @MainActor
+    private func openHostApp(_ url: URL, via target: OpenTarget) async -> Bool {
+        typealias Completion = @convention(block) (Bool) -> Void
+        typealias OpenWithDictionary = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, Completion?) -> Void
+        typealias OpenWithSceneOptions = @convention(c) (AnyObject, Selector, NSURL, AnyObject?, Completion?) -> Void
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        let object: UIResponder
+        switch target {
+        case .scene(let scene): object = scene
+        case .application(let application): object = application
+        }
+        guard let imp = object.method(for: selector) else { return false }
+        return await withCheckedContinuation { continuation in
+            // 回调与超时只有先到的那个生效（都在主线程上）
+            let once = ResumeOnce()
+            let finish: (Bool) -> Void = { ok in
+                guard !once.done else { return }
+                once.done = true
+                continuation.resume(returning: ok)
+            }
+            let completion: Completion = { ok in DispatchQueue.main.async { finish(ok) } }
+            switch target {
+            case .scene:
+                // 场景的 options 传 nil（默认选项）
+                unsafeBitCast(imp, to: OpenWithSceneOptions.self)(object, selector, url as NSURL, nil, completion)
+            case .application:
+                unsafeBitCast(imp, to: OpenWithDictionary.self)(object, selector, url as NSURL, NSDictionary(), completion)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(false) }
+        }
     }
 }
 
