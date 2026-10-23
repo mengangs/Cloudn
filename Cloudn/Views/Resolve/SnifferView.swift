@@ -69,6 +69,13 @@ struct SnifferView: View {
         _browser = State(initialValue: SnifferBrowser(url: url))
     }
 
+    #if DEBUG
+    /// 截图模式：用预先放好演示结果的浏览器
+    init(browser: SnifferBrowser) {
+        _browser = State(initialValue: browser)
+    }
+    #endif
+
     var body: some View {
         NavigationStack {
             SnifferWebView(browser: browser)
@@ -825,6 +832,22 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
     })();
     """#
 }
+
+#if DEBUG
+extension SnifferBrowser {
+    /// 截图模式：直接放进演示用的媒体与 MSE 轨道（已探测完成），不等网页真的播放
+    func loadDemo(_ list: [(url: String, kind: SniffedMedia.Kind, info: MediaProbeResult)], mse: [String: String] = [:]) {
+        for entry in list where !seen.contains(entry.url) {
+            seen.insert(entry.url)
+            var media = SniffedMedia(url: entry.url, kind: entry.kind, page: currentURL, title: title)
+            media.info = entry.info
+            media.probing = false
+            medias.append(media)
+        }
+        mseTracks.merge(mse) { $1 }
+    }
+}
+#endif
 
 /// WKUserContentController 强引用消息处理者：中间隔一层弱引用，避免浏览器状态永远释放不掉
 private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {

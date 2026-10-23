@@ -44,7 +44,13 @@ final class ShareBrowserModel: Hashable, Identifiable {
         self.sourceText = sourceText
     }
 
-    private var resolver: ShareResolver? { app.resolvers.resolver(for: share.platform) }
+    private var resolver: ShareResolver? {
+        #if DEBUG
+        // 截图模式：换成本地演示数据（见 ScreenshotMode.swift）
+        if let demo = ScreenshotMode.shareService(for: share.platform) { return demo }
+        #endif
+        return app.resolvers.resolver(for: share.platform)
+    }
     var title: String { session?.title ?? share.platform.displayName }
     var currentDir: String { crumbs.last?.id ?? session?.rootId ?? "0" }
 
@@ -323,7 +329,12 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     // MARK: 转存到我的网盘
 
-    var saver: ShareSaver? { app.resolvers.saver(for: share.platform) }
+    var saver: ShareSaver? {
+        #if DEBUG
+        if let demo = ScreenshotMode.shareService(for: share.platform) { return demo }
+        #endif
+        return app.resolvers.saver(for: share.platform)
+    }
 
     /// 支持转存、但还没登录对应账号
     var saveNeedsLogin: Bool {

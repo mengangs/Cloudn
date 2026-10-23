@@ -121,6 +121,14 @@ final class BatchJob: Identifiable {
 
     private static func key(url: String) -> String { "u|" + url }
     private static func key(page: String, file: String) -> String { page.isEmpty ? "" : "p|\(page)|\(file)" }
+
+    #if DEBUG
+    /// 截图模式：各条直接设成给定状态；running 只让界面显示为进行中，不真的解析
+    func setDemoStates(_ states: [State], running: Bool) {
+        for (i, state) in states.enumerated() where i < items.count { items[i].state = state }
+        self.running = running
+    }
+    #endif
 }
 
 extension AppModel {

@@ -42,6 +42,13 @@ struct ResolveView: View {
     @AppStorage(Clipboard.handledChangeKey) private var handledChange = -1
     @FocusState private var focused: Bool
 
+    init() {}
+
+    #if DEBUG
+    /// 截图模式：输入框里预先填好内容，停在识别结果上
+    init(demoInput: String) { _input = State(initialValue: demoInput) }
+    #endif
+
     private var trimmed: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// 输入识别（几十条正则）：body 里十几处要用，同一段输入只算一次
     private var detection: InputDetection { Self.detection(for: input) }
@@ -725,7 +732,7 @@ struct ResolveView: View {
                     }
                 }
                 do {
-                    let result = try await CollectionProgress.$current.withValue(progress) { try await app.videoService.parse(link) }
+                    let result = try await CollectionProgress.$current.withValue(progress) { try await parseVideo(link) }
                     try Task.checkCancellation()
                     guard !result.medias.isEmpty || !result.entries.isEmpty else { throw CloudnError("没有解析到可下载的媒体") }
                     app.bookmarks.record(title: result.title.isEmpty ? result.platform.displayName : result.title,
@@ -766,6 +773,14 @@ struct ResolveView: View {
                 enqueueDirect(url)
             }
         }
+    }
+
+    private func parseVideo(_ link: DetectedVideoLink) async throws -> VideoParseResult {
+        #if DEBUG
+        // 截图模式：解析中 / 解析失败等状态用演示结果（见 ScreenshotMode.swift）
+        if let demo = try await ScreenshotMode.parse(link) { return demo }
+        #endif
+        return try await app.videoService.parse(link)
     }
 
     /// 地址没有文件扩展名，或扩展名是网页类（html / php …），可能是网页而不是文件

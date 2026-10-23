@@ -55,8 +55,12 @@ final class AppModel {
 
     init() {
         let fm = FileManager.default
-        // 截图模式（-CloudnScreenshot）：换成每次启动清空的临时目录并预置演示数据；正常启动为 nil。见 ScreenshotMode.swift
+        #if DEBUG
+        // 截图模式（-CloudnScreenshot，仅 Debug 构建）：换成每次启动清空的临时目录并预置演示数据；正常启动为 nil。见 ScreenshotMode.swift
         let demo = ScreenshotMode.prepare()
+        #else
+        let demo: (support: URL, documents: URL)? = nil
+        #endif
         let support = demo?.support ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Cloudn", isDirectory: true)
         let documents = demo?.documents ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         try? fm.createDirectory(at: support, withIntermediateDirectories: true)
@@ -64,8 +68,10 @@ final class AppModel {
         Log.configure(file: support.appendingPathComponent("logs/cloudn.log"))
         settings = AppSettings()
         accounts = AccountStore()
+        #if DEBUG
         // 截图模式：演示账号已读进内存，从钥匙串删掉（正常启动时无操作）
         if demo != nil { ScreenshotMode.accountsLoaded() }
+        #endif
         bookmarks = BookmarkStore(directory: support)
         resolvers = ShareResolvers(credentials: accounts.vault, options: settings.resolverOptions)
         uploads = UploadStore(resolvers: resolvers)

@@ -1,7 +1,8 @@
 name: Screenshots
 
-# 在模拟器里以截图模式（-CloudnScreenshot <页面>，固定演示数据，见 Cloudn/App/ScreenshotMode.swift）启动应用，
-# 逐页截浅色 / 深色两套图，打包成 screenshots 产物：用来检查界面（含深色模式）和给 README 配图
+# 在模拟器里以截图模式（-CloudnScreenshot <页面>，仅 Debug 构建，固定演示数据，见 Cloudn/App/ScreenshotMode.swift）启动应用，
+# 逐页截 4 种条件：浅色 light / 深色 dark / 最大辅助字号 a11y / iPad，按「页面-条件.png」命名，打包成 screenshots 产物：
+# 用来检查界面和给 README 配图
 on:
   workflow_dispatch:
   push:
@@ -15,7 +16,7 @@ jobs:
   screenshots:
     name: Simulator screenshots
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 100
     permissions:
       contents: write
     env:
@@ -94,6 +95,13 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "$SHOTS"
+          # 页面:等待秒数（页面清单见 Cloudn/App/ScreenshotMode.swift 的 Screen）
+          SCREENS="resolve:6 resolve-empty:5 clipboard:6 detect:5 resolving:5 collecting:6 resolve-failed:6
+            video:6 video-added:6 video-bili:6 collection:6 batch:6
+            share:6 share-select:7 share-password:6 share-expired:6 share-guest:6 save:8
+            sniffer:8 sniffer-list:9 sniffer-record:9
+            downloads:10 downloads-empty:5 preview-image:6 preview-text:6
+            me:6 me-empty:5 account-list:6 drive:6 settings:5"
           prepare() {  # 启动完成 → 干净的状态栏 → 安装
             xcrun simctl boot "$1" 2>/dev/null || true
             xcrun simctl bootstatus "$1" -b
@@ -108,37 +116,53 @@ jobs:
           collect_log() {  # 应用日志（截图模式的临时目录里）一并放进产物，排查用
             local dir
             dir=$(xcrun simctl get_app_container "$1" "$BID" data 2>/dev/null) || return 0
-            cp "$dir/tmp/CloudnScreenshot/support/logs/cloudn.log" "$SHOTS/log-$1.txt" 2>/dev/null || true
+            cp "$dir/tmp/CloudnScreenshot/support/logs/cloudn.log" "$SHOTS/log-$2.txt" 2>/dev/null || true
           }
-          shoot() {  # udid 设备前缀 页面 等待秒数
-            local udid=$1 device=$2 screen=$3 wait=$4
-            for mode in light dark; do
-              xcrun simctl ui "$udid" appearance "$mode"
+          snap() {  # udid 文件名
+            xcrun simctl io "$1" screenshot --type=png "$SHOTS/$2.png" || echo "::warning::$2 截图失败"
+          }
+          shoot_all() {  # udid 条件
+            local udid=$1 condition=$2 entry screen wait
+            for entry in $SCREENS; do
+              screen=${entry%%:*}; wait=${entry##*:}
               launch "$udid" "$screen"
               sleep "$wait"
-              xcrun simctl io "$udid" screenshot --type=png "$SHOTS/$device-$screen-$mode.png" || echo "::warning::$device $screen $mode 截图失败"
+              snap "$udid" "$screen-$condition"
             done
+            # 真实网络：用 URL Scheme 打开一个 GitHub 仓库（走正常解析流程）
+            launch "$udid" resolve-empty
+            sleep 4
+            xcrun simctl openurl "$udid" "cloudn://resolve?text=https%3A%2F%2Fgithub.com%2Fmengangs%2FCloudn"
+            sleep 8
+            snap "$udid" "github-$condition"
             xcrun simctl terminate "$udid" "$BID" >/dev/null 2>&1 || true
           }
+
           prepare "$PHONE"
           # 第一次启动较慢（dyld 缓存、字体），先空跑一次
           launch "$PHONE" resolve; sleep 15
-          shoot "$PHONE" iphone resolve 6
-          shoot "$PHONE" iphone video 6
-          shoot "$PHONE" iphone downloads 12
-          shoot "$PHONE" iphone me 6
-          shoot "$PHONE" iphone settings 5
-          shoot "$PHONE" iphone preview-image 6
-          shoot "$PHONE" iphone preview-text 6
-          collect_log "$PHONE"
+          xcrun simctl ui "$PHONE" appearance light
+          shoot_all "$PHONE" light
+          xcrun simctl ui "$PHONE" appearance dark
+          shoot_all "$PHONE" dark
+          # 最大辅助字号（浅色）
+          xcrun simctl ui "$PHONE" appearance light
+          xcrun simctl ui "$PHONE" content_size accessibility-extra-extra-extra-large
+          shoot_all "$PHONE" a11y
+          xcrun simctl ui "$PHONE" content_size large
+          collect_log "$PHONE" iphone
           xcrun simctl shutdown "$PHONE"
+
           prepare "$PAD"
-          launch "$PAD" downloads; sleep 15
-          shoot "$PAD" ipad downloads 12
-          collect_log "$PAD"
+          launch "$PAD" resolve; sleep 15
+          xcrun simctl ui "$PAD" appearance light
+          shoot_all "$PAD" ipad
+          collect_log "$PAD" ipad
           ls -la "$SHOTS"
           {
             echo "## 截图（${PHONE_NAME} / ${PAD_NAME}）"
+            echo
+            echo "条件：light 浅色 · dark 深色 · a11y 最大辅助字号 · ipad iPad 浅色"
             echo
             ls "$SHOTS" | sed 's/^/- /'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -148,7 +172,7 @@ jobs:
         if: always() && github.ref == 'refs/heads/wip-shots'
         run: |
           mkdir -p preview
-          for f in "$SHOTS"/*.png; do sips -s format jpeg -s formatOptions 88 -Z 1800 "$f" --out "preview/$(basename "${f%.png}").jpg" >/dev/null; done
+          for f in "$SHOTS"/*.png; do sips -s format jpeg -s formatOptions 80 -Z 1400 "$f" --out "preview/$(basename "${f%.png}").jpg" >/dev/null; done
           cp "$SHOTS"/log-*.txt preview/ 2>/dev/null || true
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"

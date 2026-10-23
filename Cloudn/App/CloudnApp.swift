@@ -16,12 +16,16 @@ struct CloudnApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                // 截图模式（-CloudnScreenshot）：直接停在指定页面，不弹须知 / 更新提示。见 ScreenshotMode.swift
+                #if DEBUG
+                // 截图模式（-CloudnScreenshot，仅 Debug 构建）：直接停在指定页面，不弹须知 / 更新提示。见 ScreenshotMode.swift
                 if let screen = ScreenshotMode.screen {
                     ScreenshotRootView(screen: screen)
                 } else {
                     RootView()
                 }
+                #else
+                RootView()
+                #endif
             }
             .environment(model)
             .onOpenURL { model.handle(url: $0) }
