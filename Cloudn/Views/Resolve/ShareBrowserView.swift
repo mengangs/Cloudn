@@ -449,9 +449,9 @@ struct ShareBrowserView: View {
                 // 按钮保持原宽，挤的是左边的说明文字；辅助字号下两个按钮上下排、各占满一行
                 AdaptiveStack(spacing: 10) {
                     if model.saver != nil {
-                        Button("转存") { startSave(chosen) }
+                        // 宽度放在标签里：放在按钮外面撑不开胶囊
+                        Button { startSave(chosen) } label: { Text("转存").frame(maxWidth: large ? .infinity : nil) }
                             .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
-                            .frame(maxWidth: large ? .infinity : nil)
                     }
                     Button { Task { await model.downloadSelected() } } label: {
                         Label { Text("下载") } icon: { Image(icon: .download) }
@@ -489,9 +489,10 @@ struct ShareBrowserView: View {
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 46))
                 HStack(spacing: 8) {
                     if model.saver != nil {
-                        Button("转存") { startSave(model.files) }
-                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 46))
-                            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil)
+                        Button { startSave(model.files) } label: {
+                            Text("转存").frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil)
+                        }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 46))
                     }
                     Button { model.selecting = true } label: { IconView(.checkCircle, size: 19) }
                         .buttonStyle(CircleIconButtonStyle(size: 46))
