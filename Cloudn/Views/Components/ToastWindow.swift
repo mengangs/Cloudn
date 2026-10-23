@@ -27,7 +27,7 @@ private struct ToastHost: View {
     var body: some View {
         @Bindable var model = model
         Color.clear
-            .toastOverlay($model.toast)
+            .toastOverlay($model.toast, lift: model.toastLifts.values.max() ?? 0)
             .preferredColorScheme(model.settings.appearance.colorScheme)
             .tint(model.settings.accentColor)
     }

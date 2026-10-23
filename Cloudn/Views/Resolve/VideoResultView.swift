@@ -122,6 +122,7 @@ struct VideoResultView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { bottomBar.padding(.horizontal, 16).padding(.bottom, 8).readableWidth() }
+        .liftsToast()
         .sensoryFeedback(.selection, trigger: selected)
         .animation(.snappy(duration: 0.25), value: selecting)
         .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }

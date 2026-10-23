@@ -32,6 +32,8 @@ final class AppModel {
 
     var selectedTab: AppTab = .resolve
     var toast: Toast?
+    /// 当前页面底部浮动操作条的高度（按页面登记，取最高的）：轻提示抬到它上方，不盖住主按钮
+    var toastLifts: [UUID: CGFloat] = [:]
     /// 外部（URL Scheme / 分享）送进来的待解析文本
     var pendingInput: String?
     /// 外部打开 / 导入的种子文件（解析页接手）

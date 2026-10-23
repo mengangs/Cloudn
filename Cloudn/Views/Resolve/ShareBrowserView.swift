@@ -67,6 +67,7 @@ struct ShareBrowserView: View {
             .onChange(of: model.currentDir) { query = "" }
             .toolbar { toolbar }
             .safeAreaInset(edge: .bottom) { actionBar.padding(.horizontal, 16).padding(.bottom, 8).readableWidth() }
+            .liftsToast(72)
             .refreshable { await model.reloadCurrent(force: true) }
             .task { await model.open() }
             // 离开分享页（返回、切到别的标签页）：预览 / 复制直链留下的临时转存一并清理；全屏预览盖住时不算离开

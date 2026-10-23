@@ -123,6 +123,8 @@ struct ResolveView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: detectionKey)
             }
             .background(Color.paper)
+            // 输入框浮在底部：提示出现在它上方
+            .liftsToast()
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $shareModel) { ShareBrowserView(model: $0) }
             // 离开分享页（返回或换了一个分享）：清掉预览 / 复制直链留下的临时转存

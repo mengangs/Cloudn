@@ -4,7 +4,7 @@ import SwiftUI
 extension View {
     /// 全局轻提示：底部胶囊，按文字长短停留 2.5～8 秒（错误至少 4 秒）后自动消失。
     /// 所在窗口不接收触摸（见 ToastWindowPresenter），所以不提供点按关闭
-    func toastOverlay(_ toast: Binding<Toast?>) -> some View {
+    func toastOverlay(_ toast: Binding<Toast?>, lift: CGFloat = 0) -> some View {
         overlay(alignment: .bottom) {
             if let t = toast.wrappedValue {
                 HStack(spacing: 10) {
@@ -20,7 +20,7 @@ extension View {
                 .background(Color.ink, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .floatingShadow()
                 .padding(.horizontal, 24)
-                .padding(.bottom, 64)
+                .padding(.bottom, 64 + lift)
                 .sensoryFeedback(t.isError ? .error : .success, trigger: t.id)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .id(t.id)
@@ -31,6 +31,24 @@ extension View {
             }
         }
         .animation(.spring(duration: 0.35), value: toast.wrappedValue)
+    }
+
+    /// 页面底部有浮动操作条（全部下载、输入框等）时登记它的高度：这一页显示时轻提示抬到操作条上方
+    func liftsToast(_ height: CGFloat = 64) -> some View {
+        modifier(ToastLift(height: height))
+    }
+}
+
+private struct ToastLift: ViewModifier {
+    let height: CGFloat
+    @Environment(AppModel.self) private var app
+    /// 按页面登记：返回上一页时新页面的出现可能早于旧页面的消失，各记各的，互不覆盖
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { app.toastLifts[id] = height }
+            .onDisappear { app.toastLifts[id] = nil }
     }
 }
 
