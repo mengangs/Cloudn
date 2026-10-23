@@ -833,7 +833,7 @@ struct ScreenshotRootView: View {
             Task {
                 try? await Task.sleep(for: .seconds(2.5))
                 model.downloads.enqueue(media: media, result: result)
-                model.show("已添加到下载")
+                model.show("已加入下载")
             }
         default:
             break

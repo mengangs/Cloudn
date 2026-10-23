@@ -251,7 +251,7 @@ struct DownloadsView: View {
             }
             .exportPicker(urls: $exportURLs) { done in
                 guard done else { return }
-                app.show("已存储到「文件」")
+                app.show("已保存到「文件」")
                 withAnimation(.snappy(duration: 0.25)) { selecting = false; selection = [] }
             }
             .safeAreaInset(edge: .bottom) {
@@ -285,7 +285,7 @@ struct DownloadsView: View {
             if !files.isEmpty {
                 Button { exportURLs = files } label: { IconView(.folder, size: 16) }
                     .buttonStyle(CircleIconButtonStyle(size: 40))
-                    .accessibilityLabel("存储到「文件」")
+                    .accessibilityLabel("保存到「文件」")
             }
             if canResume {
                 Button { app.downloads.resume(chosen.filter { $0.status == .paused || $0.status == .failed }) } label: {
@@ -401,7 +401,7 @@ struct DownloadsView: View {
             } else {
                 Button { previewURL = url } label: { Label("打开", glyph: .eye) }
             }
-            ShareLink(item: url) { Label("分享 / 存储到文件", glyph: .share) }
+            ShareLink(item: url) { Label("分享 / 保存到「文件」", glyph: .share) }
             if facts.canSaveToPhotos {
                 Button {
                     Task {

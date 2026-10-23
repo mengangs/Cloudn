@@ -27,7 +27,7 @@ struct SettingsView: View {
                             ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
                         }
                         NavigationLink("连接数（按平台）") { PlatformConnectionsView() }
-                        Toggle("下载完成后存入相册", isOn: $settings.autoSaveToPhotos)
+                        Toggle("下载完成后保存到相册", isOn: $settings.autoSaveToPhotos)
                         Toggle("下载完成通知", isOn: $settings.notifyOnFinish)
                         Toggle("锁屏与灵动岛显示进度", isOn: $settings.liveActivity)
                     } header: {
@@ -68,7 +68,7 @@ struct SettingsView: View {
                     } header: {
                         Text("下载位置")
                     } footer: {
-                        Text("选择「文件」App 中的文件夹（如 iCloud 云盘）后，下载完成的文件会移过去并保留目录层级。\n\n若选好后点「打开」没反应，是当前签名方式不允许访问外部文件夹：可在下载页多选文件，用文件夹按钮存储到「文件」。")
+                        Text("选择「文件」App 中的文件夹（如 iCloud 云盘）后，下载完成的文件会移过去并保留目录层级。\n\n若选好后点「打开」没反应，是当前签名方式不允许访问外部文件夹：可在下载页多选文件，用文件夹按钮保存到「文件」。")
                     }
 
                     Section("外观") {

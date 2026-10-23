@@ -356,7 +356,7 @@ struct SnifferView: View {
                 request = DownloadRequest(url: media.url, headers: headers, fileName: name, kind: .file, source: "网页嗅探")
             }
             app.downloads.enqueue(request)
-            app.show("已添加到下载")
+            app.show("已加入下载")
             browser.showingList = false
         }
     }

@@ -229,7 +229,7 @@ struct VideoResultView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("播放视频")
         .contextMenu {
-            Button { saveCover() } label: { Label { Text("保存封面") } icon: { Image(icon: .download) } }
+            Button { saveCover() } label: { Label { Text("下载封面") } icon: { Image(icon: .download) } }
             Button { Clipboard.copy(result.cover); app.show("已复制封面地址") } label: {
                 Label { Text("复制封面地址") } icon: { Image(icon: .link) }
             }
@@ -247,7 +247,7 @@ struct VideoResultView: View {
         }
         app.downloads.enqueue(DownloadRequest(url: result.cover, headers: videos.first?.headers ?? [:], fileName: name,
                                               kind: .file, source: result.platform.displayName))
-        app.show("封面已添加到下载")
+        app.show("封面已加入下载")
     }
 
     // MARK: 视频
@@ -713,7 +713,7 @@ struct VideoResultView: View {
         let group = units > 1 ? DownloadGroup(title: result.title.isEmpty ? result.platform.displayName : result.title) : nil
         for m in pending { app.downloads.enqueue(media: m, result: result, folder: folder, group: group) }
         let skipped = medias.filter { !liveClipIDs.contains($0.id) }.count - units
-        app.show(units > 1 ? "已添加 \(units) 个" + (skipped > 0 ? " · 跳过 \(skipped) 个已下载" : "") : "已添加到下载")
+        app.show(units > 1 ? "已加入下载 \(units) 个" + (skipped > 0 ? " · 跳过 \(skipped) 个已下载" : "") : "已加入下载")
     }
 }
 

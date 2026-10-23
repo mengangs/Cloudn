@@ -314,8 +314,8 @@ struct ResolveView: View {
     }
 
     private var submitLabel: String {
-        if case .direct = detected { return "添加到下载" }
-        if case .github(.file) = detected { return "添加到下载" }
+        if case .direct = detected { return "加入下载" }
+        if case .github(.file) = detected { return "加入下载" }
         return "开始解析"
     }
 
@@ -867,7 +867,7 @@ struct ResolveView: View {
         app.downloads.enqueue(DownloadRequest(url: url, headers: ["User-Agent": VideoHTTP.uaChrome],
                                               fileName: kind == .hls ? (name as NSString).deletingPathExtension + ".mp4" : name,
                                               kind: kind, source: "直链"))
-        app.show("已添加到下载")
+        app.show("已加入下载")
         input = ""
     }
 

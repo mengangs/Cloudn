@@ -15,7 +15,7 @@ extension AppModel {
         }
         downloads.enqueue(DownloadRequest(url: mirrored, headers: headers, fileName: name, folder: folder,
                                           expectedSize: size, source: "GitHub", group: group))
-        show("已添加到下载")
+        show("已加入下载")
     }
 
     /// Release 附件：私有仓库带 Token 走 API 地址（浏览器下载地址对私有仓库是 404），公开仓库照常（可走镜像）
@@ -26,7 +26,7 @@ extension AppModel {
         }
         downloads.enqueue(DownloadRequest(url: asset.apiURL, headers: asset.privateDownloadHeaders(token: token), fileName: asset.name,
                                           folder: folder, expectedSize: asset.size, source: "GitHub"))
-        show("已添加到下载")
+        show("已加入下载")
     }
 
     /// GitHub 文件最近一次的下载任务（按文件名与目录对上）

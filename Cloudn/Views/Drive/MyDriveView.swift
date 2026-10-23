@@ -323,7 +323,7 @@ struct DriveFolderView: View {
                 let link = try await manager.driveDownloadLink(file)
                 app.downloads.enqueue(link: link, platform: platform, folder: "", origin: nil,
                                       refresh: .drive(platform: platform, file: DriveFileRef(file)))
-                app.show("已添加到下载")
+                app.show("已加入下载")
             } catch {
                 app.show(error.localizedDescription, error: true)
             }

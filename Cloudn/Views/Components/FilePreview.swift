@@ -171,7 +171,7 @@ struct FilePreviewView: View {
                 .accessibilityLabel("分享")
             Menu {
                 if converted != nil {
-                    Button { saveConverted() } label: { Label("保存转换后的 MP4 到下载", glyph: .download) }
+                    Button { saveConverted() } label: { Label("转换后的 MP4 加入下载", glyph: .download) }
                         .disabled(savingConverted)
                 }
                 Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: { Label("在「文件」中查看", glyph: .folder) }
@@ -326,7 +326,7 @@ struct FilePreviewView: View {
                     try Data(sub.srt.utf8).write(to: file)
                     try await app.downloads.importLocalFile(file, name: "\(base).\(tag).srt", source: "格式转换")
                 }
-                app.show(subtitles.isEmpty ? "已保存 MP4 到下载" : "已保存 MP4 和 \(subtitles.count) 个字幕到下载")
+                app.show(subtitles.isEmpty ? "MP4 已加入下载" : "MP4 和 \(subtitles.count) 个字幕已加入下载")
             } catch {
                 app.show(error.localizedDescription, error: true)
             }

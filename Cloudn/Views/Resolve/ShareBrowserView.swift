@@ -414,7 +414,7 @@ struct ShareBrowserView: View {
         }
     }
 
-    /// 底部浮动操作条：平时是「下载全部 / 转存 / 多选」，多选时是已选数量与操作，批量取链时是进度
+    /// 底部浮动操作条：平时是「全部下载 / 转存 / 多选」，多选时是已选数量与操作，批量取链时是进度
     @ViewBuilder
     private var actionBar: some View {
         if let batch = model.batch {
@@ -467,12 +467,12 @@ struct ShareBrowserView: View {
             .floatingShadow()
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else if !model.files.isEmpty && model.errorMessage == nil {
-            // 辅助字号下：「下载全部」占满一行，「转存」与多选在下一行
+            // 辅助字号下：「全部下载」占满一行，「转存」与多选在下一行
             AnyLayout.adaptive(typeSize, spacing: 8) {
                 Button { Task { await model.downloadAll() } } label: {
                     HStack(spacing: 6) {
                         Image(icon: .download)
-                        Text("下载全部")
+                        Text("全部下载")
                         // 跟随按钮前景色（浅色强调色上是深墨色），只是淡一点
                         Text("· \(model.files.count) 项").opacity(0.75)
                     }
@@ -625,7 +625,7 @@ struct ShareBrowserView: View {
             // 两次点按都排进来时，第二个在这里看到第一个已占住（取链开始前同步记下）
             guard !model.busyFileIds.contains(file.fid) else { return }
             try await model.download(file)
-            app.show("已添加到下载")
+            app.show("已加入下载")
         }
     }
 

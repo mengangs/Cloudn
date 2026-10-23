@@ -246,7 +246,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
 
     private func downloadBatch(_ items: [ShareFile]) async {
         guard let session, let resolver else { return }
-        // 上一批还在取链（连点「下载全部」、或又点了「下载整个文件夹」）：不再并行开一批，免得重复入队
+        // 上一批还在取链（连点「全部下载」、或又点了「下载整个文件夹」）：不再并行开一批，免得重复入队
         guard batch == nil else {
             app.show("上一批还在获取直链，请稍候")
             return
@@ -272,7 +272,7 @@ final class ShareBrowserModel: Hashable, Identifiable {
             app.show("没有可下载的文件", error: true)
             return
         }
-        // 已下完或正在下载的文件跳过，重复点「下载全部」不会重复入队
+        // 已下完或正在下载的文件跳过，重复点「全部下载」不会重复入队
         let existing = Set(app.downloads.items.compactMap { item -> String? in
             guard item.status != .failed, let origin = item.request.origin,
                   origin.platform == share.platform, origin.shareURL == share.url else { return nil }
@@ -303,9 +303,9 @@ final class ShareBrowserModel: Hashable, Identifiable {
         }
         let skipNote = skipped > 0 ? " · 跳过 \(skipped) 个已下载" : ""
         if failures == 0 {
-            app.show("已添加 \(queue.count) 个\(skipNote)")
+            app.show("已加入下载 \(queue.count) 个\(skipNote)")
         } else {
-            app.show("\(queue.count - failures) 个已添加，\(failures) 个失败：\(lastError)", error: true)
+            app.show("\(queue.count - failures) 个已加入下载，\(failures) 个失败：\(lastError)", error: true)
         }
     }
 

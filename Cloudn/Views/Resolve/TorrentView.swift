@@ -162,7 +162,7 @@ struct TorrentView: View {
                 .foregroundStyle(Color.ink3)
                 .fixedSize(horizontal: false, vertical: true)
             Button(action: downloadWithoutWaiting) {
-                Label("直接下载全部", glyph: .download).frame(maxWidth: .infinity)
+                Label("直接全部下载", glyph: .download).frame(maxWidth: .infinity)
             }
             .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
             .padding(.top, 4)
@@ -236,7 +236,7 @@ struct TorrentView: View {
     private var bottomBar: some View {
         let count = selected.count
         let all = count == files.count
-        let label = count == 0 ? "选择要下载的文件" : (all ? "下载全部" : "下载所选 · \(count) 个") + " · " + ByteFormat.string(selectedSize)
+        let label = count == 0 ? "选择要下载的文件" : (all ? "全部下载" : "下载所选 · \(count) 个") + " · " + ByteFormat.string(selectedSize)
         return Button(action: download) {
             HStack(spacing: 6) {
                 Image(icon: .download)
@@ -261,7 +261,7 @@ struct TorrentView: View {
         let dn = target.magnet.displayName.trimmingCharacters(in: .whitespaces)
         let name = dn.isEmpty ? "磁力链接 " + String(target.magnet.hexHash.prefix(8)) : dn
         app.downloads.enqueue(DownloadRequest(url: target.magnet.uri, fileName: name, kind: .torrent(files: nil), source: "磁力链接"))
-        app.show("已添加到下载，种子信息稍后获取")
+        app.show("已加入下载，种子信息稍后获取")
     }
 
     private func isQueued(_ magnet: MagnetLink) -> Bool {
@@ -284,6 +284,6 @@ struct TorrentView: View {
         app.downloads.enqueue(DownloadRequest(url: magnet.uri, fileName: info.name,
                                               kind: .torrent(files: all ? nil : selected.sorted()),
                                               expectedSize: selectedSize, source: "磁力链接"))
-        app.show("已添加到下载")
+        app.show("已加入下载")
     }
 }
