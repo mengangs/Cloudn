@@ -968,7 +968,7 @@ private struct HistoryRow: View {
             } else {
                 HStack(spacing: 5) {
                     ZStack {
-                        Circle().stroke(Color.hairline, lineWidth: 2)
+                        Circle().stroke(Color.track, lineWidth: 2)
                         Circle().trim(from: 0, to: Double(progress.done) / Double(max(1, progress.total)))
                             .stroke(.tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                             .rotationEffect(.degrees(-90))

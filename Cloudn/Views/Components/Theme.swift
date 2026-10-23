@@ -31,6 +31,8 @@ extension Color {
     static let hairline = dynamic(0xE3DED3, 0x3A3833)
     /// 卡片内分隔线（比外框更淡）
     static let divider = dynamic(0xECE8DE, 0x302E2A)
+    /// 进度条 / 进度环的底轨：比细线深一级，在卡片上看得出来；强调色进度对它仍有 3:1 以上
+    static let track = dynamic(0xD6CFC2, 0x4A4740)
     static let ink = dynamic(0x1F1E1B, 0xEDEAE3)
     static let ink2 = dynamic(0x66625A, 0xA8A397)
     /// 三级文字：对纸色、卡片底的对比度在两种外观下都不低于 4.5:1
@@ -400,7 +402,7 @@ struct ProgressLine: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.hairline)
+                Capsule().fill(Color.track)
                 if let value {
                     Capsule()
                         .fill(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tint))
@@ -447,7 +449,7 @@ struct ProgressRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(Color.hairline, lineWidth: lineWidth)
+            Circle().stroke(Color.track, lineWidth: lineWidth)
             if let value {
                 Circle()
                     .trim(from: 0, to: max(0.04, min(1, value)))

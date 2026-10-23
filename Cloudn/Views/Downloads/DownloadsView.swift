@@ -718,7 +718,7 @@ struct DownloadRow: View {
                     .foregroundStyle(Color.ink)
                 if item.status != .completed {
                     if let fraction = item.fraction {
-                        ProgressLine(value: fraction, tint: item.status == .paused ? Color.ink3 : (item.status == .failed ? Color.clayInk : nil))
+                        ProgressLine(value: fraction, tint: item.status == .paused ? Color.ink2 : (item.status == .failed ? Color.clayInk : nil))
                     } else if item.status == .running || item.status == .merging {
                         ProgressLine(value: nil)
                     }

@@ -82,7 +82,8 @@ struct SelectMark: View {
     var size: CGFloat = 22
     var body: some View {
         ZStack {
-            Circle().strokeBorder(on ? Color.clear : Color.hairline, lineWidth: 1.5)
+            // 未选中的圆圈用三级墨色（对卡片约 5:1），细线色在卡片上几乎看不见
+            Circle().strokeBorder(on ? Color.clear : Color.ink3, lineWidth: 1.5)
             if on {
                 Circle().fill(.tint)
                 Image(icon: .check).resizable().scaledToFit().frame(width: size * 0.5, height: size * 0.5)
