@@ -374,12 +374,12 @@ struct ShareBrowserView: View {
                 // 已失效的分享重试也没用：给能做的下一步（大字号下上下排）
                 AdaptiveStack(spacing: 10) {
                     Button { Clipboard.copy(model.sourceText); app.show("已复制分享链接") } label: {
-                        Label { Text("复制链接") } icon: { Image(icon: .link) }
+                        Label { Text("复制链接").lineLimit(1) } icon: { Image(icon: .link) }
                     }
                     .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
                     if let url = URL(string: model.share.url) {
                         Link(destination: url) {
-                            Label { Text("在浏览器中打开") } icon: { Image(icon: .share) }
+                            Label { Text("用浏览器打开").lineLimit(1) } icon: { Image(icon: .share) }
                         }
                         .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
                     }
