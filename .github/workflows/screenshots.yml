@@ -123,7 +123,7 @@ jobs:
             for try in 1 2 3; do
               xcrun simctl io "$1" screenshot --type=png "$file" >/dev/null 2>&1 || { echo "::warning::$2 截图失败"; return; }
               [ "$(stat -f%z "$file")" -gt 150000 ] && return
-              echo "$2 像是还没画出来，重截（$try）"
+              echo "$2 像是还没画出来，重截（${try}）"
               sleep 5
             done
           }
