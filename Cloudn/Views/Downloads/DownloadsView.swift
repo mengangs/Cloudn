@@ -65,11 +65,12 @@ struct DownloadsView: View {
     /// 卡片底色画在行内容上（不是列表的行背景），左右滑时整张卡片带着圆角一起移动
     private func row(_ item: DownloadItem, inset: CGFloat = 0) -> some View {
         let on = selection.contains(item.id)
+        let save = selecting ? nil : saveAction(item)
         return HStack(spacing: 12) {
             if selecting {
                 SelectMark(on: on).transition(.move(edge: .leading).combined(with: .opacity))
             }
-            DownloadRow(item: item, refreshing: refreshing.contains(item.id), showsControl: !selecting)
+            DownloadRow(item: item, refreshing: refreshing.contains(item.id), showsControl: !selecting, save: save)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -85,6 +86,9 @@ struct DownloadsView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selecting && on ? [.isButton, .isSelected] : [.isButton])
         .accessibilityAction { selecting ? toggle([item.id]) : primaryAction(item) }
+        .accessibilityActions {
+            if let save { Button(save.label, action: save.action) }
+        }
         .contextMenu { menu(item) }
         .rowDialog(item.displayName, isPresented: presenting($deleting) { $0.id == item.id }) {
             if item.status == .completed {
@@ -102,6 +106,21 @@ struct DownloadsView: View {
         .listRowInsets(EdgeInsets(top: 4, leading: 16 + inset, bottom: 4, trailing: 16))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
+    }
+
+    /// 已完成任务行尾的「保存」：图片 / 视频保存到相册，其他文件保存到「文件」；多文件种子（目录）不给
+    private func saveAction(_ item: DownloadItem) -> DownloadRow.Save? {
+        guard item.status == .completed, let facts = fileFacts.facts(for: item, resolve: { app.downloads.fileURL(item) }),
+              !facts.isDirectory else { return nil }
+        let url = facts.url
+        if facts.canSaveToPhotos {
+            return DownloadRow.Save(toPhotos: true, label: facts.isLivePhoto ? "保存为实况照片" : "保存到相册") {
+                Task {
+                    do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
+                }
+            }
+        }
+        return DownloadRow.Save(toPhotos: false, label: "保存到「文件」") { exportURLs = [url] }
     }
 
     /// 右滑：下载中给「暂停」，暂停 / 失败给「继续」，已完成没有（不注册空的右滑，免得出现错位的按钮）
@@ -670,9 +689,18 @@ private struct IdentifiedURL: Identifiable {
 }
 
 struct DownloadRow: View {
+    /// 已完成任务的行尾操作：保存到相册或「文件」
+    struct Save {
+        let toPhotos: Bool
+        /// 读屏与无障碍操作用的完整说法
+        let label: String
+        let action: () -> Void
+    }
+
     let item: DownloadItem
     var refreshing = false
     var showsControl = true
+    var save: Save?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -717,7 +745,27 @@ struct DownloadRow: View {
                 }
             }
             if showsControl {
-                DownloadStateControl(item: item, busy: refreshing || item.status == .merging) {}
+                if let save {
+                    // 下载完成后最常做的一步放在行尾，不用长按找菜单
+                    Button(action: save.action) {
+                        HStack(spacing: 4) {
+                            IconView(save.toPhotos ? .image : .folder, size: 14)
+                            Text("保存")
+                        }
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 32)
+                        .overlay { Capsule().strokeBorder(Color.hairline, lineWidth: 1) }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                        .padding(.vertical, -6)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(save.label)
+                } else {
+                    DownloadStateControl(item: item, busy: refreshing || item.status == .merging) {}
+                }
             }
         }
         .padding(.vertical, 4)

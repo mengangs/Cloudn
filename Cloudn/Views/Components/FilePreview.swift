@@ -160,6 +160,12 @@ struct FilePreviewView: View {
             if mode == .player, FileNames.kind(of: url.lastPathComponent) == .video {
                 RotateButton()
             }
+            // 保存到相册放在顶栏上（以前在「…」里），预览完直接存
+            if MediaTools.canSaveToPhotos(url) {
+                Button { saveToPhotos() } label: { IconView(.download, size: 16) }
+                    .buttonStyle(PreviewBarButtonStyle(dark: immersive))
+                    .accessibilityLabel("保存到相册")
+            }
             ShareLink(item: url) { IconView(.share, size: 16) }
                 .buttonStyle(PreviewBarButtonStyle(dark: immersive))
                 .accessibilityLabel("分享")
@@ -167,13 +173,6 @@ struct FilePreviewView: View {
                 if converted != nil {
                     Button { saveConverted() } label: { Label("保存转换后的 MP4 到下载", glyph: .download) }
                         .disabled(savingConverted)
-                }
-                if MediaTools.canSaveToPhotos(url) {
-                    Button {
-                        Task {
-                            do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
-                        }
-                    } label: { Label("保存到相册", glyph: .image) }
                 }
                 Button { DownloadsView.revealInFiles(url.deletingLastPathComponent()) } label: { Label("在「文件」中查看", glyph: .folder) }
                 Button { Clipboard.copy(url.lastPathComponent); app.show("已复制文件名") } label: { Label("复制文件名", glyph: .paste) }
@@ -191,6 +190,12 @@ struct FilePreviewView: View {
             } else {
                 (immersive ? Color.black : Color.paper).ignoresSafeArea(edges: .top)
             }
+        }
+    }
+
+    private func saveToPhotos() {
+        Task {
+            do { app.show(try await MediaTools.saveToPhotosSmart(url)) } catch { app.show(error.localizedDescription, error: true) }
         }
     }
 
