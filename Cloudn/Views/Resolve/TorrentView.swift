@@ -246,7 +246,6 @@ struct TorrentView: View {
         }
         .buttonStyle(PillButtonStyle(kind: .primary, height: 48))
         .disabled(count == 0)
-        .opacity(count == 0 ? 0.5 : 1)
         .floatingShadow()
     }
 

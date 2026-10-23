@@ -643,7 +643,6 @@ struct VideoResultView: View {
             }
             .buttonStyle(PillButtonStyle(kind: .primary, height: 48))
             .disabled(picked.isEmpty)
-            .opacity(picked.isEmpty ? 0.5 : 1)
             .floatingShadow()
         } else {
             mediaBottomBar
@@ -671,7 +670,6 @@ struct VideoResultView: View {
         }
         .buttonStyle(PillButtonStyle(kind: .primary, height: 48))
         .disabled(targets.isEmpty)
-        .opacity(targets.isEmpty ? 0.5 : 1)
         .floatingShadow()
     }
 

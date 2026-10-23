@@ -300,7 +300,6 @@ struct ResolveView: View {
                 Button(action: submit) { IconView(.arrowUp, size: 17) }
                     .buttonStyle(CircleIconButtonStyle(size: 34, filled: canSubmit))
                     .disabled(!canSubmit)
-                    .opacity(canSubmit ? 1 : 0.4)
                     .accessibilityLabel(submitLabel)
             }
         }

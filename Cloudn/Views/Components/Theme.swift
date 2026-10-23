@@ -285,6 +285,7 @@ struct PillButtonStyle: ButtonStyle {
             .overlay { if kind == .secondary { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
+            .modifier(DimWhenDisabled())
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 
@@ -350,7 +351,17 @@ struct CircleIconButtonStyle: ButtonStyle {
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .modifier(DimWhenDisabled())
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// 按钮不可用时统一变淡（各按钮样式共用，调用处不用再各自写透明度）
+private struct DimWhenDisabled: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.opacity(isEnabled ? 1 : 0.45)
     }
 }
 
