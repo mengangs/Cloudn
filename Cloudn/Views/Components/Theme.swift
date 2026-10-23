@@ -245,13 +245,27 @@ func presenting<T>(_ value: Binding<T?>, _ matches: @escaping (T) -> Bool) -> Bi
     Binding(get: { value.wrappedValue.map(matches) ?? false }, set: { if !$0 { value.wrappedValue = nil } })
 }
 
-extension AnyLayout {
-    /// 平时横排、辅助字号（AX1 以上）下改为竖排：免得按钮和文字被挤成一字一行
-    static func adaptive(_ typeSize: DynamicTypeSize, spacing: CGFloat? = nil, rowAlignment: VerticalAlignment = .center,
-                         columnAlignment: HorizontalAlignment = .leading) -> AnyLayout {
-        typeSize.isAccessibilitySize
+/// 平时横排、辅助字号（AX1 以上）下改为竖排：免得按钮和文字被挤成一字一行
+struct AdaptiveStack<Content: View>: View {
+    var spacing: CGFloat?
+    var rowAlignment: VerticalAlignment
+    var columnAlignment: HorizontalAlignment
+    let content: Content
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    init(spacing: CGFloat? = nil, rowAlignment: VerticalAlignment = .center, columnAlignment: HorizontalAlignment = .leading,
+         @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.rowAlignment = rowAlignment
+        self.columnAlignment = columnAlignment
+        self.content = content()
+    }
+
+    var body: some View {
+        let layout = typeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: columnAlignment, spacing: spacing))
             : AnyLayout(HStackLayout(alignment: rowAlignment, spacing: spacing))
+        layout { content }
     }
 }
 

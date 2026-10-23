@@ -724,7 +724,7 @@ struct DownloadRow: View {
                     }
                 }
                 // 辅助字号下状态、来源、大小各占一行
-                AnyLayout.adaptive(typeSize, spacing: typeSize.isAccessibilitySize ? 2 : 6) {
+                AdaptiveStack(spacing: typeSize.isAccessibilitySize ? 2 : 6) {
                     Text(statusText).foregroundStyle(statusColor)
                         .fontWeight(isTransferring ? .medium : nil)
                         .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)

@@ -27,7 +27,6 @@ struct VideoResultView: View {
     @State private var audioProbes = AudioProbeCache()
     /// 就地弹出的登录页（登录已失效时）
     @State private var loginKind: AccountKind?
-    @Environment(\.dynamicTypeSize) private var typeSize
     /// 实况照片：图片 id → 配对的视频。配上对的视频挂在图片上，不单独列为视频
     private let livePairs: [UUID: VideoMedia]
     private let liveClipIDs: Set<UUID>
@@ -133,7 +132,7 @@ struct VideoResultView: View {
 
     /// 该平台的登录已失效：解析结果可能不完整（清晰度受限、拿不到需登录的内容），旁边就是重新登录入口
     private func expiredCard(_ kind: AccountKind) -> some View {
-        AnyLayout.adaptive(typeSize, spacing: 12) {
+        AdaptiveStack(spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 IconView(.user, size: 18).foregroundStyle(Color.clayInk)
                 VStack(alignment: .leading, spacing: 2) {
