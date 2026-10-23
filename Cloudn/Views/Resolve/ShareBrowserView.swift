@@ -480,7 +480,7 @@ struct ShareBrowserView: View {
                         Button { startSave(chosen) } label: { Text("转存").frame(maxWidth: large ? .infinity : nil) }
                             .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
                     }
-                    Button { Task { await model.downloadSelected() } } label: {
+                    Button { whenLoggedIn { Task { await model.downloadSelected() } } } label: {
                         Label { Text("下载") } icon: { Image(icon: .download) }
                             .frame(maxWidth: large ? .infinity : nil)
                     }
@@ -499,10 +499,13 @@ struct ShareBrowserView: View {
         } else if !model.files.isEmpty && model.errorMessage == nil {
             // 辅助字号下：「全部下载」占满一行，「转存」与多选在下一行
             AdaptiveStack(spacing: 8) {
-                Button { Task { await model.downloadAll() } } label: {
+                Button { whenLoggedIn { Task { await model.downloadAll() } } } label: {
                     HStack(spacing: 6) {
-                        Image(icon: .download)
-                        if typeSize.isAccessibilitySize {
+                        Image(icon: model.downloadNeedsLogin ? .user : .download)
+                        if model.downloadNeedsLogin {
+                            // 不登录下不了：主按钮直接说清下一步，点了就地登录
+                            Text("登录后下载")
+                        } else if typeSize.isAccessibilitySize {
                             // 大字号下合成一段文字，换行时不会拆成两块
                             Text("全部下载 · \(model.files.count) 项").multilineTextAlignment(.center)
                         } else {
@@ -586,7 +589,7 @@ struct ShareBrowserView: View {
     private func menu(for file: ShareFile, proxy: ScrollViewProxy) -> some View {
         if file.isDirectory {
             Button { navigate(proxy) { await model.enter(file) } } label: { Label { Text("打开") } icon: { Image(icon: .folder) } }
-            Button { Task { await model.downloadFolder(file) } } label: { Label { Text("下载整个文件夹") } icon: { Image(icon: .download) } }
+            Button { whenLoggedIn { Task { await model.downloadFolder(file) } } } label: { Label { Text("下载整个文件夹") } icon: { Image(icon: .download) } }
             if model.saver != nil {
                 Button { startSave([file]) } label: { Label { Text("转存到我的网盘") } icon: { Image(icon: .save) } }
             }
@@ -655,7 +658,13 @@ struct ShareBrowserView: View {
     }
 
     /// 单个文件下载：正在取链的（连点、或菜单里又点了一次）不再重复取
+    /// 需要先登录才能下载时弹出就地登录（登录回来会重新打开分享），否则直接执行
+    private func whenLoggedIn(_ action: () -> Void) {
+        if model.downloadNeedsLogin { presentLogin() } else { action() }
+    }
+
     private func download(_ file: ShareFile) {
+        guard !model.downloadNeedsLogin else { presentLogin(); return }
         guard !model.busyFileIds.contains(file.fid) else { return }
         run {
             // 两次点按都排进来时，第二个在这里看到第一个已占住（取链开始前同步记下）

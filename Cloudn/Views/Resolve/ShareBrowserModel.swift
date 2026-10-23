@@ -60,6 +60,12 @@ final class ShareBrowserModel: Hashable, Identifiable {
         return app.accounts.isExpired(kind)
     }
 
+    /// 还没登录、而这个平台不登录只能浏览不能下载：下载类按钮改为先登录
+    var downloadNeedsLogin: Bool {
+        guard let kind = share.platform.accountKind, !app.accounts.isLoggedIn(kind) else { return false }
+        return resolver?.supportsGuestDownload == false
+    }
+
     /// 未登录 / 登录已失效时给用户的能力说明（nil 表示不需要提示）
     var guestNotice: String? {
         guard let kind = share.platform.accountKind else { return nil }
