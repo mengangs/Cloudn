@@ -78,6 +78,9 @@ struct GitHubAccountView: View {
             }
         }
         .paperList()
+        // iPad 上收窄居中，两侧仍是纸色
+        .readableWidth()
+        .background(Color.paper)
         .overlay { if loading { Spinner(size: 28) } }
         .searchable(text: $query, prompt: "搜索仓库")
         .navigationTitle(owner)
@@ -132,6 +135,7 @@ struct GitHubRepoView: View {
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
+                    .readableWidth()
                     switch tab {
                     case .files:
                         GitHubDirectoryView(owner: owner, repo: repo, ref: initial.ref ?? info.defaultBranch, path: initial.path, description: info.description)
@@ -146,6 +150,7 @@ struct GitHubRepoView: View {
                         Task { await loadInfo() }
                     }
                     .padding(16)
+                    .readableWidth()
                 }
             } else {
                 Spinner(size: 28).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -216,6 +221,9 @@ struct GitHubDirectoryView: View {
             }
         }
         .paperList()
+        // iPad 上收窄居中，两侧仍是纸色
+        .readableWidth()
+        .background(Color.paper)
         .overlay { if loading { Spinner(size: 28) } }
         .refreshable { await load() }
         .task {
@@ -319,6 +327,9 @@ struct GitHubReleasesView: View {
             }
         }
         .paperList()
+        // iPad 上收窄居中，两侧仍是纸色
+        .readableWidth()
+        .background(Color.paper)
         .overlay { if loading { Spinner(size: 28) } }
         .task {
             // 页面重新出现时 .task 会再跑一次：已取到就不重复请求（未填 Token 时接口每小时只有 60 次）
@@ -396,6 +407,9 @@ struct GitHubSettingsView: View {
             .listRowBackground(Color.surface)
         }
         .paperList()
+        // iPad 上收窄居中，两侧仍是纸色
+        .readableWidth()
+        .background(Color.paper)
         .navigationTitle("GitHub")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { token = app.settings.githubToken }

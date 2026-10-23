@@ -103,6 +103,7 @@ struct ResolveView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .readableWidth()
             }
             .scrollDismissesKeyboard(.immediately)
             // 点空白处收起键盘
@@ -117,6 +118,7 @@ struct ResolveView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 8)
+                .readableWidth()
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: clipboardOffer)
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: detectionKey)
             }

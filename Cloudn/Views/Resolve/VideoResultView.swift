@@ -97,6 +97,7 @@ struct VideoResultView: View {
             .padding(.horizontal, 16)
             .padding(.top, 4)
             .padding(.bottom, 96)
+            .readableWidth()
         }
         .background(Color.paper)
         .navigationTitle("")
@@ -121,7 +122,7 @@ struct VideoResultView: View {
                 .accessibilityLabel("更多")
             }
         }
-        .safeAreaInset(edge: .bottom) { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
+        .safeAreaInset(edge: .bottom) { bottomBar.padding(.horizontal, 16).padding(.bottom, 8).readableWidth() }
         .sensoryFeedback(.selection, trigger: selected)
         .animation(.snappy(duration: 0.25), value: selecting)
         .fullScreenCover(item: $preview) { MediaPreviewView(item: $0) }

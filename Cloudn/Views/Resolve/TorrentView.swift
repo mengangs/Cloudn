@@ -53,6 +53,7 @@ struct TorrentView: View {
             .padding(.horizontal, 16)
             .padding(.top, 4)
             .padding(.bottom, 96)
+            .readableWidth()
         }
         .background(Color.paper)
         .navigationTitle("")
@@ -72,7 +73,7 @@ struct TorrentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if info != nil { bottomBar.padding(.horizontal, 16).padding(.bottom, 8) }
+            if info != nil { bottomBar.padding(.horizontal, 16).padding(.bottom, 8).readableWidth() }
         }
         .sheet(isPresented: $offlining) { AddOfflineTaskView(links: target.magnet.uri) }
         .sensoryFeedback(.selection, trigger: selected)

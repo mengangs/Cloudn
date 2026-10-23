@@ -50,6 +50,7 @@ struct ShareBrowserView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 96)
+                .readableWidth()
             }
             .coordinateSpace(name: Self.space)
             .scrollPosition(id: $topRow, anchor: .top)
@@ -64,7 +65,7 @@ struct ShareBrowserView: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "在当前文件夹中搜索")
             .onChange(of: model.currentDir) { query = "" }
             .toolbar { toolbar }
-            .safeAreaInset(edge: .bottom) { actionBar.padding(.horizontal, 16).padding(.bottom, 8) }
+            .safeAreaInset(edge: .bottom) { actionBar.padding(.horizontal, 16).padding(.bottom, 8).readableWidth() }
             .refreshable { await model.reloadCurrent(force: true) }
             .task { await model.open() }
             // 离开分享页（返回、切到别的标签页）：预览 / 复制直链留下的临时转存一并清理；全屏预览盖住时不算离开
