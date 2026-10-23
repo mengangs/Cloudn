@@ -689,9 +689,12 @@ struct DownloadRow: View {
                 }
                 HStack(spacing: 6) {
                     Text(statusText).foregroundStyle(statusColor)
+                        .fontWeight(isTransferring ? .medium : nil)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .layoutPriority(1)
-                    if !item.request.source.isEmpty {
+                    // 下载中这一行只放速度与剩余时间，来源在排队、暂停、失败、完成时再显示
+                    if !item.request.source.isEmpty && !isTransferring {
                         Text("· \(item.request.source)").lineLimit(1).truncationMode(.tail)
                     }
                     Spacer(minLength: 0)
@@ -714,6 +717,8 @@ struct DownloadRow: View {
         }
         .padding(.vertical, 4)
     }
+
+    private var isTransferring: Bool { item.status == .running || item.status == .merging }
 
     /// 多文件种子：产物是目录
     private var isFolder: Bool {
