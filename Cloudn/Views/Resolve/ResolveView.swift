@@ -91,6 +91,7 @@ struct ResolveView: View {
                         .foregroundStyle(Color.ink)
                         .padding(.horizontal, 4)
                         .padding(.top, 12)
+                    if isFirstRun { firstRunCard }
                     if !app.batchJobs.isEmpty { batchSection }
                     if !app.bookmarks.bookmarks.isEmpty { bookmarkSection }
                     if !app.bookmarks.history.isEmpty { historySection }
@@ -105,7 +106,7 @@ struct ResolveView: View {
             .simultaneousGesture(TapGesture().onEnded { focused = false })
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
-                    if clipboardOffer && trimmed.isEmpty && app.settings.clipboardHint {
+                    if showsClipboardCard {
                         clipboardCard.transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     composer
@@ -250,6 +251,20 @@ struct ResolveView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("正在解析，点按取消")
         } else if trimmed.isEmpty {
+            // 输入框为空：一键粘贴（系统粘贴控件，不弹授权提示）。上方已有剪贴板卡片时不重复
+            if !showsClipboardCard {
+                PasteButton(payloadType: String.self) { strings in
+                    guard let text = strings.first else { return }
+                    Task { @MainActor in
+                        markClipboardHandled()
+                        open(text: text)
+                    }
+                }
+                .labelStyle(.titleOnly)
+                .buttonBorderShape(.capsule)
+                .tint(Self.pasteTint)
+                .controlSize(.small)
+            }
             Menu {
                 Button { showBookmarks = true } label: { Label { Text("从收藏打开") } icon: { Image(icon: .star) } }
                 Button { importingTorrent = true } label: { Label { Text("打开种子文件") } icon: { Image(icon: .magnet) } }
@@ -411,7 +426,38 @@ struct ResolveView: View {
         }
     }
 
+    // MARK: 首次使用
+
+    /// 还没有任何收藏、最近记录与批量任务
+    private var isFirstRun: Bool {
+        app.batchJobs.isEmpty && app.bookmarks.bookmarks.isEmpty && app.bookmarks.history.isEmpty
+    }
+
+    /// 首次打开：告诉用户第一步做什么（下方输入框旁就是「粘贴」）
+    private var firstRunCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("粘贴一个链接").font(.cardTitle).foregroundStyle(Color.ink)
+            Text("网盘分享、短视频、网页视频、GitHub 或磁力链接都可以。复制后点下方的「粘贴」，Cloudn 会自动识别并解析。")
+                .font(.subheadline)
+                .foregroundStyle(Color.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                IconView(.share, size: 14).foregroundStyle(Color.ink3)
+                Text("在其他 App 里点「分享」→ Cloudn 也能直接打开")
+                    .font(.footnote)
+                    .foregroundStyle(Color.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .accessibilityElement(children: .combine)
+    }
+
     // MARK: 剪贴板
+
+    private var showsClipboardCard: Bool { clipboardOffer && trimmed.isEmpty && app.settings.clipboardHint }
 
     private var clipboardCard: some View {
         HStack(spacing: 12) {
