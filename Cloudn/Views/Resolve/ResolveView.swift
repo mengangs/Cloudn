@@ -266,17 +266,12 @@ struct ResolveView: View {
         } else if trimmed.isEmpty {
             // 输入框为空：一键粘贴（系统粘贴控件，不弹授权提示）。上方已有剪贴板卡片时不重复
             if !showsClipboardCard {
-                PasteButton(payloadType: String.self) { strings in
-                    guard let text = strings.first else { return }
-                    Task { @MainActor in
-                        markClipboardHandled()
-                        open(text: text)
-                    }
+                // 辅助字号下只显示图标，免得把输入框挤得只剩一个字
+                if typeSize.isAccessibilitySize {
+                    composerPasteButton.labelStyle(.iconOnly)
+                } else {
+                    composerPasteButton.labelStyle(.titleOnly)
                 }
-                .labelStyle(.titleOnly)
-                .buttonBorderShape(.capsule)
-                .tint(Self.pasteTint)
-                .controlSize(.small)
             }
             Menu {
                 Button { showBookmarks = true } label: { Label { Text("从收藏打开") } icon: { Image(icon: .star) } }
@@ -303,6 +298,19 @@ struct ResolveView: View {
                     .accessibilityLabel(submitLabel)
             }
         }
+    }
+
+    private var composerPasteButton: some View {
+        PasteButton(payloadType: String.self) { strings in
+            guard let text = strings.first else { return }
+            Task { @MainActor in
+                markClipboardHandled()
+                open(text: text)
+            }
+        }
+        .buttonBorderShape(.capsule)
+        .tint(Self.pasteTint)
+        .controlSize(.small)
     }
 
     /// 多行输入框里回车会插入换行：只敲了一个回车时当作「前往」——能解析就解析，否则收起键盘。粘贴进来的多行文案不受影响
