@@ -233,6 +233,16 @@ func presenting<T>(_ value: Binding<T?>, _ matches: @escaping (T) -> Bool) -> Bi
     Binding(get: { value.wrappedValue.map(matches) ?? false }, set: { if !$0 { value.wrappedValue = nil } })
 }
 
+extension AnyLayout {
+    /// 平时横排、辅助字号（AX1 以上）下改为竖排：免得按钮和文字被挤成一字一行
+    static func adaptive(_ typeSize: DynamicTypeSize, spacing: CGFloat? = nil, rowAlignment: VerticalAlignment = .center,
+                         columnAlignment: HorizontalAlignment = .leading) -> AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: columnAlignment, spacing: spacing))
+            : AnyLayout(HStackLayout(alignment: rowAlignment, spacing: spacing))
+    }
+}
+
 /// 卡片内行与行之间的分隔线（从图标右侧开始）
 struct RowDivider: View {
     var leading: CGFloat = 62
@@ -354,8 +364,11 @@ struct FilterChip: View {
         Button(action: action) {
             Text(title)
                 .font(.footnote)
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 14)
-                .frame(height: 32)
+                .padding(.vertical, 6)
+                .frame(minHeight: 32)
                 .foregroundStyle(selected ? Color.paper : Color.ink)
                 .background(selected ? Color.ink : Color.clear, in: Capsule())
                 .overlay { if !selected { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }

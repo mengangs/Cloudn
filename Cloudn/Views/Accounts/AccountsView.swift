@@ -28,6 +28,7 @@ struct AccountsView: View {
     @AppStorage("accounts.drivePinnedSet") private var drivePinnedSet = false
     @AppStorage("accounts.videoPinnedSet") private var videoPinnedSet = false
     @State private var layoutGroup: PlatformLayout.Group?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private func hasAccount(_ kind: AccountKind) -> Bool { app.accounts.accounts[kind] != nil }
 
@@ -61,7 +62,9 @@ struct AccountsView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(title: "网盘", trailing: loggedInSummary)
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        // 辅助字号下一行一张，网盘名与容量不被截断
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? 1 : 2),
+                                  spacing: 10) {
                             ForEach(shownDrives) { driveTile($0) }
                             moreTile(hidden: allDrives.count - shownDrives.count)
                         }

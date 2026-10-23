@@ -478,15 +478,19 @@ struct DriveFolderPicker: View {
 /// 容量条：已用 / 总量，超过 90% 变成陶土深色提醒
 struct QuotaBar: View {
     let quota: DriveQuota
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var ratio: Double { quota.total > 0 ? min(1, Double(quota.used) / Double(quota.total)) : 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(ByteFormat.string(quota.used)).font(.serif(20, relativeTo: .title3)).foregroundStyle(Color.ink)
-                Text("/ \(ByteFormat.string(quota.total))").font(.mono).foregroundStyle(Color.ink3)
-                Spacer()
+            // 辅助字号下「剩余」换到下一行
+            AnyLayout.adaptive(typeSize, spacing: 4, rowAlignment: .firstTextBaseline) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(ByteFormat.string(quota.used)).font(.serif(20, relativeTo: .title3)).foregroundStyle(Color.ink)
+                    Text("/ \(ByteFormat.string(quota.total))").font(.mono).foregroundStyle(Color.ink3)
+                }
+                if !typeSize.isAccessibilitySize { Spacer() }
                 Text("剩余 \(ByteFormat.string(max(0, quota.total - quota.used)))").font(.caption).foregroundStyle(Color.ink2)
             }
             ProgressLine(value: ratio, tint: ratio > 0.9 ? Color.clayInk : nil)

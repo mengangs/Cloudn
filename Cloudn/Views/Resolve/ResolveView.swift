@@ -41,6 +41,9 @@ struct ResolveView: View {
     /// 已处理（粘贴或关掉）过的剪贴板版本，同一条内容只提示一次；应用自己复制的内容也记在这里（见 Clipboard.copy）
     @AppStorage(Clipboard.handledChangeKey) private var handledChange = -1
     @FocusState private var focused: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// 收藏卡片宽度随字号放大（最宽 260），大字号下标题不会只剩一个字
+    @ScaledMetric(relativeTo: .subheadline) private var bookmarkWidth: CGFloat = 124
 
     init() {}
 
@@ -576,11 +579,12 @@ struct ResolveView: View {
                             VStack(alignment: .leading, spacing: 14) {
                                 markView(for: b.text, size: 22)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(b.title).font(.subheadline.weight(.medium)).lineLimit(1).foregroundStyle(Color.ink)
+                                    Text(b.title).font(.subheadline.weight(.medium)).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                                        .foregroundStyle(Color.ink)
                                     Text(b.source).font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
                                 }
                             }
-                            .frame(width: 124, alignment: .leading)
+                            .frame(width: min(bookmarkWidth, 260), alignment: .leading)
                             .padding(12)
                             .card()
                         }
@@ -929,6 +933,7 @@ private struct HistoryRow: View {
     let item: Bookmark
     let progress: (done: Int, total: Int)?
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Button(action: action) {
@@ -940,9 +945,9 @@ private struct HistoryRow: View {
                         .overlay { IconView(.link, size: 18).foregroundStyle(Color.ink) }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title).font(.body).lineLimit(1).foregroundStyle(Color.ink)
+                    Text(item.title).font(.body).lineLimit(typeSize.isAccessibilitySize ? 3 : 1).foregroundStyle(Color.ink)
                     Text("\(item.source) · \(item.createdAt.formatted(.relative(presentation: .named)))")
-                        .font(.caption).foregroundStyle(Color.ink2).lineLimit(1)
+                        .font(.caption).foregroundStyle(Color.ink2).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                 }
                 Spacer(minLength: 0)
                 trailing
@@ -981,6 +986,7 @@ private struct HistoryRow: View {
 private struct BatchJobRow: View {
     let job: BatchJob
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Button(action: action) {
@@ -999,8 +1005,9 @@ private struct BatchJobRow: View {
                 .frame(width: 36, height: 36)
                 .background(Color.fillMuted, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(job.title).font(.body).lineLimit(1).foregroundStyle(Color.ink)
-                    Text(detail).font(.caption).foregroundStyle(job.failedCount > 0 ? Color.clayInk : Color.ink2).lineLimit(1)
+                    Text(job.title).font(.body).lineLimit(typeSize.isAccessibilitySize ? 3 : 1).foregroundStyle(Color.ink)
+                    Text(detail).font(.caption).foregroundStyle(job.failedCount > 0 ? Color.clayInk : Color.ink2)
+                        .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                 }
                 Spacer(minLength: 0)
                 IconView(.chevronRight, size: 14).foregroundStyle(Color.ink3)

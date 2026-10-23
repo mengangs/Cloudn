@@ -319,12 +319,15 @@ struct DownloadsView: View {
     private var filterChips: some View {
         let all = app.downloads.items
         let active = all.filter { $0.status != .completed }.count
-        return HStack(spacing: 8) {
-            FilterChip(title: "全部 \(all.count)", selected: filter == .all) { filter = .all }
-            FilterChip(title: "进行中 \(active)", selected: filter == .active) { filter = .active }
-            FilterChip(title: "已完成 \(all.count - active)", selected: filter == .done) { filter = .done }
-            Spacer(minLength: 0)
+        // 大字号下三个胶囊放不下一行：可以横向滑动，文字不截断
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(title: "全部 \(all.count)", selected: filter == .all) { filter = .all }
+                FilterChip(title: "进行中 \(active)", selected: filter == .active) { filter = .active }
+                FilterChip(title: "已完成 \(all.count - active)", selected: filter == .done) { filter = .done }
+            }
         }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .sensoryFeedback(.selection, trigger: filter)
     }
 
@@ -670,6 +673,7 @@ struct DownloadRow: View {
     let item: DownloadItem
     var refreshing = false
     var showsControl = true
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(spacing: 12) {
@@ -687,17 +691,18 @@ struct DownloadRow: View {
                         ProgressLine(value: nil)
                     }
                 }
-                HStack(spacing: 6) {
+                // 辅助字号下状态、来源、大小各占一行
+                AnyLayout.adaptive(typeSize, spacing: typeSize.isAccessibilitySize ? 2 : 6) {
                     Text(statusText).foregroundStyle(statusColor)
                         .fontWeight(isTransferring ? .medium : nil)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                         .minimumScaleFactor(0.85)
                         .layoutPriority(1)
                     // 下载中这一行只放速度与剩余时间，来源在排队、暂停、失败、完成时再显示
                     if !item.request.source.isEmpty && !isTransferring {
-                        Text("· \(item.request.source)").lineLimit(1).truncationMode(.tail)
+                        Text(typeSize.isAccessibilitySize ? item.request.source : "· \(item.request.source)").lineLimit(1).truncationMode(.tail)
                     }
-                    Spacer(minLength: 0)
+                    if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     Text(sizeText).monospacedDigit()
                         .lineLimit(1)
                         .fixedSize()

@@ -19,12 +19,10 @@ struct SettingsView: View {
         Form {
             Group {
                     Section {
-                        Stepper(value: $settings.maxConcurrentTasks, in: 1...5) {
-                            LabeledContent("同时下载任务", value: "\(settings.maxConcurrentTasks)")
-                        }
-                        Stepper(value: $settings.retryCount, in: 0...10) {
-                            LabeledContent("失败自动重试", value: "\(settings.retryCount) 次")
-                        }
+                        AdaptiveStepper(title: "同时下载任务", value: "\(settings.maxConcurrentTasks)",
+                                        number: $settings.maxConcurrentTasks, range: 1...5)
+                        AdaptiveStepper(title: "失败自动重试", value: "\(settings.retryCount) 次",
+                                        number: $settings.retryCount, range: 0...10)
                         Picker("下载限速", selection: $settings.speedLimitKB) {
                             ForEach(SpeedLimitOption.allCases) { Text($0.title).tag($0.rawValue) }
                         }
@@ -197,6 +195,30 @@ extension SettingsView {
 }
 
 /// 新版本提示：版本对比、更新说明、下载（GitHub / 网盘）或交给侧载工具直接安装
+/// 步进器：辅助字号下标题与数值在上、加减键在下，免得标题被挤成一字一行
+private struct AdaptiveStepper: View {
+    let title: String
+    let value: String
+    @Binding var number: Int
+    let range: ClosedRange<Int>
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                Text(value).foregroundStyle(Color.ink2)
+                Stepper(title, value: $number, in: range).labelsHidden()
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            Stepper(value: $number, in: range) {
+                LabeledContent(title, value: value)
+            }
+        }
+    }
+}
+
 struct UpdateSheet: View {
     let release: AppRelease
     @Environment(AppModel.self) private var app

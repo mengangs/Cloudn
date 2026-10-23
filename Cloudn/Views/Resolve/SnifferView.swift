@@ -64,6 +64,7 @@ struct SnifferView: View {
     @State private var browser: SnifferBrowser
     /// 正在准备下载的地址（取 Cookie 要等一下）：连点不重复入队
     @State private var enqueuing = Set<String>()
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     init(url: String) {
         _browser = State(initialValue: SnifferBrowser(url: url))
@@ -318,7 +319,7 @@ struct SnifferView: View {
     private func mediaRow(_ media: SniffedMedia) -> some View {
         Button { download(media) } label: {
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+                AnyLayout.adaptive(typeSize, spacing: 6) {
                     Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
                     Text(media.detail).font(.monoSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
                 }

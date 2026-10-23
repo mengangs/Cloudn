@@ -27,6 +27,7 @@ struct ShareBrowserView: View {
     /// 拖选：起点、是选还是取消、开始前的选择
     @State private var rowFrames = FrameBox()
     @State private var drag: (start: String, adding: Bool, base: Set<String>)?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private static let topID = "share.top"
     private static let space = "share.scroll"
@@ -140,13 +141,15 @@ struct ShareBrowserView: View {
 
     /// 未登录提示：说清能做什么，旁边就是登录入口
     private func guestCard(_ notice: String) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            IconView(.user, size: 18).foregroundStyle(Color.clayInk)
-            Text(notice)
-                .font(.footnote)
-                .foregroundStyle(Color.clayInk)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+        AnyLayout.adaptive(typeSize, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                IconView(.user, size: 18).foregroundStyle(Color.clayInk)
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(Color.clayInk)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
             Button(model.loginExpired ? "重新登录" : "登录") { presentLogin() }
                 .buttonStyle(PillButtonStyle(kind: .dark, height: 30))
                 .font(.footnote)
@@ -431,33 +434,40 @@ struct ShareBrowserView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else if model.selecting {
             let chosen = model.files.filter { model.selection.contains($0.fid) }
-            HStack(spacing: 10) {
+            let large = typeSize.isAccessibilitySize
+            // 辅助字号下：已选数量在上、两个按钮在下，各占一半宽
+            AnyLayout.adaptive(typeSize, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(chosen.isEmpty ? "未选择" : "已选 \(chosen.count) 项").font(.subheadline.weight(.semibold))
                     Text(selectionDetail(chosen)).font(.monoSmall).foregroundStyle(Color.ink3)
                 }
                 .foregroundStyle(Color.ink)
                 .contentTransition(.numericText())
-                Spacer(minLength: 0)
-                if model.saver != nil {
-                    Button("转存") { startSave(chosen) }
-                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
+                if !large { Spacer(minLength: 0) }
+                HStack(spacing: 10) {
+                    if model.saver != nil {
+                        Button("转存") { startSave(chosen) }
+                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
+                            .frame(maxWidth: large ? .infinity : nil)
+                    }
+                    Button { Task { await model.downloadSelected() } } label: {
+                        Label { Text("下载") } icon: { Image(icon: .download) }
+                            .frame(maxWidth: large ? .infinity : nil)
+                    }
+                    .buttonStyle(PillButtonStyle(kind: .primary, height: 40))
                 }
-                Button { Task { await model.downloadSelected() } } label: {
-                    Label { Text("下载") } icon: { Image(icon: .download) }
-                }
-                .buttonStyle(PillButtonStyle(kind: .primary, height: 40))
             }
             .disabled(chosen.isEmpty)
-            .padding(.leading, 18)
-            .padding(.trailing, 8)
-            .padding(.vertical, 8)
-            .background(Color.surface, in: Capsule())
-            .overlay { Capsule().strokeBorder(Color.hairline, lineWidth: 1) }
+            .padding(.leading, large ? 14 : 18)
+            .padding(.trailing, large ? 14 : 8)
+            .padding(.vertical, large ? 12 : 8)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: large ? 24 : 30, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: large ? 24 : 30, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
             .floatingShadow()
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else if !model.files.isEmpty && model.errorMessage == nil {
-            HStack(spacing: 8) {
+            // 辅助字号下：「下载全部」占满一行，「转存」与多选在下一行
+            AnyLayout.adaptive(typeSize, spacing: 8) {
                 Button { Task { await model.downloadAll() } } label: {
                     HStack(spacing: 6) {
                         Image(icon: .download)
@@ -468,17 +478,20 @@ struct ShareBrowserView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 46))
-                if model.saver != nil {
-                    Button("转存") { startSave(model.files) }
-                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 46))
+                HStack(spacing: 8) {
+                    if model.saver != nil {
+                        Button("转存") { startSave(model.files) }
+                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 46))
+                            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil)
+                    }
+                    Button { model.selecting = true } label: { IconView(.checkCircle, size: 19) }
+                        .buttonStyle(CircleIconButtonStyle(size: 46))
+                        .background(Color.surface, in: Circle())
+                        .accessibilityLabel("多选")
                 }
-                Button { model.selecting = true } label: { IconView(.checkCircle, size: 19) }
-                    .buttonStyle(CircleIconButtonStyle(size: 46))
-                    .background(Color.surface, in: Circle())
-                    .accessibilityLabel("多选")
             }
             .padding(6)
-            .background(Color.paper.opacity(0.92), in: Capsule())
+            .background(Color.paper.opacity(0.92), in: RoundedRectangle(cornerRadius: 29, style: .continuous))
             .floatingShadow()
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
