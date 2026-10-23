@@ -269,23 +269,45 @@ extension AppSettings {
         ("赭石", "A0682A", "D9A066"), ("葡萄", "6E4E7E", "B596C4"), ("墨黑", "2B2A27", "E6E1D6")
     ]
 
-    /// 当前强调色（浅色 / 深色各一份）；未自定义时是资源里的陶土色。
-    /// 自选的颜色没有预设的深色版本，按对比度自动提亮一份，免得深底上看不见
+    /// 当前强调色（浅色 / 深色各一份）；未自定义时是资源里的陶土色
     var accentUIColor: UIColor {
-        guard let light = UIColor(hexString: accentHex) else {
-            return UIColor(named: "AccentColor") ?? UIColor(red: 0.71, green: 0.33, blue: 0.18, alpha: 1)
-        }
-        let dark = Self.accentPresets.first { $0.hex == accentHex }.flatMap { UIColor(hexString: $0.dark) }
-            ?? Self.darkModeVariant(of: light)
+        Self.accentUIColor(hex: accentHex) ?? UIColor(named: "AccentColor") ?? UIColor(red: 0.71, green: 0.33, blue: 0.18, alpha: 1)
+    }
+
+    /// 某个主题色（RRGGBB）实际用的浅色 / 深色两份；hex 为空或格式不对返回 nil（用资源里的陶土色）。
+    /// 浅色下对纸色不足 4.5:1 的（如赭石、自选的浅黄）自动压暗；深色用预设的提亮版，自选的按对比度自动提亮
+    static func accentUIColor(hex: String) -> UIColor? {
+        guard let raw = UIColor(hexString: hex) else { return nil }
+        let light = lightModeVariant(of: raw)
+        let dark = accentPresets.first { $0.hex == hex }.flatMap { UIColor(hexString: $0.dark) } ?? darkModeVariant(of: raw)
         return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+
+    private static func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGFloat {
+        func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// 浅色模式用的强调色：逐步向黑色混合，直到对浅色纸底（#F7F5EF）的对比度达到 4.5:1；本来就够深的原样返回
+    static func lightModeVariant(of color: UIColor) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return color }
+        let paper = luminance(0xF7 / 255, 0xF5 / 255, 0xEF / 255)
+        var t: CGFloat = 0
+        while t < 0.9 {
+            let (mr, mg, mb) = (r * (1 - t), g * (1 - t), b * (1 - t))
+            if (paper + 0.05) / (luminance(mr, mg, mb) + 0.05) >= 4.5 {
+                return t == 0 ? color : UIColor(red: mr, green: mg, blue: mb, alpha: a)
+            }
+            t += 0.02
+        }
+        return UIColor(red: r * 0.1, green: g * 0.1, blue: b * 0.1, alpha: a)
     }
 
     /// 深色模式用的强调色：逐步向白色混合，直到对深色卡片底（#23221F）的对比度达到 4.5:1；本来就够亮的原样返回
     static func darkModeVariant(of color: UIColor) -> UIColor {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return color }
-        func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-        func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGFloat { 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) }
         let surface = luminance(0x23 / 255, 0x22 / 255, 0x1F / 255)
         var t: CGFloat = 0
         while t < 0.9 {

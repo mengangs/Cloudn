@@ -538,6 +538,7 @@ struct ResolveView: View {
                 if app.batchJobs.contains(where: { $0.finished && $0.failedCount == 0 }) {
                     Button("清除已完成") { withAnimation { app.batchJobs.removeAll { $0.finished && $0.failedCount == 0 } } }
                         .font(.subheadline)
+                        .buttonStyle(TextLinkButtonStyle())
                 }
             }
             VStack(spacing: 0) {
@@ -571,7 +572,7 @@ struct ResolveView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 SectionLabel(title: "收藏")
-                Button("全部") { showBookmarks = true }.font(.subheadline)
+                Button("全部") { showBookmarks = true }.font(.subheadline).buttonStyle(TextLinkButtonStyle())
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -609,6 +610,7 @@ struct ResolveView: View {
                 SectionLabel(title: "最近")
                 Button("清空") { confirmClearHistory = true }
                     .font(.subheadline)
+                    .buttonStyle(TextLinkButtonStyle())
                     .rowDialog("清空最近记录？", isPresented: $confirmClearHistory, message: "收藏不受影响") {
                         Button("清空", role: .destructive) { withAnimation { app.bookmarks.clearHistory() } }
                     }

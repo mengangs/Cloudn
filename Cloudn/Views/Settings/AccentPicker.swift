@@ -13,11 +13,9 @@ struct AccentPicker: View {
                     ForEach(AppSettings.accentPresets, id: \.hex) { preset in
                         let selected = app.settings.accentHex == preset.hex
                         Button { app.settings.accentHex = preset.hex } label: {
+                            // 色块画实际生效的颜色（浅色下对比度不够的已自动压暗）
                             Circle()
-                                .fill(Color(uiColor: UIColor(hexString: preset.hex).map { light in
-                                    let dark = UIColor(hexString: preset.dark) ?? light
-                                    return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
-                                } ?? UIColor(named: "AccentColor") ?? .systemOrange))
+                                .fill(Color(uiColor: AppSettings.accentUIColor(hex: preset.hex) ?? UIColor(named: "AccentColor") ?? .systemOrange))
                                 .frame(width: 30, height: 30)
                                 .overlay {
                                     Circle().strokeBorder(Color.ink, lineWidth: selected ? 2 : 0).padding(-4)

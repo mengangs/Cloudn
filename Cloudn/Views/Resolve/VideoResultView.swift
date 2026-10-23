@@ -199,6 +199,7 @@ struct VideoResultView: View {
                     if result.text.count > 90 {
                         Button(textExpanded ? "收起" : "展开") { withAnimation(.snappy) { textExpanded.toggle() } }
                             .font(.footnote.weight(.medium))
+                            .buttonStyle(TextLinkButtonStyle())
                     }
                 }
                 .padding(.horizontal, 4)
@@ -449,6 +450,7 @@ struct VideoResultView: View {
                     selected = []
                 }
                 .font(.footnote.weight(.medium))
+                .buttonStyle(TextLinkButtonStyle())
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(images) { media in
@@ -536,6 +538,7 @@ struct VideoResultView: View {
                     unpicked = unpicked.isEmpty ? Set(result.entries.map(\.id)) : []
                 }
                 .font(.footnote.weight(.medium))
+                .buttonStyle(TextLinkButtonStyle())
             }
             LazyVStack(spacing: 0) {
                 ForEach(Array(result.entries.enumerated()), id: \.element.id) { index, entry in

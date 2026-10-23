@@ -336,6 +336,41 @@ struct OnAccentForeground: ViewModifier {
     }
 }
 
+/// 文字按钮（分组标题旁的「全部」「清空」「多选」等）：强调色文字。
+/// 强调色和正文墨色几乎一样时（墨黑主题）加粗，免得和普通文字分不开
+struct TextLinkButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TextLinkLabel(configuration: configuration)
+    }
+}
+
+private struct TextLinkLabel: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.accentTint) private var accentTint
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(.tint)
+            .bold(Self.looksLikeInk(accentTint, dark: colorScheme == .dark))
+            .opacity(configuration.isPressed ? 0.5 : (isEnabled ? 1 : 0.45))
+    }
+
+    /// 强调色与正文墨色对比不到 1.6:1
+    static func looksLikeInk(_ accent: UIColor, dark: Bool) -> Bool {
+        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        func luminance(_ color: UIColor) -> CGFloat {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+            func lin(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        }
+        let a = luminance(accent), b = luminance(.cloudnInk)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05) < 1.6
+    }
+}
+
 /// 圆形图标按钮（细线）
 struct CircleIconButtonStyle: ButtonStyle {
     var size: CGFloat = 36
