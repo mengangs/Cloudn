@@ -157,18 +157,24 @@ struct ResolveView: View {
                 Text("夸克 / UC 口令需发给第三方「\(QuarkKouling.serviceName)」服务换取分享 ID，只发送口令文字，不含账号信息。可在「设置 › 解析」中更改。")
             }
             .alert(sniffOffer?.message ?? "", isPresented: Binding(get: { sniffOffer != nil }, set: { if !$0 { sniffOffer = nil } })) {
-                Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
+                // 需要登录时「去登录」排第一并设为首选，嗅探是备选；其他失败首选嗅探，另给「重试」
                 if let kind = sniffOffer?.loginKind {
                     Button("去登录") {
                         loginRetry = LoginRetry(text: sniffOffer?.text ?? "", kind: kind,
                                                 stamp: app.accounts.list(kind).first?.updatedAt)
                         loginKind = kind
                     }
+                    .keyboardShortcut(.defaultAction)
+                    Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
+                } else {
+                    Button("网页嗅探") { if let offer = sniffOffer { sniffTarget = SniffTarget(url: offer.url) } }
+                        .keyboardShortcut(.defaultAction)
+                    Button("重试") { if let text = sniffOffer?.text, !text.isEmpty { open(text: text) } }
                 }
                 Button("取消", role: .cancel) {}
             } message: {
                 Text(sniffOffer?.loginKind.map { "登录\($0.displayName)后可重新解析，也可以用网页嗅探：在网页里播放后抓取视频。" }
-                     ?? "可以用网页嗅探：在网页里播放后抓取视频。")
+                     ?? "可以重试，或用网页嗅探：在网页里播放后抓取视频。")
             }
             .sheet(item: $loginKind, onDismiss: {
                 // 真的登录了（主账号是新保存的）才重新解析刚才失败的链接；取消登录不重试
