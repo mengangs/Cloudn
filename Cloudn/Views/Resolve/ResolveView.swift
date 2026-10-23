@@ -222,7 +222,7 @@ struct ResolveView: View {
                 IconView(.link, size: 18)
                     .foregroundStyle(Color.ink3)
                     .frame(height: 34)
-                TextField("粘贴链接、口令或 GitHub 地址", text: $input, axis: .vertical)
+                TextField("粘贴链接或口令", text: $input, axis: .vertical)
                     .lineLimit(1...4)
                     .font(.body)
                     .padding(.vertical, 6)
