@@ -257,30 +257,35 @@ struct VideoResultView: View {
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.element[0].id) { index, options in
                     let media = selection(options)
-                    HStack(spacing: 12) {
-                        FileIcon(name: media.fileName)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(media.fileName).lineLimit(2).truncationMode(.middle).font(.subheadline).foregroundStyle(Color.ink)
-                            if options.count > 1 { qualityPicker(options, selected: media) }
-                            HStack(spacing: 6) {
-                                if options.count == 1, let quality = qualityText(media) { Text(quality) }
-                                if let size = sizeText(media) {
-                                    Text(size)
-                                } else if probing.contains(media.id) {
-                                    Text("正在获取大小…")
+                    // 清晰度不多时直接平铺成胶囊（各带大小），多了才收进菜单
+                    let inline = options.count > 1 && options.count <= 4
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            FileIcon(name: media.fileName)
+                            VStack(alignment: .leading, spacing: 3) {
+                                // 最先看到的是清晰度与大小；自动生成的文件名退到次要一行
+                                let title = headline(media)
+                                Text(title ?? media.fileName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.ink)
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
+                                    .contentTransition(.numericText())
+                                if options.count > 4 { qualityPicker(options, selected: media) }
+                                if title != nil {
+                                    Text(media.fileName).font(.caption).foregroundStyle(Color.ink3).lineLimit(1).truncationMode(.middle)
                                 }
-                                if let duration = probes[media.id]?.duration { Text(Self.clock(duration)) }
-                                if media.isHLS { Text("m3u8") }
-                                if !media.audioURL.isEmpty { Text("音视频分轨") }
+                                let meta = metaText(media)
+                                if !meta.isEmpty { Text(meta).font(.monoSmall).foregroundStyle(Color.ink3) }
                             }
-                            .font(.monoSmall)
-                            .foregroundStyle(Color.ink3)
+                            Spacer(minLength: 0)
+                            Button { play(media) } label: { IconView(.play, size: 15) }
+                                .buttonStyle(CircleIconButtonStyle(size: 32))
+                                .accessibilityLabel("在线播放")
+                            DownloadStateControl(item: state(of: media)) { download([media]) }
                         }
-                        Spacer(minLength: 0)
-                        Button { play(media) } label: { IconView(.play, size: 15) }
-                            .buttonStyle(CircleIconButtonStyle(size: 32))
-                            .accessibilityLabel("在线播放")
-                        DownloadStateControl(item: state(of: media)) { download([media]) }
+                        if inline { qualityChips(options, selected: media).padding(.leading, 50) }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -309,6 +314,42 @@ struct VideoResultView: View {
         }
     }
 
+    /// 行的主文字：「1080P · 86.4 MB」；清晰度和大小都不知道时为 nil（显示文件名）
+    private func headline(_ media: VideoMedia) -> String? {
+        var parts: [String] = []
+        if let quality = qualityText(media) { parts.append(quality) }
+        if let size = sizeText(media) {
+            parts.append(size)
+        } else if probing.contains(media.id) {
+            parts.append("正在获取大小…")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 次要信息：时长、m3u8、分轨
+    private func metaText(_ media: VideoMedia) -> String {
+        var parts: [String] = []
+        if let duration = probes[media.id]?.duration { parts.append(Self.clock(duration)) }
+        if media.isHLS { parts.append("m3u8") }
+        if !media.audioURL.isEmpty { parts.append("音视频分轨") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 平铺的清晰度胶囊：每个都带大小（没给大小的出现时就去探测）
+    private func qualityChips(_ options: [VideoMedia], selected: VideoMedia) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(options) { option in
+                    FilterChip(title: optionTitle(option), selected: option.id == selected.id) {
+                        chosen[option.variantGroup] = option.id
+                    }
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .task { await probe(options) }
+    }
+
     /// 清晰度选择：组内第一个是最高画质。打开菜单时才探测其余清晰度的大小
     private func qualityPicker(_ options: [VideoMedia], selected: VideoMedia) -> some View {
         Menu {
@@ -327,7 +368,7 @@ struct VideoResultView: View {
             .onAppear { Task { await probe(options) } }
         } label: {
             HStack(spacing: 4) {
-                Text(qualityText(selected) ?? "选择清晰度")
+                Text("清晰度 · \(options.count) 档")
                 Image(icon: .chevronRight).resizable().scaledToFit().frame(width: 9, height: 9).rotationEffect(.degrees(90))
             }
             .font(.footnote.weight(.medium))
