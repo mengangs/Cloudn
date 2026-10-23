@@ -190,6 +190,7 @@ struct ShareBrowserView: View {
                 .foregroundStyle(current ? Color.paper : Color.ink)
                 .background(current ? Color.ink : Color.surface, in: Capsule())
                 .overlay { if !current { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
+                .expandedHitArea(7)
         }
         .buttonStyle(.plain)
         .disabled(current)

@@ -763,9 +763,7 @@ struct DownloadRow: View {
                         .padding(.horizontal, 12)
                         .frame(minHeight: 32)
                         .overlay { Capsule().strokeBorder(Color.hairline, lineWidth: 1) }
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                        .padding(.vertical, -6)
+                        .expandedHitArea(6)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(save.label)

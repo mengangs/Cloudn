@@ -378,6 +378,7 @@ struct VideoResultView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Color.claySoft, in: Capsule())
+            .expandedHitArea(10)
         }
         .accessibilityLabel("清晰度：\(selected.quality)")
     }
@@ -464,6 +465,9 @@ struct VideoResultView: View {
         let on = selected.contains(media.id)
         let state = state(of: media)
         let live = livePairs[media.id]
+        let position = (images.firstIndex { $0.id == media.id } ?? 0) + 1
+        let spoken = "图片 \(position)，共 \(images.count) 张" + (live != nil ? "，实况照片" : "")
+            + (state?.status == .completed ? "，已下载" : "")
         return Button {
             if selecting {
                 if on { selected.remove(media.id) } else { selected.insert(media.id) }
@@ -513,6 +517,9 @@ struct VideoResultView: View {
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: on)
         }
         .buttonStyle(.plain)
+        // 读屏：说清第几张、是否实况、是否已下载；多选时报选中状态
+        .accessibilityLabel(spoken)
+        .accessibilityAddTraits(selecting && on ? .isSelected : [])
         .contextMenu {
             Button { download(withLive([media])) } label: { Label { Text("下载这张") } icon: { Image(icon: .download) } }
             if let live {

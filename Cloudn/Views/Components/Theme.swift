@@ -203,6 +203,16 @@ extension View {
         self.frame(maxWidth: maxWidth).frame(maxWidth: .infinity)
     }
 
+    /// 点按区域上下（左右）各扩出一截、外观与布局不变：小胶囊、文字按钮也有 44pt 高的点按区域
+    func expandedHitArea(_ vertical: CGFloat, horizontal: CGFloat = 0) -> some View {
+        self
+            .padding(.vertical, vertical)
+            .padding(.horizontal, horizontal)
+            .contentShape(Rectangle())
+            .padding(.vertical, -vertical)
+            .padding(.horizontal, -horizontal)
+    }
+
     /// 浮层阴影（菜单、操作栏、Toast）：浅色是淡淡的暖棕，深色底上暖棕看不出来，改用更深的黑影把浮层托起来
     func floatingShadow() -> some View {
         self.shadow(color: Color.floatingShadow, radius: 12, y: 6)
@@ -285,6 +295,8 @@ struct PillButtonStyle: ButtonStyle {
             .modifier(OnAccentForeground(fallback: kind == .secondary ? Color.ink : (kind == .dark ? Color.paper : nil)))
             .background(background, in: Capsule())
             .overlay { if kind == .secondary { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
+            // 矮胶囊（30pt 的「登录」等）点按区域补到 44pt
+            .expandedHitArea(max(0, (44 - height) / 2))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
             .modifier(DimWhenDisabled())
@@ -354,6 +366,7 @@ private struct TextLinkLabel: View {
         configuration.label
             .foregroundStyle(.tint)
             .bold(Self.looksLikeInk(accentTint, dark: colorScheme == .dark))
+            .expandedHitArea(12, horizontal: 8)
             .opacity(configuration.isPressed ? 0.5 : (isEnabled ? 1 : 0.45))
     }
 
@@ -420,6 +433,7 @@ struct FilterChip: View {
                 .foregroundStyle(selected ? Color.paper : Color.ink)
                 .background(selected ? Color.ink : Color.clear, in: Capsule())
                 .overlay { if !selected { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
+                .expandedHitArea(6)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])

@@ -356,7 +356,7 @@ struct ResolveView: View {
                     collectStopping = true
                 }
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color.clayInk)
+                    .buttonStyle(TextLinkButtonStyle())
                     .accessibilityLabel("停止加载，使用已获取的 \(snapshot.fetched) 个")
             }
         }
@@ -407,6 +407,7 @@ struct ResolveView: View {
         .padding(.horizontal, 8)
         .frame(height: 26)
         .background(value.isEmpty && !editingPwd ? Color.fillMuted : Color.claySoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .expandedHitArea(9)
     }
 
     private var detectedMark: PlatformMark? {
