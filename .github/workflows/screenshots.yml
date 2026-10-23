@@ -100,7 +100,7 @@ jobs:
             video:6 video-added:6 video-bili:6 collection:6 batch:6
             share:6 share-select:7 share-password:6 share-expired:6 share-guest:6 save:8
             sniffer:8 sniffer-list:9 sniffer-record:9
-            downloads:10 downloads-empty:5 preview-image:6 preview-text:6
+            downloads:10 downloads-empty:5 downloads-group:8 preview-image:6 preview-text:6
             me:6 me-empty:5 account-list:6 drive:6 settings:5 github:9"
           prepare() {  # 启动完成 → 干净的状态栏 → 安装
             xcrun simctl boot "$1" 2>/dev/null || true
@@ -109,9 +109,11 @@ jobs:
               --cellularMode active --cellularBars 4 --operatorName '' --batteryState charged --batteryLevel 100
             xcrun simctl install "$1" "$APP"
           }
-          launch() {
-            xcrun simctl terminate "$1" "$BID" >/dev/null 2>&1 || true
-            xcrun simctl launch "$1" "$BID" -CloudnScreenshot "$2" -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN
+          launch() {  # udid 页面 [其他启动参数…]
+            local udid=$1 screen=$2
+            shift 2
+            xcrun simctl terminate "$udid" "$BID" >/dev/null 2>&1 || true
+            xcrun simctl launch "$udid" "$BID" -CloudnScreenshot "$screen" -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN "$@"
           }
           collect_log() {  # 应用日志（截图模式的临时目录里）一并放进产物，排查用
             local dir
@@ -150,6 +152,21 @@ jobs:
           xcrun simctl ui "$PHONE" content_size accessibility-extra-extra-extra-large
           shoot_all "$PHONE" a11y
           xcrun simctl ui "$PHONE" content_size large
+          # 主题色：赭石（浅色下对比度最低的预设）、墨黑（与正文同色），浅色 / 深色各一套
+          THEME_SCREENS="resolve:6 video:6 share-select:7 downloads-group:8 me:6"
+          for theme in ochre:A0682A ink:2B2A27; do
+            name=${theme%%:*}; hex=${theme##*:}
+            for mode in light dark; do
+              xcrun simctl ui "$PHONE" appearance "$mode"
+              for entry in $THEME_SCREENS; do
+                screen=${entry%%:*}; wait=${entry##*:}
+                launch "$PHONE" "$screen" -CloudnAccent "$hex"
+                sleep "$wait"
+                snap "$PHONE" "$screen-$name-$mode"
+              done
+            done
+          done
+          xcrun simctl ui "$PHONE" appearance light
           collect_log "$PHONE" iphone
           xcrun simctl shutdown "$PHONE"
 
@@ -162,7 +179,7 @@ jobs:
           {
             echo "## 截图（${PHONE_NAME} / ${PAD_NAME}）"
             echo
-            echo "条件：light 浅色 · dark 深色 · a11y 最大辅助字号 · ipad iPad 浅色"
+            echo "条件：light 浅色 · dark 深色 · a11y 最大辅助字号 · ipad iPad 浅色 · ochre / ink 赭石 / 墨黑主题色"
             echo
             ls "$SHOTS" | sed 's/^/- /'
           } >> "$GITHUB_STEP_SUMMARY"

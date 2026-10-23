@@ -213,6 +213,16 @@ struct DownloadsView: View {
                 Color.clear.frame(height: selecting ? 96 : 16).plainListRow(top: 0, bottom: 0)
             }
             .listStyle(.plain)
+            #if DEBUG
+            // 截图模式：展开所有分组（看分组里的失败任务）
+            .task {
+                guard ScreenshotMode.screen == .downloadsGroup else { return }
+                for _ in 0..<50 where expanded.isEmpty {
+                    expanded = Set(app.downloads.items.compactMap { $0.request.group?.id })
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+            #endif
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 0)
             .readableWidth()

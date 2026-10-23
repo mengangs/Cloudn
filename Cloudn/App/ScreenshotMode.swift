@@ -57,6 +57,8 @@ enum ScreenshotMode {
         // 下载
         case downloads
         case downloadsEmpty = "downloads-empty"
+        /// 只有一个展开的分享分组：看分组里直链失效（可换链）的失败任务
+        case downloadsGroup = "downloads-group"
         case previewImage = "preview-image"
         case previewText = "preview-text"
         // 我的
@@ -70,7 +72,7 @@ enum ScreenshotMode {
 
         var tab: AppTab {
             switch self {
-            case .downloads, .downloadsEmpty, .previewImage, .previewText: return .downloads
+            case .downloads, .downloadsEmpty, .downloadsGroup, .previewImage, .previewText: return .downloads
             case .me, .meEmpty, .accountList, .drive, .settings: return .me
             default: return .resolve
             }
@@ -92,6 +94,13 @@ enum ScreenshotMode {
     }()
 
     static var isActive: Bool { screen != nil }
+
+    /// `-CloudnAccent RRGGBB`：用指定主题色截图（检查各主题色的对比度）；没带为 nil（默认陶土色）
+    static let accentHex: String? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-CloudnAccent"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }()
 
     struct Directories {
         let support: URL
@@ -168,7 +177,7 @@ enum ScreenshotMode {
             "retryCount": 3,
             "speedLimitKB": 0,
             "appearance": Appearance.system.rawValue,
-            "accentHex": "",
+            "accentHex": accentHex ?? "",
             "platformIconStyle": PlatformIconStyle.line.rawValue,
             "hiddenDrives": [String](),
             "proxyEnabled": false,
@@ -324,13 +333,17 @@ enum ScreenshotMode {
         }
 
         let mb: Int64 = 1024 * 1024
+        let groupOnly = screen == .downloadsGroup
         // 排在最前（最新）的排队任务等前两个下载中的任务（同时下载上限 2）
-        add("期末复习资料.zip", source: "百度网盘", total: 128 * mb, status: .queued, ago: 40)
-        add("雨后的西湖_1080P.mp4", source: "小红书", total: 86 * mb + 412_000, status: .running, received: 49 * mb,
-            ago: 90, rate: 3_400_000)
-        add("河西走廊 第3集.mkv", source: "夸克网盘", total: 1_502 * mb, status: .running, received: 583 * mb,
-            ago: 240, rate: 5_900_000)
-        add("SwiftUI 实战 第12讲.mp4", source: "123 云盘", total: 642 * mb, status: .paused, received: 251 * mb, ago: 2 * 3600)
+        if !groupOnly {
+            add("期末复习资料.zip", source: "百度网盘", total: 128 * mb, status: .queued, ago: 40)
+            add("雨后的西湖_1080P.mp4", source: "小红书", total: 86 * mb + 412_000, status: .running, received: 49 * mb,
+                ago: 90, rate: 3_400_000)
+            add("河西走廊 第3集.mkv", source: "夸克网盘", total: 1_502 * mb, status: .running, received: 583 * mb,
+                ago: 240, rate: 5_900_000)
+            add("SwiftUI 实战 第12讲.mp4", source: "123 云盘", total: 642 * mb, status: .paused, received: 251 * mb, ago: 2 * 3600)
+        }
+        // 没有来源信息、不能重新取链的失败任务：重试仍用原地址（与分组里能换链的那个对照）
         add("演唱会现场 4K.mp4", source: "百度网盘", total: 2_150 * mb, status: .failed, received: 304 * mb, ago: 3 * 3600,
             error: "HTTP 403：直链已失效或被拒绝，请重新解析后下载")
 
@@ -346,6 +359,10 @@ enum ScreenshotMode {
                 group: design, origin: origin(file.fid, file.name, file.size))
         }
 
+        guard !groupOnly else {
+            if let data = try? JSONSerialization.data(withJSONObject: list) { try? data.write(to: support.appendingPathComponent("downloads.json")) }
+            return
+        }
         add("城市夜景延时_4K.mp4", source: "哔哩哔哩", total: 237 * mb, status: .completed, ago: 5 * 3600, finishedAgo: 5 * 3600 - 600)
 
         let album = DownloadGroup(title: "雨后的西湖")
