@@ -247,7 +247,15 @@ struct ResolveView: View {
     @ViewBuilder
     private var trailingControl: some View {
         if working {
-            Button { cancelWork() } label: { ProgressRing(value: nil, size: 30) }
+            // 转圈中间画 ×：点按是取消，不是暂停
+            Button { cancelWork() } label: {
+                ZStack {
+                    ProgressRing(value: nil, size: 30, glyph: false)
+                    IconView(.close, size: 10).foregroundStyle(.tint)
+                }
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+            }
                 .buttonStyle(.plain)
                 .accessibilityLabel("正在解析，点按取消")
         } else if trimmed.isEmpty {
@@ -359,7 +367,7 @@ struct ResolveView: View {
             } else {
                 IconView(canSubmit ? .download : .warning, size: 15).foregroundStyle(Color.ink3)
             }
-            Text(detectionText).font(.footnote).foregroundStyle(Color.ink2).lineLimit(1)
+            Text(working ? detectionText + " · 正在解析…" : detectionText).font(.footnote).foregroundStyle(Color.ink2).lineLimit(1)
             Spacer(minLength: 0)
             if case .share(let share) = detected {
                 pwdToken(recognized: share.pwd)
