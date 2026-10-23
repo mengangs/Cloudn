@@ -489,6 +489,7 @@ struct QuotaBar: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(ByteFormat.string(quota.used)).font(.serif(20, relativeTo: .title3)).foregroundStyle(Color.ink)
                     Text("/ \(ByteFormat.string(quota.total))").font(.mono).foregroundStyle(Color.ink3)
+                        .lineLimit(1).minimumScaleFactor(0.7)
                 }
                 if !typeSize.isAccessibilitySize { Spacer() }
                 Text("剩余 \(ByteFormat.string(max(0, quota.total - quota.used)))").font(.caption).foregroundStyle(Color.ink2)

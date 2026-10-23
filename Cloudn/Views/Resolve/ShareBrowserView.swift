@@ -446,7 +446,8 @@ struct ShareBrowserView: View {
                 .foregroundStyle(Color.ink)
                 .contentTransition(.numericText())
                 if !large { Spacer(minLength: 0) }
-                HStack(spacing: 10) {
+                // 按钮保持原宽，挤的是左边的说明文字；辅助字号下两个按钮上下排、各占满一行
+                AdaptiveStack(spacing: 10) {
                     if model.saver != nil {
                         Button("转存") { startSave(chosen) }
                             .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
@@ -458,6 +459,7 @@ struct ShareBrowserView: View {
                     }
                     .buttonStyle(PillButtonStyle(kind: .primary, height: 40))
                 }
+                .fixedSize(horizontal: !large, vertical: false)
             }
             .disabled(chosen.isEmpty)
             .padding(.leading, large ? 14 : 18)
@@ -473,9 +475,14 @@ struct ShareBrowserView: View {
                 Button { Task { await model.downloadAll() } } label: {
                     HStack(spacing: 6) {
                         Image(icon: .download)
-                        Text("全部下载")
-                        // 跟随按钮前景色（浅色强调色上是深墨色），只是淡一点
-                        Text("· \(model.files.count) 项").opacity(0.75)
+                        if typeSize.isAccessibilitySize {
+                            // 大字号下合成一段文字，换行时不会拆成两块
+                            Text("全部下载 · \(model.files.count) 项").multilineTextAlignment(.center)
+                        } else {
+                            Text("全部下载")
+                            // 跟随按钮前景色（浅色强调色上是深墨色），只是淡一点
+                            Text("· \(model.files.count) 项").opacity(0.75)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                 }
