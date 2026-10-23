@@ -286,7 +286,8 @@ struct VideoResultView: View {
                                 .accessibilityLabel("在线播放")
                             DownloadStateControl(item: state(of: media)) { download([media]) }
                         }
-                        if inline { qualityChips(options, selected: media).padding(.leading, 50) }
+                        // 胶囊行一直滑到卡片边缘，最后一个停下时右边留出与行内边距相同的空
+                        if inline { qualityChips(options, selected: media).padding(.leading, 50).padding(.trailing, -14) }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -347,6 +348,7 @@ struct VideoResultView: View {
                 }
             }
         }
+        .contentMargins(.trailing, 14, for: .scrollContent)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .task { await probe(options) }
     }
