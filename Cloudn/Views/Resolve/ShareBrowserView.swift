@@ -9,6 +9,7 @@ struct ShareBrowserView: View {
     @State private var actionFile: ShareFile?
     @State private var preview: MediaPreviewItem?
     @State private var retryPwd = ""
+    @FocusState private var retryPwdFocused: Bool
     @State private var saveItems: SaveItems?
     /// 就地弹出的登录页；登录成功回来后重新打开分享（换成登录态）
     @State private var loginKind: AccountKind?
@@ -111,7 +112,7 @@ struct ShareBrowserView: View {
             }
             .font(.footnote)
             .foregroundStyle(Color.ink2)
-            Text(model.session == nil && model.errorMessage == nil ? "正在打开分享…" : model.title)
+            Text(headline)
                 .font(.pageTitle)
                 .foregroundStyle(Color.ink)
                 .lineLimit(3)
@@ -127,6 +128,14 @@ struct ShareBrowserView: View {
                 Color.clear.preference(key: HeaderOffsetKey.self, value: geo.frame(in: .named(Self.space)).maxY)
             }
         }
+    }
+
+    /// 大标题：打开失败时直接说是什么情况，而不是只显示平台名
+    private var headline: String {
+        guard model.session == nil else { return model.title }
+        if model.errorMessage == nil { return "正在打开分享…" }
+        if model.needsPassword { return "需要提取码" }
+        return model.linkInvalid ? "分享已失效" : "无法打开分享"
     }
 
     private var summary: String {
@@ -349,13 +358,30 @@ struct ShareBrowserView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .submitLabel(.go)
+                        .focused($retryPwdFocused)
                         .onSubmit { retry() }
+                        // 要提取码时直接进入输入
+                        .onAppear { retryPwdFocused = true }
                         .padding(.horizontal, 14)
                         .frame(height: 40)
                         .background(Color.fillMuted, in: Capsule())
                     Button("解析", action: retry)
                         .buttonStyle(PillButtonStyle(kind: .primary, height: 40))
                         .disabled(retryPwd.trimmingCharacters(in: .whitespaces).isEmpty || model.loading)
+                }
+            } else if model.linkInvalid {
+                // 已失效的分享重试也没用：给能做的下一步（大字号下上下排）
+                AdaptiveStack(spacing: 10) {
+                    Button { Clipboard.copy(model.sourceText); app.show("已复制分享链接") } label: {
+                        Label { Text("复制链接") } icon: { Image(icon: .link) }
+                    }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                    if let url = URL(string: model.share.url) {
+                        Link(destination: url) {
+                            Label { Text("在浏览器中打开") } icon: { Image(icon: .share) }
+                        }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                    }
                 }
             } else {
                 Button { Task { await model.reloadCurrent(force: true) } } label: {

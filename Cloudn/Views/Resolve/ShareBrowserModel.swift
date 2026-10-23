@@ -100,6 +100,12 @@ final class ShareBrowserModel: Hashable, Identifiable {
         }
     }
 
+    /// 分享本身已失效（过期、被取消、不存在、被删除）：打开时就失败，重试没有意义。网络之类的错误不算
+    var linkInvalid: Bool {
+        guard session == nil, !needsPassword, let message = errorMessage else { return false }
+        return ["过期", "失效", "取消", "不存在", "删除", "违规", "封禁"].contains { message.contains($0) }
+    }
+
     func retry(with newPwd: String) async {
         pwd = newPwd
         session = nil
