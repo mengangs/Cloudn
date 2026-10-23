@@ -128,6 +128,9 @@ struct DownloadsView: View {
         if item.status.isActive {
             return SwipeAction.Item(title: "暂停", glyph: .pause, tint: Color.swipeNeutral) { app.downloads.pause(item) }
         }
+        if item.needsFreshLink {
+            return SwipeAction.Item(title: "重试", glyph: .refresh, tint: Color.swipePositive) { refresh(item) }
+        }
         if item.status == .paused || item.status == .failed {
             return SwipeAction.Item(title: "继续", glyph: .play, tint: Color.swipePositive) { app.downloads.resume(item) }
         }
@@ -382,6 +385,7 @@ struct DownloadsView: View {
             }
             if url.hasDirectoryPath || Self.isDirectory(url) { Self.revealInFiles(url) } else { previewURL = url }
         case .running, .queued: app.downloads.pause(item)
+        case .failed where item.needsFreshLink: refresh(item)
         case .paused, .failed: app.downloads.resume(item)
         case .merging: break
         }
@@ -738,7 +742,9 @@ struct DownloadRow: View {
                 .font(.caption)
                 .foregroundStyle(Color.ink3)
                 if item.status == .failed, let message = item.errorMessage {
-                    Text(message).font(.caption2).foregroundStyle(Color.clayInk).lineLimit(3)
+                    // 直链失效的：说清点重试会自动换链（平台原文让人「重新解析」，其实不必）
+                    Text(item.needsFreshLink ? "\(message.prefix(8)) · 直链已失效，点重试会重新获取" : message)
+                        .font(.caption2).foregroundStyle(Color.clayInk).lineLimit(3)
                 }
                 if let exported = item.exportedTo {
                     Label("已移到：\(exported)", glyph: .folder).font(.caption2).foregroundStyle(Color.ink3).lineLimit(2)
