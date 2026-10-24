@@ -323,9 +323,9 @@ struct SnifferView: View {
             Button { download(media) } label: {
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 3) {
-                        AdaptiveStack(spacing: 6) {
+                        // 名称和「推荐」一行，规格单独一行：各行对齐，规格不会被标签挤得折行
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
-                            Text(media.detail).font(.figuresSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
                             if recommended {
                                 Text("推荐")
                                     .font(.caption2.weight(.semibold))
@@ -335,6 +335,7 @@ struct SnifferView: View {
                                     .background(Color.claySoft, in: Capsule())
                             }
                         }
+                        Text(media.detail).font(.figuresSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
                         Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
                     }
                     Spacer(minLength: 0)
