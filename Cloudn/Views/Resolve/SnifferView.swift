@@ -449,6 +449,18 @@ final class SnifferBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandl
         controller.add(WeakMessageHandler(self), name: "cloudnMSE")
         webView.navigationDelegate = self
         if let target = URL(string: url) { webView.load(URLRequest(url: target)) }
+        Task { [weak self] in await self?.scanSource(url) }
+    }
+
+    /// 页面源码里直接写着的音视频地址（og:video、<video> 标签、脚本里的 .m3u8 / .mp4）：和页面加载同时进行，
+    /// 找到的不用等播放就先列出来；找不到、不是网页或请求失败都不影响页面里的嗅探
+    private func scanSource(_ url: String) async {
+        guard let r = try? await HTTPClient.fetchPrefixResponse(url, headers: [("User-Agent", VideoHTTP.uaIPhone)], limit: 1_500_000, timeout: 15),
+              r.isSuccess, (r.header("Content-Type") ?? "text/html").lowercased().contains("html") else { return }
+        let scan = PageMediaScanner.scan(html: String(decoding: r.data, as: UTF8.self), baseURL: url)
+        guard !scan.urls.isEmpty else { return }
+        Log.info("网页嗅探：页面源码里找到 \(scan.urls.count) 个媒体地址")
+        for media in scan.urls { add(url: media, page: url, title: scan.title) }
     }
 
     /// 下载时的请求头：页面 UA、页面地址作 Referer、该站点的 Cookie
