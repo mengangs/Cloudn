@@ -43,19 +43,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var model = model
-        TabView(selection: $model.selectedTab) {
-            ResolveView()
-                .tabItem { Label { Text("解析") } icon: { Image(icon: .link) } }
-                .tag(AppTab.resolve)
-            DownloadsView()
-                .tabItem { Label { Text("下载") } icon: { Image(icon: .download) } }
-                .badge(model.downloads.activeCount)
-                .tag(AppTab.downloads)
-            AccountsView()
-                .tabItem { Label { Text("我的") } icon: { Image(icon: .user) } }
-                .tag(AppTab.me)
-        }
+        AppTabView { ResolveView() } me: { AccountsView() }
         .background(Color.paper)
         .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
         .sheet(isPresented: Binding(get: { !model.settings.acceptedNotice }, set: { _ in })) {
@@ -68,6 +56,43 @@ struct RootView: View {
             UpdateSheet(release: $0).presentationDetents([.medium, .large])
         }
     }
+}
+
+/// 三个标签页。iOS 18 起用可切换成侧栏的标签栏：iPad 上能展开成侧栏，iPhone 上和原来一样；iOS 17 保持原样
+struct AppTabView<Resolve: View, Me: View>: View {
+    @ViewBuilder var resolve: Resolve
+    @ViewBuilder var me: Me
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let selection = Bindable(model).selectedTab
+        if #available(iOS 18.0, *) {
+            TabView(selection: selection) {
+                Tab(value: AppTab.resolve) { resolve } label: { resolveLabel }
+                Tab(value: AppTab.downloads) { DownloadsView() } label: { downloadsLabel }
+                    .badge(model.downloads.activeCount)
+                Tab(value: AppTab.me) { me } label: { meLabel }
+            }
+            .tabViewStyle(.sidebarAdaptable)
+        } else {
+            TabView(selection: selection) {
+                resolve
+                    .tabItem { resolveLabel }
+                    .tag(AppTab.resolve)
+                DownloadsView()
+                    .tabItem { downloadsLabel }
+                    .badge(model.downloads.activeCount)
+                    .tag(AppTab.downloads)
+                me
+                    .tabItem { meLabel }
+                    .tag(AppTab.me)
+            }
+        }
+    }
+
+    private var resolveLabel: some View { Label { Text("解析") } icon: { Image(icon: .link) } }
+    private var downloadsLabel: some View { Label { Text("下载") } icon: { Image(icon: .download) } }
+    private var meLabel: some View { Label { Text("我的") } icon: { Image(icon: .user) } }
 }
 
 /// 首次启动的使用须知

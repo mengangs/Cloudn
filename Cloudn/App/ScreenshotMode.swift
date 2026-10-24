@@ -732,19 +732,7 @@ struct ScreenshotRootView: View {
     }
 
     var body: some View {
-        @Bindable var model = model
-        TabView(selection: $model.selectedTab) {
-            resolveTab
-                .tabItem { Label { Text("解析") } icon: { Image(icon: .link) } }
-                .tag(AppTab.resolve)
-            DownloadsView()
-                .tabItem { Label { Text("下载") } icon: { Image(icon: .download) } }
-                .badge(model.downloads.activeCount)
-                .tag(AppTab.downloads)
-            meTab
-                .tabItem { Label { Text("我的") } icon: { Image(icon: .user) } }
-                .tag(AppTab.me)
-        }
+        AppTabView { resolveTab } me: { meTab }
         .background(Color.paper)
         .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
         .onAppear(perform: setUp)
