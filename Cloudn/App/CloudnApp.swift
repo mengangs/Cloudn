@@ -47,6 +47,7 @@ struct RootView: View {
         .acceptsLinkDrop()
         .background(Color.paper)
         .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
+        .background(WindowTint(color: model.settings.accentUIColor))
         .sheet(isPresented: Binding(get: { !model.settings.acceptedNotice }, set: { _ in })) {
             NoticeSheet { model.settings.acceptedNotice = true }
                 .interactiveDismissDisabled()

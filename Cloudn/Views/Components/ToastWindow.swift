@@ -54,3 +54,29 @@ struct WindowSceneReader: UIViewRepresentable {
         }
     }
 }
+
+/// 把主题色设到所在窗口的 tintColor：系统弹窗（alert、确认框）的按钮只认窗口的 tintColor，不跟 SwiftUI 的 .tint
+struct WindowTint: UIViewRepresentable {
+    let color: UIColor
+
+    func makeUIView(context: Context) -> TintProbeView {
+        let view = TintProbeView()
+        view.color = color
+        return view
+    }
+
+    func updateUIView(_ uiView: TintProbeView, context: Context) {
+        uiView.color = color
+    }
+
+    final class TintProbeView: UIView {
+        var color: UIColor? {
+            didSet { window?.tintColor = color }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            window?.tintColor = color
+        }
+    }
+}

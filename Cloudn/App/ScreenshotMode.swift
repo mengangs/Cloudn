@@ -735,6 +735,7 @@ struct ScreenshotRootView: View {
         AppTabView { resolveTab } me: { meTab }
         .background(Color.paper)
         .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
+        .background(WindowTint(color: model.settings.accentUIColor))
         .onAppear(perform: setUp)
         .fullScreenCover(isPresented: $previewing) {
             if let url = previewURL { FilePreviewView(url: url) }
