@@ -28,6 +28,34 @@ struct HeadlessWebExtractor: WebPageExtractor {
     }
 }
 
+extension HeadlessWebExtractor {
+    /// 解析时要用隐藏浏览器的链接：抖音作品与主页、Facebook、小黑盒、快手主页
+    static func needsWebPage(_ link: DetectedVideoLink) -> Bool {
+        switch link.platform {
+        case .douyin, .facebook, .xiaoheihe: return true
+        case .kuaishou: return link.kind == "profile"
+        default: return false
+        }
+    }
+
+    /// 预热：第一次建 WKWebView 要先拉起网页相关进程（约 0.5–1 秒）。输入框里认出要用隐藏浏览器的链接时，
+    /// 先开一个空白页把进程拉起来，点「解析」时就不用再等；30 秒后释放
+    @MainActor static func prewarm() {
+        guard warmer == nil else { return }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.loadHTMLString("<html></html>", baseURL: nil)
+        warmer = webView
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            warmer = nil
+        }
+    }
+
+    @MainActor private static var warmer: WKWebView?
+}
+
 @MainActor
 final class HeadlessSession: NSObject, WKNavigationDelegate {
     private let webView: WKWebView

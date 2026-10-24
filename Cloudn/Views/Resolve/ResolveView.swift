@@ -242,6 +242,8 @@ struct ResolveView: View {
                     .submitLabel(.go)
                     .onChange(of: input) { old, new in
                         if handleReturnKey(old: old, new: new) { return }
+                        // 认出要用隐藏浏览器的链接：趁用户点「解析」前先把网页进程拉起来（已在解析时不用）
+                        if !working, case .video(let link) = detected, HeadlessWebExtractor.needsWebPage(link) { HeadlessWebExtractor.prewarm() }
                         // 只有链接本身变了才清掉手改的提取码
                         if old.filter({ $0 != "\n" }) != new.filter({ $0 != "\n" }) { pwd = "" }
                     }
