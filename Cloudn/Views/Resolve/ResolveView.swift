@@ -866,7 +866,15 @@ struct ResolveView: View {
         // 截图模式：解析中 / 解析失败等状态用演示结果（见 ScreenshotMode.swift）
         if let demo = try await ScreenshotMode.parse(link) { return demo }
         #endif
-        return try await app.videoService.parse(link)
+        let key = ParseCache.key(for: link, accounts: app.accounts)
+        if let cached = ParseCache.shared.result(for: key) {
+            Log.info("解析\(link.platform.displayName)：用 10 分钟内的上次结果")
+            return cached
+        }
+        let result = try await app.videoService.parse(link)
+        // 什么都没解析到的结果按失败处理，不缓存
+        if !result.medias.isEmpty || !result.entries.isEmpty { ParseCache.shared.store(result, for: key) }
+        return result
     }
 
     /// 地址没有文件扩展名，或扩展名是网页类（html / php …），可能是网页而不是文件
