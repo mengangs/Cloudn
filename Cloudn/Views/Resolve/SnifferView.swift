@@ -104,7 +104,7 @@ struct SnifferView: View {
                                 Button { UIApplication.shared.open(url) } label: { Label("在 Safari 中打开", glyph: .share) }
                             }
                         } label: {
-                            IconView(.more, size: 20)
+                            IconView(.more, size: 20).foregroundStyle(Color.ink)
                         }
                         .accessibilityLabel("更多")
                     }

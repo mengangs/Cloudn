@@ -120,7 +120,7 @@ struct AccountsView: View {
             .toolbar {
                 // 平台多了列表很长：设置放到右上角，不用滑到底
                 ToolbarItem(placement: .primaryAction) {
-                    NavigationLink { SettingsView() } label: { IconView(.gear, size: 18) }
+                    NavigationLink { SettingsView() } label: { IconView(.gear, size: 18).foregroundStyle(Color.ink) }
                         .accessibilityLabel("设置")
                 }
             }

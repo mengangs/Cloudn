@@ -136,7 +136,7 @@ struct DriveFolderView: View {
                             Divider()
                             Button { showingOffline = true } label: { Label("离线下载", glyph: .magnet) }
                         }
-                    } label: { Image(icon: .plus) }
+                    } label: { Image(icon: .plus).foregroundStyle(Color.ink) }
                     .accessibilityLabel("新建或上传")
                 }
             }
