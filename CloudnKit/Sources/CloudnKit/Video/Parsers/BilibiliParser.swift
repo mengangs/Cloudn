@@ -58,6 +58,9 @@ struct BilibiliParser: VideoParser {
         if pages.count > 1 { title += " P\(pageIndex + 1) \(page["part"].string)" }
         let base = FileNames.base(title, fallback: "bilibili_\(bvid)")
 
+        // 字幕列表（登录后才有）与视频流互不依赖：同时请求，不再取完视频流再排队取字幕
+        async let subtitleList = subtitleTracks(bvid: bvid, cid: cid, cookie: cookie)
+
         // DASH 分轨：列出每档清晰度（最高档在前，作为默认），下载后合并；未登录时最高通常只有 480P / 720P
         var medias: [VideoMedia] = []
         if let choices = try? await dashChoices(bvid: bvid, cid: cid, cookie: cookie) {
@@ -83,7 +86,7 @@ struct BilibiliParser: VideoParser {
         }
         let owner = data["owner"]
         let collection = Self.collection(data, explicitPage: explicitPage != nil)
-        let subtitles = await subtitleTracks(bvid: bvid, cid: cid, cookie: cookie)
+        let subtitles = await subtitleList
         return VideoParseResult(platform: platform, title: collection.title ?? title, author: owner["name"].string,
                                 avatar: owner["face"].string, cover: data["pic"].string, text: data["desc"].string,
                                 timestamp: data["pubdate"].int64, url: "https://www.bilibili.com/video/\(bvid)",

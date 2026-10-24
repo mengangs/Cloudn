@@ -254,17 +254,25 @@ struct DouyinParser: VideoParser {
         return (final, size, lower.contains("bytevc1") || lower.contains("hevc") || lower.contains("h265"))
     }
 
-    /// 逐档 HEAD 探测无水印播放接口，取 Content-Length 最大的
+    /// 各档同时 HEAD 探测无水印播放接口，取 Content-Length 最大的（一样大时取清晰度高的，与以前逐档探测的结果相同）
     static func probeBest(uri: String) async -> (url: String, size: Int64)? {
-        var best: (url: String, size: Int64)?
-        for ratio in ["1080p", "720p", "540p"] {
-            let url = "https://aweme.snssdk.com/aweme/v1/play/?video_id=\(uri.formEncoded)&ratio=\(ratio)&line=0"
-            guard let r = try? await HTTPClient.shared.send(HTTPRequest(url: url, method: "HEAD", headers: [
-                ("User-Agent", VideoHTTP.uaChrome), ("Referer", "https://www.douyin.com/")
-            ], timeout: 10)), r.isSuccess else { continue }
-            let size = Int64(r.header("Content-Length") ?? "") ?? 0
-            if size > (best?.size ?? 0) { best = (url, size) }
+        let ratios = ["1080p", "720p", "540p"]
+        let probed = await withTaskGroup(of: (index: Int, url: String, size: Int64).self) { group in
+            for (i, ratio) in ratios.enumerated() {
+                group.addTask {
+                    let url = "https://aweme.snssdk.com/aweme/v1/play/?video_id=\(uri.formEncoded)&ratio=\(ratio)&line=0"
+                    guard let r = try? await HTTPClient.shared.send(HTTPRequest(url: url, method: "HEAD", headers: [
+                        ("User-Agent", VideoHTTP.uaChrome), ("Referer", "https://www.douyin.com/")
+                    ], timeout: 10)), r.isSuccess else { return (i, url, 0) }
+                    return (i, url, Int64(r.header("Content-Length") ?? "") ?? 0)
+                }
+            }
+            var out: [(index: Int, url: String, size: Int64)] = []
+            for await item in group { out.append(item) }
+            return out.sorted { $0.index < $1.index }
         }
+        var best: (url: String, size: Int64)?
+        for item in probed where item.size > (best?.size ?? 0) { best = (item.url, item.size) }
         return best
     }
 
