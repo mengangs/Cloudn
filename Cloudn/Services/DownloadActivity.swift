@@ -2,6 +2,7 @@
 import ActivityKit
 import CloudnKit
 import Foundation
+import UIKit
 
 /// 下载进度实时活动：有任务开始时创建，进度变化节流更新，全部结束后显示「下载完成」并稍后消失
 @MainActor
@@ -88,7 +89,21 @@ final class DownloadActivity {
         return .init(active: active.count, finished: finished,
                      fraction: unknown || total <= 0 ? -1 : min(1, received / total),
                      speed: Int64(saturating: active.reduce(0.0) { $0 + max(0, $1.speed) }), title: main?.displayName ?? "", note: note,
-                     failed: failedCount)
+                     failed: failedCount,
+                     remaining: unknown || total <= 0 ? nil : Int64(saturating: max(0, total - received)),
+                     accent: Self.accentPair())
+    }
+
+    /// 当前主题色的浅色 / 深色两份（与应用里实际生效的一致）；用默认陶土色时为 nil
+    private static func accentPair() -> String? {
+        guard let color = AppSettings.accentUIColor(hex: UserDefaults.standard.string(forKey: "accentHex") ?? "") else { return nil }
+        func hex(_ style: UIUserInterfaceStyle) -> String {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).getRed(&r, green: &g, blue: &b, alpha: &a)
+            func byte(_ c: CGFloat) -> Int { Int((min(1, max(0, c)) * 255).rounded()) }
+            return String(format: "%02X%02X%02X", byte(r), byte(g), byte(b))
+        }
+        return hex(.light) + "," + hex(.dark)
     }
 
     /// 切到后台：之后应用多半拿不到运行时间、进度不会再刷新，先把说明写上，免得锁屏上停着一个过时的进度。

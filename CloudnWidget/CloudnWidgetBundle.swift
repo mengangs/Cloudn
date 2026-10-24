@@ -40,6 +40,8 @@ struct DownloadLiveActivity: Widget {
             // 不自定义底色：锁屏会把浅色底渲染成发黄的玻璃、浅灰字看不清。用系统底色 + 语义文字颜色
             LockScreenView(state: context.state, stale: context.isStale)
                 .padding(16)
+                // 点按打开下载页
+                .widgetURL(DownloadLiveActivity.downloadsURL)
         } dynamicIsland: { context in
             let state = context.state
             // 过了过期时间还没收到新进度（应用在后台拿不到运行时间）：进度变淡，提示未更新
@@ -48,7 +50,7 @@ struct DownloadLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
                         Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
-                             tint: Palette.clayOnBlack, size: 26)
+                             tint: state.islandTint, size: 26)
                             .opacity(stale ? 0.5 : 1)
                         Text(state.active > 0 ? "\(state.active) 个" : (state.isFailed ? "失败" : (state.isPaused ? "已暂停" : "完成")))
                             .font(.subheadline.weight(.semibold))
@@ -56,8 +58,15 @@ struct DownloadLiveActivity: Widget {
                     .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(Self.speed(state.speed)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
-                        .padding(.trailing, 4)
+                    // 剩余时间最有用：知道就放上面，速度在下面
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if let eta = state.etaText, !stale {
+                            Text(eta).font(.subheadline.weight(.medium)).monospacedDigit()
+                        }
+                        Text(Self.speed(state.speed)).font(state.etaText == nil || stale ? .subheadline : .caption)
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -68,7 +77,7 @@ struct DownloadLiveActivity: Widget {
                             Text(state.note).font(.caption2).foregroundStyle(.secondary)
                         }
                         if state.fraction >= 0 && state.active > 0 {
-                            Bar(fraction: state.fraction, tint: Palette.clayOnBlack, track: .white.opacity(0.15)).opacity(stale ? 0.5 : 1)
+                            Bar(fraction: state.fraction, tint: state.islandTint, track: .white.opacity(0.15)).opacity(stale ? 0.5 : 1)
                         }
                     }
                     .padding(.horizontal, 4)
@@ -76,24 +85,27 @@ struct DownloadLiveActivity: Widget {
             } compactLeading: {
                 // 紧贴胶囊圆角的左边缘会被裁到一点：往里收一些、圆环略小
                 Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
-                     tint: Palette.clayOnBlack, size: 16)
+                     tint: state.islandTint, size: 16)
                     .opacity(stale ? 0.5 : 1)
                     .padding(.leading, 4)
             } compactTrailing: {
                 Text(state.compactText)
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(Palette.clayOnBlack)
+                    .foregroundStyle(state.islandTint)
                     .opacity(stale ? 0.5 : 1)
                     .padding(.trailing, 2)
             } minimal: {
                 Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
-                     tint: Palette.clayOnBlack, size: 16)
+                     tint: state.islandTint, size: 16)
                     .opacity(stale ? 0.5 : 1)
             }
-            .keylineTint(Palette.clayOnBlack)
+            .keylineTint(state.islandTint)
+            .widgetURL(Self.downloadsURL)
         }
     }
+
+    static let downloadsURL = URL(string: "cloudn://downloads")
 
     static func speed(_ bytes: Int64) -> String {
         bytes > 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) + "/s" : ""
@@ -106,6 +118,37 @@ extension DownloadActivityAttributes.ContentState {
 
     /// 没有进行中的任务、但不是全部完成（被暂停；旧版本的状态里失败也算在这里）
     var isPaused: Bool { active == 0 && !note.isEmpty && !isFailed }
+
+    /// 剩余时间（与应用下载页的说法一致）：有速度、知道剩余大小时才有
+    var etaText: String? {
+        guard active > 0, speed > 0, let remaining, remaining > 0 else { return nil }
+        let seconds = Double(remaining) / Double(speed)
+        if seconds < 10 { return "马上就好" }
+        if seconds < 60 { return "不到 1 分钟" }
+        if seconds < 3600 { return "还剩约 \(Int((seconds / 60).rounded())) 分钟" }
+        if seconds > 86400 * 2 { return "还要很久" }
+        let h = Int(seconds / 3600)
+        let m = Int((seconds - Double(h) * 3600) / 60)
+        return m > 0 ? "还剩约 \(h) 小时 \(m) 分" : "还剩约 \(h) 小时"
+    }
+
+    /// 主题色的浅色 / 深色两份；没设过（默认陶土色）为 nil
+    private var accentColors: (light: UIColor, dark: UIColor)? {
+        let parts = (accent ?? "").split(separator: ",").compactMap { UInt32($0, radix: 16) }
+        guard parts.count == 2 else { return nil }
+        return (UIColor(hex: parts[0]), UIColor(hex: parts[1]))
+    }
+
+    /// 锁屏上的强调色：跟随应用的主题色
+    var lockTint: Color {
+        guard let colors = accentColors else { return Palette.clay }
+        return Color(UIColor { $0.userInterfaceStyle == .dark ? colors.dark : colors.light })
+    }
+
+    /// 灵动岛始终是黑底：用主题色的深色版
+    var islandTint: Color {
+        accentColors.map { Color(uiColor: $0.dark) } ?? Palette.clayOnBlack
+    }
 
     /// 灵动岛右侧：知道进度显示百分比，否则显示速度，再不然显示任务数
     var compactText: String {
@@ -182,7 +225,7 @@ private struct LockScreenView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Ring(fraction: state.fraction, done: state.active == 0, paused: state.isPaused, failed: state.isFailed,
-                     tint: state.active == 0 && !state.isPaused && !state.isFailed ? Palette.success : Palette.clay, size: 34)
+                     tint: state.active == 0 && !state.isPaused && !state.isFailed ? Palette.success : state.lockTint, size: 34)
                     .opacity(dimmed ? 0.5 : 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
@@ -200,11 +243,14 @@ private struct LockScreenView: View {
                     if state.fraction >= 0 && state.active > 0 {
                         Text("\(Int(state.fraction * 100))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.primary)
                     }
+                    if let eta = state.etaText, !dimmed {
+                        Text(eta).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
                     Text(DownloadLiveActivity.speed(state.speed)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
             if state.fraction >= 0 && state.active > 0 {
-                Bar(fraction: state.fraction, tint: Palette.clay, track: Color.secondary.opacity(0.25))
+                Bar(fraction: state.fraction, tint: state.lockTint, track: Color.secondary.opacity(0.25))
                     .opacity(dimmed ? 0.5 : 1)
             }
             if state.finished > 0 {

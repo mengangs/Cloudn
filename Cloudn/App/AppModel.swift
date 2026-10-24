@@ -298,6 +298,11 @@ final class AppModel {
             return
         }
         guard url.scheme == "cloudn", let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        // 点实时活动（锁屏 / 灵动岛）：直接到下载页
+        if comps.host == "downloads" {
+            selectedTab = .downloads
+            return
+        }
         if let text = comps.queryItems?.first(where: { $0.name == "text" || $0.name == "url" })?.value, !text.isEmpty {
             pendingInput = text
             selectedTab = .resolve
