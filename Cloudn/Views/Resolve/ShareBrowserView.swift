@@ -74,6 +74,8 @@ struct ShareBrowserView: View {
             .onDisappear { if preview == nil && textPreview == nil && filePreview == nil { model.releaseAllTemporary() } }
             .sensoryFeedback(.selection, trigger: model.selection)
             .animation(.snappy(duration: 0.25), value: model.selecting)
+            // 分享打开成功（列表出来）时轻轻一下
+            .sensoryFeedback(.success, trigger: model.session != nil) { old, new in !old && new }
             .animation(.snappy(duration: 0.25), value: model.batch?.total)
         }
         .fullScreenCover(item: $preview, onDismiss: releasePreviewLink) { item in
@@ -424,7 +426,8 @@ struct ShareBrowserView: View {
                 }
                 .accessibilityLabel(model.isBookmarked ? "取消收藏" : "收藏")
                 .disabled(model.session == nil)
-                .sensoryFeedback(.success, trigger: model.isBookmarked)
+                // 收藏是「成功」，取消收藏只是轻点一下
+                .sensoryFeedback(trigger: model.isBookmarked) { _, now in now ? .success : .selection }
                 Menu {
                     Button { model.selecting = true } label: { Label { Text("多选") } icon: { Image(icon: .checkCircle) } }
                         .disabled(model.files.isEmpty)

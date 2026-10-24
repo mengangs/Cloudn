@@ -784,6 +784,8 @@ struct DownloadRow: View {
             }
         }
         .padding(.vertical, 4)
+        // 下载页里看着任务完成时轻轻一下（行尾换成「保存」，进度环不在了，所以放在整行上）
+        .sensoryFeedback(.success, trigger: item.status) { old, new in old != .completed && new == .completed }
     }
 
     private var isTransferring: Bool { item.status == .running || item.status == .merging }

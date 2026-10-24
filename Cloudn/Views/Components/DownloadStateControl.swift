@@ -46,6 +46,8 @@ struct DownloadStateControl: View {
         .frame(width: max(size, 44), height: max(size, 44))
         .animation(.snappy(duration: 0.25), value: item?.status)
         .animation(.snappy(duration: 0.25), value: busy)
+        // 看着它下完：完成那一刻轻轻一下
+        .sensoryFeedback(.success, trigger: item?.status) { old, new in old != nil && old != .completed && new == .completed }
     }
 
     /// 直链失效的先重新取链再继续；其他失败（网络等）照旧用原地址重试

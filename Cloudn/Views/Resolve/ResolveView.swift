@@ -198,6 +198,8 @@ struct ResolveView: View {
             }
         }
         .sensoryFeedback(.selection, trigger: detectionKey) { _, new in !new.isEmpty }
+        // 作品解析成功、进入结果页时
+        .sensoryFeedback(.success, trigger: videoResult?.id) { _, new in new != nil }
         .onAppear(perform: consumePending)
         .onChange(of: app.pendingInput) { _, _ in consumePending() }
         .onChange(of: app.pendingTorrent) { _, _ in consumePending() }

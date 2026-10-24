@@ -314,7 +314,7 @@ struct PillButtonStyle: ButtonStyle {
             .overlay { if kind == .secondary { Capsule().strokeBorder(Color.hairline, lineWidth: 1) } }
             // 矮胶囊（30pt 的「登录」等）点按区域补到 44pt
             .expandedHitArea(max(0, (44 - height) / 2))
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .modifier(PressScale(pressed: configuration.isPressed, scale: 0.96))
             .opacity(configuration.isPressed ? 0.9 : 1)
             .modifier(DimWhenDisabled())
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
@@ -417,9 +417,20 @@ struct CircleIconButtonStyle: ButtonStyle {
             // 视觉上小一些，点按区域不小于 44pt
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .modifier(PressScale(pressed: configuration.isPressed, scale: 0.92))
             .modifier(DimWhenDisabled())
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// 按下时略微缩小；打开了「减弱动态效果」就不缩放（按下变淡的反馈仍在）
+private struct PressScale: ViewModifier {
+    let pressed: Bool
+    let scale: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.scaleEffect(pressed && !reduceMotion ? scale : 1)
     }
 }
 
