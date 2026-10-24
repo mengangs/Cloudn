@@ -412,9 +412,15 @@ struct ResolveView: View {
                     .onAppear { pwdFocused = true }
             } else {
                 Button { pwd = value; editingPwd = true } label: {
-                    Text(value.isEmpty ? "加提取码" : value)
-                        .font(value.isEmpty ? .caption : .mono)
-                        .foregroundStyle(value.isEmpty ? Color.ink2 : Color.clayInk)
+                    if value.isEmpty {
+                        Text("加提取码").font(.caption).foregroundStyle(Color.ink2)
+                    } else {
+                        // 带上「提取码」三个字，不然像一个随手贴的标签
+                        HStack(spacing: 4) {
+                            Text("提取码").font(.caption).foregroundStyle(Color.ink2)
+                            Text(value).font(.mono).foregroundStyle(Color.clayInk)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(value.isEmpty ? "添加提取码" : "提取码 \(value)，点按修改")
