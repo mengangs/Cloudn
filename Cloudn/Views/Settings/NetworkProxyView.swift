@@ -57,7 +57,7 @@ struct NetworkProxyView: View {
                                     Spinner(size: 18)
                                 } else if let result {
                                     switch result {
-                                    case .success(let ms): Text("GitHub \(ms) ms").font(.mono).foregroundStyle(Color.success)
+                                    case .success(let ms): Text("GitHub \(ms) ms").font(.figures).foregroundStyle(Color.success)
                                     case .failure(let f): Text(f.message).font(.footnote).foregroundStyle(Color.clayInk).lineLimit(2)
                                     }
                                 }

@@ -219,7 +219,7 @@ struct SnifferView: View {
 
     private func tip(_ number: String, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(number).font(.monoSmall).foregroundStyle(Color.clayInk)
+            Text(number).font(.figuresSmall).foregroundStyle(Color.clayInk)
             Text(text).font(.subheadline).foregroundStyle(Color.ink)
         }
     }
@@ -320,7 +320,7 @@ struct SnifferView: View {
             VStack(alignment: .leading, spacing: 3) {
                 AdaptiveStack(spacing: 6) {
                     Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
-                    Text(media.detail).font(.monoSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
+                    Text(media.detail).font(.figuresSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
                 }
                 Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
             }

@@ -42,7 +42,7 @@ struct RemoteFilePreview: View {
                         ProgressLine(value: min(1, Double(received) / Double(item.size)))
                             .frame(maxWidth: 220)
                         Text("\(ByteFormat.string(received)) / \(ByteFormat.string(item.size))")
-                            .font(.monoSmall)
+                            .font(.figuresSmall)
                             .foregroundStyle(Color.ink3)
                             .contentTransition(.numericText())
                     } else {

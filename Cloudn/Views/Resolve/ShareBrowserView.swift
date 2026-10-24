@@ -119,7 +119,7 @@ struct ShareBrowserView: View {
                 .lineLimit(3)
                 .textSelection(.enabled)
             if !summary.isEmpty {
-                Text(summary).font(.monoSmall).foregroundStyle(Color.ink3)
+                Text(summary).font(.figuresSmall).foregroundStyle(Color.ink3)
             }
         }
         .padding(.horizontal, 4)
@@ -450,7 +450,7 @@ struct ShareBrowserView: View {
                 HStack {
                     Text(batch.total == 0 ? "正在读取文件夹…" : "正在获取直链").font(.footnote.weight(.medium))
                     Spacer()
-                    if batch.total > 0 { Text("\(batch.done) / \(batch.total)").font(.monoSmall) }
+                    if batch.total > 0 { Text("\(batch.done) / \(batch.total)").font(.figuresSmall) }
                 }
                 .foregroundStyle(Color.ink)
                 ProgressLine(value: batch.total == 0 ? nil : Double(batch.done) / Double(batch.total))
@@ -468,7 +468,7 @@ struct ShareBrowserView: View {
             AdaptiveStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(chosen.isEmpty ? "未选择" : "已选 \(chosen.count) 项").font(.subheadline.weight(.semibold))
-                    Text(selectionDetail(chosen)).font(.monoSmall).foregroundStyle(Color.ink3)
+                    Text(selectionDetail(chosen)).font(.figuresSmall).foregroundStyle(Color.ink3)
                 }
                 .foregroundStyle(Color.ink)
                 .contentTransition(.numericText())

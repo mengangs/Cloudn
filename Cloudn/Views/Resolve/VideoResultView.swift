@@ -275,7 +275,7 @@ struct VideoResultView: View {
                                 if media.isHLS { Text("m3u8") }
                                 if !media.audioURL.isEmpty { Text("音视频分轨") }
                             }
-                            .font(.monoSmall)
+                            .font(.figuresSmall)
                             .foregroundStyle(Color.ink3)
                         }
                         Spacer(minLength: 0)
@@ -523,7 +523,7 @@ struct VideoResultView: View {
                                 Text(entry.title.isEmpty ? entry.url : entry.title)
                                     .font(.subheadline).foregroundStyle(Color.ink).lineLimit(2)
                                 if let d = entry.duration, d > 0 {
-                                    Text(Self.clock(d)).font(.monoSmall).foregroundStyle(Color.ink3)
+                                    Text(Self.clock(d)).font(.figuresSmall).foregroundStyle(Color.ink3)
                                 }
                             }
                             Spacer(minLength: 0)

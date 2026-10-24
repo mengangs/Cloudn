@@ -289,7 +289,7 @@ struct DownloadsView: View {
                 Text(chosen.isEmpty ? "未选择" : "已选 \(chosen.count) 项").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
                     .contentTransition(.numericText())
                 let size = chosen.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
-                if size > 0 { Text(ByteFormat.string(size)).font(.monoSmall).foregroundStyle(Color.ink3) }
+                if size > 0 { Text(ByteFormat.string(size)).font(.figuresSmall).foregroundStyle(Color.ink3) }
             }
             Spacer(minLength: 0)
             let files = chosen.filter { $0.status == .completed }.compactMap { app.downloads.fileURL($0) }
@@ -586,7 +586,7 @@ private struct SummaryCard: View {
                         .foregroundStyle(Color.ink)
                     Spacer()
                     Text("\(done.count) 个 · \(ByteFormat.string(done.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }))")
-                        .font(.mono)
+                        .font(.figures)
                         .foregroundStyle(Color.ink2)
                 }
             } else {
@@ -608,7 +608,7 @@ private struct SummaryCard: View {
                 if total > 0 {
                     VStack(alignment: .leading, spacing: 6) {
                         ProgressLine(value: Double(received) / Double(total))
-                        Text("\(ByteFormat.string(received)) / \(ByteFormat.string(total))").font(.monoSmall).foregroundStyle(Color.ink3)
+                        Text("\(ByteFormat.string(received)) / \(ByteFormat.string(total))").font(.figuresSmall).foregroundStyle(Color.ink3)
                     }
                 }
             }
@@ -690,7 +690,7 @@ private struct GroupHeader: View {
                     if failed > 0 { Text("\(failed) 个失败").foregroundStyle(Color.clayInk) }
                     if total > 0 { Text(ByteFormat.string(total)) }
                 }
-                .font(.monoSmall)
+                .font(.figuresSmall)
                 .foregroundStyle(Color.ink3)
             }
         }

@@ -993,7 +993,7 @@ private struct HistoryRow: View {
                             .rotationEffect(.degrees(-90))
                     }
                     .frame(width: 15, height: 15)
-                    Text("\(progress.done)/\(progress.total)").font(.monoSmall).foregroundStyle(.tint)
+                    Text("\(progress.done)/\(progress.total)").font(.figuresSmall).foregroundStyle(.tint)
                 }
             }
         } else {

@@ -57,9 +57,12 @@ extension Font {
 
     static let pageTitle = Font.serif(30, relativeTo: .largeTitle)
     static let cardTitle = Font.serif(19, relativeTo: .title3)
-    /// 大小、速度、链接、提取码
+    /// 链接、提取码、直链、哈希、分支名这类「原样照抄」的字符串。数字不用它：等宽字体排中文字距很松
     static let mono = Font.system(.footnote, design: .monospaced)
     static let monoSmall = Font.system(.caption, design: .monospaced)
+    /// 大小、速度、时长、计数：系统字体 + 等宽数字（变化时不跳动），和中文排在一起字距正常
+    static let figures = Font.footnote.monospacedDigit()
+    static let figuresSmall = Font.caption.monospacedDigit()
 }
 
 enum Typeface {

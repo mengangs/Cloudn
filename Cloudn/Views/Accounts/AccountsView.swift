@@ -200,12 +200,12 @@ struct AccountsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ProgressLine(value: min(1, Double(quota.used) / Double(quota.total)))
                         Text("\(ByteFormat.string(quota.used)) / \(ByteFormat.string(quota.total))")
-                            .font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(1).minimumScaleFactor(0.8)
+                            .font(.figuresSmall).foregroundStyle(Color.ink3).lineLimit(1).minimumScaleFactor(0.8)
                             .contentTransition(.numericText())
                     }
                     .animation(.snappy, value: quota)
                 } else {
-                    Text(account == nil ? "点按登录" : " ").font(.monoSmall).foregroundStyle(Color.ink3)
+                    Text(account == nil ? "点按登录" : " ").font(.caption).foregroundStyle(Color.ink3)
                 }
             }
             .padding(14)

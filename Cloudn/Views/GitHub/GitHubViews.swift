@@ -68,7 +68,7 @@ struct GitHubAccountView: View {
                         }
                         HStack(spacing: 4) {
                             IconView(.star, size: 12)
-                            Text("\(repo.stars)").font(.monoSmall)
+                            Text("\(repo.stars)").font(.figuresSmall)
                         }
                         .foregroundStyle(Color.ink3)
                     }
@@ -321,7 +321,7 @@ struct GitHubReleasesView: View {
                                 .background(Color.claySoft, in: Capsule())
                         }
                         Spacer()
-                        Text(String(release.publishedAt.prefix(10))).font(.monoSmall).foregroundStyle(Color.ink3).textCase(nil)
+                        Text(String(release.publishedAt.prefix(10))).font(.figuresSmall).foregroundStyle(Color.ink3).textCase(nil)
                     }
                 }
             }

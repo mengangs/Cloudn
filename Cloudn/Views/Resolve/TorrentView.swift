@@ -221,7 +221,7 @@ struct TorrentView: View {
                         Text(ByteFormat.string(file.length))
                         if !folder.isEmpty { Text(folder).lineLimit(1).truncationMode(.head) }
                     }
-                    .font(.monoSmall)
+                    .font(.figuresSmall)
                     .foregroundStyle(Color.ink3)
                 }
                 Spacer(minLength: 0)

@@ -94,7 +94,7 @@ struct SettingsView: View {
                             HStack {
                                 Text("检查更新")
                                 Spacer()
-                                if checking { Spinner(size: 18) } else { Text("当前 \(AppModel.currentVersion)").font(.mono).foregroundStyle(Color.ink2) }
+                                if checking { Spinner(size: 18) } else { Text("当前 \(AppModel.currentVersion)").font(.figures).foregroundStyle(Color.ink2) }
                             }
                         }
                         .disabled(checking)
@@ -381,7 +381,7 @@ struct AboutView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .overlay { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
                     Text("Cloudn").font(.pageTitle).foregroundStyle(Color.ink)
-                    Text("版本 \(version)").font(.mono).foregroundStyle(Color.ink3)
+                    Text("版本 \(version)").font(.figures).foregroundStyle(Color.ink3)
                     Text("粘贴分享链接，浏览并高速下载网盘文件与短视频。")
                         .font(.subheadline)
                         .multilineTextAlignment(.center)

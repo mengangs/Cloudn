@@ -488,7 +488,7 @@ struct QuotaBar: View {
             AdaptiveStack(spacing: 4, rowAlignment: .firstTextBaseline) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(ByteFormat.string(quota.used)).font(.serif(20, relativeTo: .title3)).foregroundStyle(Color.ink)
-                    Text("/ \(ByteFormat.string(quota.total))").font(.mono).foregroundStyle(Color.ink3)
+                    Text("/ \(ByteFormat.string(quota.total))").font(.figures).foregroundStyle(Color.ink3)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }
                 if !typeSize.isAccessibilitySize { Spacer() }
