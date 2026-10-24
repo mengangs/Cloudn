@@ -156,13 +156,13 @@ struct VideoResultView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
+            // 平台与日期合成一段文字：大字号下整段自然换行，不会拆成几块错位
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 PlatformGlyph(mark: .video(result.platform), size: 15)
-                Text(result.platform.displayName)
-                if result.timestamp > 0 {
-                    Text("·")
-                    Text(Date(timeIntervalSince1970: TimeInterval(result.timestamp)).formatted(date: .abbreviated, time: .omitted))
-                }
+                Text(result.timestamp > 0
+                     ? result.platform.displayName + " · "
+                         + Date(timeIntervalSince1970: TimeInterval(result.timestamp)).formatted(date: .abbreviated, time: .omitted)
+                     : result.platform.displayName)
             }
             .font(.footnote)
             .foregroundStyle(Color.ink2)
