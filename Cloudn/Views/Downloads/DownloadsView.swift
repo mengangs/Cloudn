@@ -24,7 +24,7 @@ struct DownloadsView: View {
     @State private var fileFacts = FileFactsCache()
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "全部", active = "进行中", done = "已完成"
+        case all = "全部", active = "进行中", done = "已完成", failed = "失败"
         var id: String { rawValue }
     }
 
@@ -34,6 +34,7 @@ struct DownloadsView: View {
         case .all: return all
         case .active: return all.filter { $0.status != .completed }
         case .done: return all.filter { $0.status == .completed }
+        case .failed: return all.filter { $0.status == .failed }
         }
     }
 
@@ -358,16 +359,30 @@ struct DownloadsView: View {
                 FilterChip(title: "全部 \(all.count)", selected: filter == .all) { filter = .all }
                 FilterChip(title: "进行中 \(active)", selected: filter == .active) { filter = .active }
                 FilterChip(title: "已完成 \(all.count - active)", selected: filter == .done) { filter = .done }
+                // 有失败的才出现：失败多了不用在「进行中」里翻
+                let failed = all.filter { $0.status == .failed }.count
+                if failed > 0 || filter == .failed {
+                    FilterChip(title: "失败 \(failed)", selected: filter == .failed) { filter = .failed }
+                }
             }
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .sensoryFeedback(.selection, trigger: filter)
     }
 
+    private var emptyTitle: String {
+        switch filter {
+        case .all: return "还没有下载"
+        case .active: return "没有进行中的任务"
+        case .done: return "还没有完成的任务"
+        case .failed: return "没有失败的任务"
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
             IconView(.download, size: 28).foregroundStyle(Color.ink3)
-            Text(filter == .all ? "还没有下载" : (filter == .active ? "没有进行中的任务" : "还没有完成的任务"))
+            Text(emptyTitle)
                 .font(.cardTitle)
                 .foregroundStyle(Color.ink)
             if filter == .all {

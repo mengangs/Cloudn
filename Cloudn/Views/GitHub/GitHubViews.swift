@@ -145,9 +145,18 @@ struct GitHubRepoView: View {
                 }
             } else if let error {
                 ScrollView {
-                    EmptyStateCard(icon: .warning, title: "无法打开仓库", detail: error, actionTitle: "重试") {
-                        self.error = nil
-                        Task { await loadInfo() }
+                    VStack(spacing: 12) {
+                        EmptyStateCard(icon: .warning, title: "无法打开仓库", detail: error, actionTitle: "重试") {
+                            self.error = nil
+                            Task { await loadInfo() }
+                        }
+                        // 提示要填 Token 的（接口限额、私有仓库）：直接给入口
+                        if error.contains("Token") {
+                            NavigationLink { GitHubSettingsView() } label: {
+                                Label { Text("填写 GitHub Token") } icon: { Image(icon: .gear) }
+                            }
+                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
+                        }
                     }
                     .padding(16)
                     .readableWidth()
