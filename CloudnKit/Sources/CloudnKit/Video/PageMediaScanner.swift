@@ -72,9 +72,9 @@ public enum PageMediaScanner {
     /// 脚本 / JSON 里转义过的斜杠与 &
     static func unescape(_ text: String) -> String {
         text.replacingOccurrences(of: #"\/"#, with: "/")
-            .replacingOccurrences(of: #"/"#, with: "/")
-            .replacingOccurrences(of: #"/"#, with: "/")
-            .replacingOccurrences(of: #"&"#, with: "&")
+            .replacingOccurrences(of: #"\u002F"#, with: "/")
+            .replacingOccurrences(of: #"\u002f"#, with: "/")
+            .replacingOccurrences(of: #"\u0026"#, with: "&")
     }
 
     static func decodeEntities(_ text: String) -> String {

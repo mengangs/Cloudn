@@ -38,7 +38,7 @@ final class PageMediaScannerTests: XCTestCase {
     func testEscapedURLsInScriptsAndJSONLD() {
         let html = #"""
         <script type="application/ld+json">{"@type":"VideoObject","contentUrl":"https:\/\/cdn.example.com\/v\/full.mp4","thumbnailUrl":"https:\/\/cdn.example.com\/c.jpg"}</script>
-        <script>window.__DATA__={"hls":"https://cdn.example.com/hls/master.m3u8?token=x&e=1"}</script>
+        <script>window.__DATA__={"hls":"https:\u002F\u002Fcdn.example.com\u002Fhls\u002Fmaster.m3u8?token=x\u0026e=1"}</script>
         """#
         let scan = PageMediaScanner.scan(html: html, baseURL: base)
         XCTAssertEqual(scan.urls, ["https://cdn.example.com/v/full.mp4", "https://cdn.example.com/hls/master.m3u8?token=x&e=1"])
