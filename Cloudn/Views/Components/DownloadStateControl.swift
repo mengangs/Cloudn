@@ -47,7 +47,13 @@ struct DownloadStateControl: View {
         .animation(.snappy(duration: 0.25), value: item?.status)
         .animation(.snappy(duration: 0.25), value: busy)
         // 看着它下完：完成那一刻轻轻一下
-        .sensoryFeedback(.success, trigger: item?.status) { old, new in old != nil && old != .completed && new == .completed }
+        .sensoryFeedback(.success, trigger: item?.status) { old, new in Self.justCompleted(old, new) }
+    }
+
+    /// 刚从别的状态变成「已完成」（单独写成函数：放在修饰链的闭包里，编译器推断类型太慢）
+    static func justCompleted(_ old: DownloadStatus?, _ new: DownloadStatus?) -> Bool {
+        guard let old, let new else { return false }
+        return old != .completed && new == .completed
     }
 
     /// 直链失效的先重新取链再继续；其他失败（网络等）照旧用原地址重试
