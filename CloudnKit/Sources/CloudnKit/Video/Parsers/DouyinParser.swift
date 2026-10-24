@@ -13,14 +13,55 @@ struct DouyinParser: VideoParser {
     func parse(_ link: DetectedVideoLink, cookie: String) async throws -> VideoParseResult {
         if link.kind == "user" { return try await parseUser(link, cookie: cookie) }
         let type = Rx(#"/(?:share/)?(note|slides)/"#).first(in: link.url) == nil ? "video" : "note"
-        if let extractor,
-           let text = await extractor.extract(url: "https://www.douyin.com/\(type)/\(link.id)", userAgent: VideoHTTP.uaChrome, cookie: cookie,
-                                              documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type, id: link.id),
-                                              extractScript: Self.extractJS, timeout: 40),
-           let payload = JSON(text: text), payload["error"].string.isEmpty {
-            if let result = await build(link, payload) { return result }
+        guard let extractor else { return try await parseSSR(link, type: type) }
+        return try await Self.race(web: { await webRoute(link, type: type, cookie: cookie, extractor: extractor) },
+                                   share: { try await parseSSR(link, type: type) })
+    }
+
+    private func webRoute(_ link: DetectedVideoLink, type: String, cookie: String, extractor: WebPageExtractor) async -> VideoParseResult? {
+        guard let text = await extractor.extract(url: "https://www.douyin.com/\(type)/\(link.id)", userAgent: VideoHTTP.uaChrome, cookie: cookie,
+                                                 documentStartScripts: [Self.detailHookJS], readyScript: Self.readyJS(type, id: link.id),
+                                                 extractScript: Self.extractJS, timeout: 40),
+              let payload = JSON(text: text), payload["error"].string.isEmpty else { return nil }
+        return await build(link, payload)
+    }
+
+    /// 两条路线同时跑：隐藏浏览器要过 JS 挑战，稳但慢（最长等 40 秒）；分享页只要一次普通请求，抖音放行时一秒左右就有结果。
+    /// 谁先拿到带媒体的结果用谁，另一条随即取消。都没拿到媒体时与以前一致：浏览器失败后用分享页的结果，或报分享页的错
+    static func race(web: @escaping @Sendable () async -> VideoParseResult?,
+                     share: @escaping @Sendable () async throws -> VideoParseResult) async throws -> VideoParseResult {
+        enum Route: Sendable {
+            case web(VideoParseResult?)
+            case share(Result<VideoParseResult, Error>)
         }
-        return try await parseSSR(link, type: type)
+        let start = Date()
+        return try await withThrowingTaskGroup(of: Route.self) { group in
+            group.addTask { .web(await web()) }
+            group.addTask {
+                do { return .share(.success(try await share())) } catch { return .share(.failure(error)) }
+            }
+            var shareOutcome: Result<VideoParseResult, Error>?
+            var webFailed = false
+            while let route = try await group.next() {
+                switch route {
+                case .web(let result?):
+                    group.cancelAll()
+                    Log.info("抖音：隐藏浏览器先拿到结果，用时 \(String(format: "%.1f", Date().timeIntervalSince(start))) 秒")
+                    return result
+                case .web(nil):
+                    webFailed = true
+                case .share(let outcome):
+                    if case .success(let result) = outcome, !result.medias.isEmpty {
+                        group.cancelAll()
+                        Log.info("抖音：分享页先拿到结果，用时 \(String(format: "%.1f", Date().timeIntervalSince(start))) 秒")
+                        return result
+                    }
+                    shareOutcome = outcome
+                }
+                if webFailed, let shareOutcome { return try shareOutcome.get() }
+            }
+            throw VideoParseError(.unknown, "抖音解析失败")
+        }
     }
 
     private var mediaHeaders: [String: String] {
