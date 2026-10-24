@@ -44,6 +44,7 @@ struct RootView: View {
 
     var body: some View {
         AppTabView { ResolveView() } me: { AccountsView() }
+        .acceptsLinkDrop()
         .background(Color.paper)
         .background(WindowSceneReader { ToastWindowPresenter.shared.install(in: $0, model: model) })
         .sheet(isPresented: Binding(get: { !model.settings.acceptedNotice }, set: { _ in })) {
