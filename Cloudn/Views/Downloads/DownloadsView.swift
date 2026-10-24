@@ -145,7 +145,8 @@ struct DownloadsView: View {
         let allOn = ids.isSubset(of: selection)
         return HStack(spacing: 12) {
             if selecting { SelectMark(on: allOn) }
-            GroupHeader(title: group.title, items: members)
+            // 完成数、合计按整组算：筛选（如「进行中」）只决定展开后列出哪些，不该让标题变成「0/2 已完成」
+            GroupHeader(title: group.title, items: app.downloads.items.filter { $0.request.group?.id == group.id })
             Spacer(minLength: 0)
             IconView(.chevronRight, size: 14)
                 .foregroundStyle(Color.ink3)
