@@ -60,6 +60,7 @@ struct AccountsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    if app.accounts.accounts.isEmpty { loginIntro }
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(title: "网盘", trailing: loggedInSummary)
                         // 辅助字号下一行一张，网盘名与容量不被截断
@@ -262,6 +263,21 @@ struct AccountsView: View {
     }
 
     private var loggedKinds: Set<AccountKind> { Set(app.accounts.accounts.keys) }
+
+    /// 一个账号都没登录时：说清不登录也能用，登录了能多做什么
+    private var loginIntro: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("不登录也能解析大部分公开链接").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+            Text("登录网盘后可下载大文件、转存到自己的网盘；登录视频平台可获取更高清晰度和需要登录才能看的内容。凭据只保存在本机。")
+                .font(.footnote)
+                .foregroundStyle(Color.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .accessibilityElement(children: .combine)
+    }
 
     /// 网格末尾的「更多网盘」：虚线框，点开排序与显示
     private func moreTile(hidden: Int) -> some View {

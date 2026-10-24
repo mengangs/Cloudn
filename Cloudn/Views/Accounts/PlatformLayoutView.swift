@@ -21,11 +21,11 @@ enum PlatformLayout {
         }.map(\.element)
     }
 
-    /// 没自定义过时显示哪些：已登录的；一个网盘都没登录时给前 4 个常用的，免得空着
+    /// 没自定义过时显示哪些：已登录的；一个都没登录时给前 4 个常用的（网盘、视频平台都是），免得空着、也看得到能登录什么
     static func defaultPinned(_ kinds: [AccountKind], drives: Bool, hidden: [String], hasAccount: (AccountKind) -> Bool) -> [AccountKind] {
         let candidates = kinds.filter { !hidden.contains($0.rawValue) }
         let mine = candidates.filter(hasAccount)
-        return drives && mine.isEmpty ? Array(candidates.prefix(4)) : mine
+        return mine.isEmpty ? Array(candidates.prefix(4)) : mine
     }
 }
 
