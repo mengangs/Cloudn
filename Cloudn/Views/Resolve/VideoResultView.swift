@@ -448,7 +448,7 @@ struct VideoResultView: View {
                 }
                 .overlay(alignment: .bottomLeading) {
                     if live != nil {
-                        Text("LIVE")
+                        Text("实况")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(Color.ink)
                             .padding(.horizontal, 6)

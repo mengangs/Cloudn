@@ -232,17 +232,18 @@ struct SnifferView: View {
                     app.show("已放弃录制")
                 }
                 .buttonStyle(PillButtonStyle(kind: .secondary, height: 44))
-                Button("停止并保存") { saveRecording() }
+                // 宽度放在标签里，胶囊才会撑满（放在按钮外面撑不开）
+                Button { saveRecording() } label: { Text("停止并保存").frame(maxWidth: .infinity) }
                     .buttonStyle(PillButtonStyle(kind: .primary, height: 44))
-                    .frame(maxWidth: .infinity)
             } else {
-                Button("开始录制") {
+                Button {
                     browser.startRecording()
                     browser.showingRecorder = false
                     app.show("开始录制：请在网页里播放视频")
+                } label: {
+                    Text("开始录制").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44))
-                .frame(maxWidth: .infinity)
                 .disabled(browser.savingRecording)
             }
         }
