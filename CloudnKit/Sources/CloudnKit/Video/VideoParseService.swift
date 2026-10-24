@@ -66,16 +66,29 @@ public final class VideoParseService: Sendable {
     }
 
     public func parse(_ link: DetectedVideoLink) async throws -> VideoParseResult {
-        let resolved = link.isShortLink ? try await expand(link) : link
+        // 各步耗时写进诊断日志（只记平台和秒数，不记链接）：真机上慢在哪一步一看便知
+        var steps = ParseSteps(platform: link.platform.displayName)
+        do {
+            let result = try await parse(link, steps: &steps)
+            Log.info(steps.summary(outcome: "完成"))
+            return result
+        } catch {
+            Log.info(steps.summary(outcome: error is CancellationError ? "取消" : "失败"))
+            throw error
+        }
+    }
+
+    private func parse(_ link: DetectedVideoLink, steps: inout ParseSteps) async throws -> VideoParseResult {
+        let resolved = link.isShortLink ? try await steps.measure("展开短链") { try await expand(link) } : link
         guard let parser = parsers[resolved.platform] else {
             throw VideoParseError(.unsupported, "暂不支持解析\(resolved.platform.displayName)")
         }
         if let error = Self.unexpandedError(original: link, resolved: resolved) { throw error }
         var cookie = ""
         if let kind = resolved.platform.accountKind { cookie = await credentials.cookie(for: kind) ?? "" }
-        let result = try await parser.parse(resolved, cookie: cookie)
+        let result = try await steps.measure("解析") { try await parser.parse(resolved, cookie: cookie) }
         // 只给了一个多清晰度 m3u8 的，拆成可挑选的清晰度
-        let medias = await HLSVariants.expand(result.medias.map { $0.withSecureURLs() })
+        let medias = await steps.measure("拆分清晰度") { await HLSVariants.expand(result.medias.map { $0.withSecureURLs() }) }
         return VideoParseResult(platform: result.platform, title: result.title, author: result.author, avatar: result.avatar,
                                 cover: VideoHTTP.secureURL(result.cover), text: result.text, timestamp: result.timestamp,
                                 url: result.url, medias: medias, notice: result.notice,
@@ -113,6 +126,30 @@ public final class VideoParseService: Sendable {
             current = again
         }
         return current
+    }
+}
+
+/// 一次解析各步的耗时
+struct ParseSteps {
+    let platform: String
+    private let start = Date()
+    private(set) var parts: [(name: String, seconds: Double)] = []
+
+    init(platform: String) {
+        self.platform = platform
+    }
+
+    mutating func measure<T>(_ name: String, _ work: () async throws -> T) async rethrows -> T {
+        let begin = Date()
+        defer { parts.append((name, Date().timeIntervalSince(begin))) }
+        return try await work()
+    }
+
+    /// 「解析抖音完成：展开短链 0.3 秒，解析 2.1 秒，共 2.4 秒」
+    func summary(outcome: String) -> String {
+        let format = { (seconds: Double) in String(format: "%.1f 秒", seconds) }
+        let detail = parts.map { "\($0.name) \(format($0.seconds))" } + ["共 \(format(Date().timeIntervalSince(start)))"]
+        return "解析\(platform)\(outcome)：" + detail.joined(separator: "，")
     }
 }
 
