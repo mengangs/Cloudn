@@ -296,13 +296,14 @@ struct SnifferView: View {
         return NavigationStack {
             List {
                 Section {
-                    ForEach(main) { mediaRow($0) }
+                    // 最长的那条通常是正片：标「推荐」
+                    ForEach(main) { mediaRow($0, recommended: sorted.count > 1 && $0.id == main.first?.id) }
                 } footer: {
                     Text("按时长排序，最长的通常是正片。没找到就先在网页里点播放。")
                 }
                 if !previews.isEmpty {
                     Section {
-                        ForEach(previews) { mediaRow($0) }
+                        ForEach(previews) { mediaRow($0, recommended: false) }
                     } header: {
                         Text("可能是预览片段或广告")
                     } footer: {
@@ -315,16 +316,34 @@ struct SnifferView: View {
         }
     }
 
-    private func mediaRow(_ media: SniffedMedia) -> some View {
-        Button { download(media) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                AdaptiveStack(spacing: 6) {
-                    Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
-                    Text(media.detail).font(.figuresSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
+    /// 一条媒体：点整行或行尾的下载键加入下载；加入后行尾显示进度 / 已下载，面板不收起，还能接着下别的
+    private func mediaRow(_ media: SniffedMedia, recommended: Bool) -> some View {
+        HStack(spacing: 10) {
+            Button { download(media) } label: {
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        AdaptiveStack(spacing: 6) {
+                            Text(media.label).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink)
+                            Text(media.detail).font(.figuresSmall).foregroundStyle(media.isPreview ? Color.ink3 : Color.clayInk)
+                            if recommended {
+                                Text("推荐")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(Color.clayInk)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.claySoft, in: Capsule())
+                            }
+                        }
+                        Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Text(media.url).font(.monoSmall).foregroundStyle(Color.ink3).lineLimit(2)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 2)
+            .buttonStyle(.plain)
+            DownloadStateControl(item: app.downloads.items.last { $0.request.url == media.url },
+                                 busy: enqueuing.contains(media.url)) { download(media) }
         }
         .contextMenu {
             Button {
@@ -356,7 +375,6 @@ struct SnifferView: View {
             }
             app.downloads.enqueue(request)
             app.show("已加入下载")
-            browser.showingList = false
         }
     }
 }
