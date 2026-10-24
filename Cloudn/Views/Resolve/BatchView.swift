@@ -7,6 +7,8 @@ struct BatchView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     let job: BatchJob
+    /// 失败的那条改用网页嗅探
+    @State private var sniffing: SniffLink?
 
     var body: some View {
         NavigationStack {
@@ -22,18 +24,46 @@ struct BatchView: View {
                                     Text(detail).font(.caption).foregroundStyle(stateColor(item.state)).lineLimit(2)
                                 }
                             }
+                            Spacer(minLength: 0)
+                            // 解析失败的：直接在网页里播放后抓取
+                            if case .failed = item.state {
+                                Button("网页嗅探") { sniffing = SniffLink(url: item.url) }
+                                    .font(.footnote)
+                                    .buttonStyle(TextLinkButtonStyle())
+                            }
                         }
                         .padding(.vertical, 2)
                         .accessibilityElement(children: .combine)
                     }
                     .paperRow()
                 } header: {
-                    Text(summary)
+                    // 汇总 + 总进度：一眼看出进行到哪了
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(summary).font(.subheadline).foregroundStyle(Color.ink2)
+                        ProgressLine(value: Double(job.doneCount + job.failedCount) / Double(max(1, job.items.count)))
+                    }
+                    .textCase(nil)
+                    .padding(.bottom, 4)
                 } footer: {
                     Text("逐条按最高画质加入下载，离开此页也会继续。")
                 }
             }
             .paperList()
+            .safeAreaInset(edge: .bottom) {
+                // 跑完了：直接去下载页看
+                if job.finished && job.doneCount > 0 {
+                    Button {
+                        app.selectedTab = .downloads
+                        dismiss()
+                    } label: {
+                        Label { Text("查看下载") } icon: { Image(icon: .download) }.frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PillButtonStyle(kind: .primary))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+            }
+            .fullScreenCover(item: $sniffing) { SnifferView(url: $0.url) }
             .navigationTitle(job.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -84,4 +114,10 @@ struct BatchView: View {
         if case .failed = state { return Color.clayInk }
         return Color.ink3
     }
+}
+
+/// 要用网页嗅探打开的作品链接
+private struct SniffLink: Identifiable {
+    let url: String
+    var id: String { url }
 }
