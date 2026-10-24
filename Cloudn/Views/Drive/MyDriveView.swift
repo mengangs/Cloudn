@@ -251,14 +251,9 @@ struct DriveFolderView: View {
                 .font(.caption).foregroundStyle(Color.ink3)
             }
             Spacer(minLength: 0)
-            if fetching.contains(item.fid) {
-                Spinner(size: 17)
-            } else if !item.isDirectory {
-                Button { download(item) } label: {
-                    IconView(.download, size: 17).foregroundStyle(Color.ink2).frame(width: 36, height: 36).contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("下载")
+            if !item.isDirectory {
+                // 与分享页同一个行尾下载键：带圈的下载键，取链时原地转圈
+                DownloadStateControl(item: nil, busy: fetching.contains(item.fid)) { download(item) }
             }
         }
         .contentShape(Rectangle())
