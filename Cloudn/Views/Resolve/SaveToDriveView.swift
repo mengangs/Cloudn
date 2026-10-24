@@ -14,6 +14,17 @@ struct SaveToDriveView: View {
     @State private var errorMessage: String?
     @State private var saving = false
     @State private var quota: DriveQuota?
+    /// 新建文件夹：输入框是否弹出、名字、是否正在建
+    @State private var naming = false
+    @State private var newName = ""
+    @State private var creating = false
+
+    /// 能在「我的网盘」里新建文件夹的平台才给入口
+    private var manager: DriveManager? {
+        guard let manager = app.resolvers.manager(for: model.share.platform),
+              manager.driveCapabilities.contains(.createFolder) else { return nil }
+        return manager
+    }
 
     /// 已知大小（文件夹的大小列表里拿不到，不计入）
     private var knownSize: Int64 { files.reduce(0) { $0 + ($1.isDirectory ? 0 : max(0, $1.size)) } }
@@ -94,6 +105,13 @@ struct SaveToDriveView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
+                if manager != nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { newName = ""; naming = true } label: { Image(icon: .folderPlus).foregroundStyle(Color.ink) }
+                            .disabled(saving || creating || errorMessage != nil)
+                            .accessibilityLabel("新建文件夹")
+                    }
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
@@ -113,6 +131,14 @@ struct SaveToDriveView: View {
                 .floatingShadow()
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
+            }
+            .alert("新建文件夹", isPresented: $naming) {
+                TextField("文件夹名称", text: $newName)
+                Button("取消", role: .cancel) {}
+                Button("新建") { Task { await createFolder() } }
+                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+            } message: {
+                Text("建在「\(path.last?.name ?? "我的网盘")」里，建好后可直接转存进去")
             }
             .task(id: current) { await load() }
             .task { quota = await app.resolvers.manager(for: model.share.platform)?.quota() }
@@ -137,6 +163,23 @@ struct SaveToDriveView: View {
             guard target == current else { return }
             folders = []
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 在当前目录新建文件夹，建好后刷新并直接进入它
+    private func createFolder() async {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let manager, !creating else { return }
+        creating = true
+        defer { creating = false }
+        do {
+            try await manager.createFolder(name, in: current)
+            await load()
+            if let made = folders.first(where: { $0.name == name }) {
+                path.append(Crumb(id: made.fid, name: made.name))
+            }
+        } catch {
+            app.show("新建文件夹失败：\(error.localizedDescription)", error: true)
         }
     }
 
